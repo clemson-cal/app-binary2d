@@ -10,7 +10,7 @@ edition = "2018"
 num             = "0.3"
 ndarray         = "0.13"
 hdf5            = "0.7"
-kind-config     = "0.1"
+kind-config     = "0.2"
 
 kepler-two-body = { git = "https://github.com/clemson-cal/kepler-two-body" }
 hydro-iso2d     = { git = "https://github.com/clemson-cal/hydro-iso2d" }

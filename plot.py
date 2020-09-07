@@ -12,6 +12,6 @@ args = parser.parse_args()
 h5f = h5py.File(args.filename, 'r')
 rho = h5f["conserved"][...][:,:,0]
 
-plt.imshow(rho)
+plt.imshow(np.log10(rho), cmap='magma')
 plt.colorbar()
 plt.show()

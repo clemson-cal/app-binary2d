@@ -49,8 +49,11 @@ impl Solver
         dt: f64,
         two_body_state: &OrbitalState) -> [Conserved; 5]
     {
-        let [ax1, ay1] = two_body_state.0.gravitational_acceleration(x, y, self.softening_length);
-        let [ax2, ay2] = two_body_state.1.gravitational_acceleration(x, y, self.softening_length);
+        let p1 = two_body_state.0;
+        let p2 = two_body_state.1;
+
+        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length);
+        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length);
 
         let rho = conserved.density();
         let fx1 = rho * ax1;
@@ -58,17 +61,18 @@ impl Solver
         let fx2 = rho * ax2;
         let fy2 = rho * ay2;
 
-        let x1 = two_body_state.0.position_x();
-        let y1 = two_body_state.0.position_y();
-        let x2 = two_body_state.1.position_x();
-        let y2 = two_body_state.1.position_y();
+        let x1 = p1.position_x();
+        let y1 = p1.position_y();
+        let x2 = p2.position_x();
+        let y2 = p2.position_y();
 
         let sink_rate1 = self.sink_kernel(x - x1, y - y1);
         let sink_rate2 = self.sink_kernel(x - x2, y - y2);
 
         let r = (x * x + y * y).sqrt();
         let y = (r - self.domain_radius) / self.buffer_scale;
-        let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y));
+        let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
+        let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
 
         return [
             Conserved(0.0, fx1, fy1) * dt,
@@ -135,6 +139,11 @@ impl<'a> CellData<'_>
             (Y, X) => self.gx.velocity_y() + self.gy.velocity_x(),
             (Y, Y) =>-self.gx.velocity_x() + self.gy.velocity_y(),
         }
+    }
+
+    fn stress_field(&self, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
+    {
+        kinematic_viscosity * self.pc.density() * self.strain_field(row, col)
     }
 
     fn gradient_field(&self, axis: Direction) -> &Primitive
@@ -205,9 +214,8 @@ pub fn advance(state: SolutionState, block_data: &BlockData, solver: &Solver) ->
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
         let nu = solver.nu;
-        let mu = nu * (l.pc.density() + r.pc.density());
-        let tau_x = 0.5 * mu * (l.strain_field(axis, X) + r.strain_field(axis, X));
-        let tau_y = 0.5 * mu * (l.strain_field(axis, Y) + r.strain_field(axis, Y));
+        let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
+        let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
     };
 
