@@ -10,19 +10,21 @@
 
 
 // ============================================================================
-use crate::scheme::BlockData;
-use std::convert::TryInto;
-use std::time::Instant;
+// use std::convert::TryInto;
+use crate::scheme::{BlockData, Solver};
+// use std::time::Instant;
 use num::rational::Rational64;
 use ndarray::{Array, Ix2};
 use kind_config;
 use hydro_iso2d::*;
-use godunov_core::runge_kutta as rk;
+// use godunov_core::runge_kutta as rk;
 use godunov_core::solution_states::SolutionStateArray;
 mod io;
 mod scheme;
 
 type SolutionState = SolutionStateArray<Conserved, Ix2>;
+type SingleThreadState = (SolutionState, BlockData, Solver);
+type MultiThreadState = Vec<SingleThreadState>;
 
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
@@ -41,9 +43,9 @@ fn initial_primitive(xy: (f64, f64)) -> Primitive
     return Primitive(1.0, vx, vy);
 }
 
-fn initial_conserved(domain_radius: f64, block_size: usize) -> Array<Conserved, Ix2>
+fn initial_conserved(mesh: &scheme::Mesh, block_index: (usize, usize)) -> Array<Conserved, Ix2>
 {
-    scheme::cell_centers(domain_radius, block_size)
+    mesh.cell_centers(block_index)
         .mapv(initial_primitive)
         .mapv(Primitive::to_conserved)
 }
@@ -61,44 +63,44 @@ fn initial_state(block_data: &BlockData) -> SolutionState
 
 
 // ============================================================================
-struct TaskList
-{
-    checkpoint_next_time: f64,
-    checkpoint_count: usize,
-    tasks_last_performed: Instant,
-}
+// struct TaskList
+// {
+//     checkpoint_next_time: f64,
+//     checkpoint_count: usize,
+//     tasks_last_performed: Instant,
+// }
 
-impl TaskList
-{
-    fn new() -> TaskList
-    {
-        TaskList{
-            checkpoint_next_time: 0.0,
-            checkpoint_count: 0,
-            tasks_last_performed: Instant::now(),
-        }
-    }
-    fn perform(&mut self, state: &SolutionState, block_size: usize, checkpoint_interval: f64)
-    {
-        let kzps = ((block_size * block_size) as f64) * 1e-3 / self.tasks_last_performed.elapsed().as_secs_f64();
-        self.tasks_last_performed = Instant::now();
+// impl TaskList
+// {
+//     fn new() -> TaskList
+//     {
+//         TaskList{
+//             checkpoint_next_time: 0.0,
+//             checkpoint_count: 0,
+//             tasks_last_performed: Instant::now(),
+//         }
+//     }
+//     fn perform(&mut self, state: &SolutionState, block_size: usize, checkpoint_interval: f64)
+//     {
+//         let kzps = ((block_size * block_size) as f64) * 1e-3 / self.tasks_last_performed.elapsed().as_secs_f64();
+//         self.tasks_last_performed = Instant::now();
 
-        if state.time > 0.0
-        {
-            println!("[{:05}] orbit={:.3} kzps={:.2}", state.iteration, state.time / ORBITAL_PERIOD, kzps);
-        }
-        if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
-        {
-            let fname = format!("data/chkpt.{:04}.h5", self.checkpoint_count);
+//         if state.time > 0.0
+//         {
+//             println!("[{:05}] orbit={:.3} kzps={:.2}", state.iteration, state.time / ORBITAL_PERIOD, kzps);
+//         }
+//         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
+//         {
+//             let fname = format!("data/chkpt.{:04}.h5", self.checkpoint_count);
 
-            println!("Write checkpoint {}", fname);
-            io::write_hdf5(&state, &fname).expect("HDF5 write failed");
+//             println!("Write checkpoint {}", fname);
+//             io::write_hdf5(&state, &fname).expect("HDF5 write failed");
 
-            self.checkpoint_count += 1;
-            self.checkpoint_next_time += checkpoint_interval;
-        }
-    }
-}
+//             self.checkpoint_count += 1;
+//             self.checkpoint_next_time += checkpoint_interval;
+//         }
+//     }
+// }
 
 
 
@@ -112,8 +114,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
-        .item("cfl"             , 0.3    , "CFL parameter")
-        .item("cpi"             , 0.5    , "Checkpoint interval [Orbits]")
+        .item("cfl"             , 0.4    , "CFL parameter")
+        .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
         .item("domain_radius"   , 24.0   , "Half-size of the domain")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
@@ -125,16 +127,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
         .item("tfinal"          , 1.0    , "Time at which to stop the simulation [Orbits]")
         .merge_string_map(arg_key_vals)?;
 
+    // let rk_order:            rk::RungeKuttaOrder = i64::from(opts.get("rk_order")).try_into()?;
     let block_size:          usize               = i64::from(opts.get("block_size")) as usize;
-    let cpi:                 f64                 = opts.get("cpi")          .into();
-    let domain_radius:       f64                 = opts.get("domain_radius").into();
     let one_body:            bool                = opts.get("one_body")     .into();
-    let rk_order:            rk::RungeKuttaOrder = i64::from(opts.get("rk_order")).try_into()?;
+    // let cpi:                 f64                 = opts.get("cpi")          .into();
     let tfinal:              f64                 = opts.get("tfinal")       .into();
 
     println!();
-    for key in &opts.sorted_keys()
-    {
+    for key in &opts.sorted_keys() {
         println!("\t{:.<24} {: <8} {}", key, opts.get(key), opts.about(key));
     }
     println!();
@@ -154,22 +154,44 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
         softening_length: opts.get("softening_length").into(),
     };
 
-    let block_data = scheme::BlockData{
-        cell_centers:    scheme::cell_centers(domain_radius, block_size),
-        face_centers_x:  scheme::face_centers_x(domain_radius, block_size),
-        face_centers_y:  scheme::face_centers_y(domain_radius, block_size),
-        initial_conserved: initial_conserved(domain_radius, block_size),
+    let mesh = scheme::Mesh{
+        num_blocks: 1,
+        block_size: block_size,
+        domain_radius: opts.get("domain_radius").into(),
     };
-    let mut state = initial_state(&block_data);
-    let mut tasks = TaskList::new();
-    let advance = |s| rk_order.advance(s, |s| scheme::advance(s, &block_data, &solver));
 
-    tasks.perform(&state, block_size, cpi);
+    let single_thread_state = |block_index| -> SingleThreadState {
+        let block_data = scheme::BlockData{
+            cell_centers:    mesh.cell_centers(block_index),
+            face_centers_x:  mesh.face_centers_x(block_index),
+            face_centers_y:  mesh.face_centers_y(block_index),
+            initial_conserved: initial_conserved(&mesh, block_index),
+            index: block_index,
+        };
+        let solver = solver.clone();
+        let state = initial_state(&block_data);
+        (state, block_data, solver)
+    };
 
-    while state.time < tfinal * ORBITAL_PERIOD
+    let mut multi_thread_state: MultiThreadState = (0..2)
+        .map(|i| (0..2)
+        .map(move |j| (i, j)))
+        .flatten()
+        .map(single_thread_state)
+        .collect();
+
+    // tasks.perform(&state, block_size, cpi);
+
+    let mut time = 0.0;
+    let mut iteration = 0;
+
+    while time < tfinal * ORBITAL_PERIOD
     {
-        state = advance(state);
-        tasks.perform(&state, block_size, cpi);
+        multi_thread_state = scheme::advance_multi(multi_thread_state);
+        println!("iteration {}", iteration);
+        iteration += 1;
+        time += 0.1;
+        // tasks.perform(&state, block_size, cpi);
     }
     Ok(())
 }
