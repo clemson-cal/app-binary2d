@@ -12,7 +12,7 @@
 // ============================================================================
 // use std::convert::TryInto;
 use crate::scheme::{BlockData, Solver};
-// use std::time::Instant;
+use std::time::Instant;
 use num::rational::Rational64;
 use ndarray::{Array, Ix2};
 use kind_config;
@@ -63,44 +63,44 @@ fn initial_state(block_data: &BlockData) -> SolutionState
 
 
 // ============================================================================
-// struct TaskList
-// {
-//     checkpoint_next_time: f64,
-//     checkpoint_count: usize,
-//     tasks_last_performed: Instant,
-// }
+struct TaskList
+{
+    checkpoint_next_time: f64,
+    checkpoint_count: usize,
+    tasks_last_performed: Instant,
+}
 
-// impl TaskList
-// {
-//     fn new() -> TaskList
-//     {
-//         TaskList{
-//             checkpoint_next_time: 0.0,
-//             checkpoint_count: 0,
-//             tasks_last_performed: Instant::now(),
-//         }
-//     }
-//     fn perform(&mut self, state: &SolutionState, block_size: usize, checkpoint_interval: f64)
-//     {
-//         let kzps = ((block_size * block_size) as f64) * 1e-3 / self.tasks_last_performed.elapsed().as_secs_f64();
-//         self.tasks_last_performed = Instant::now();
+impl TaskList
+{
+    fn new() -> TaskList
+    {
+        TaskList{
+            checkpoint_next_time: 0.0,
+            checkpoint_count: 0,
+            tasks_last_performed: Instant::now(),
+        }
+    }
+    fn perform(&mut self, time: f64, iteration: usize, _state: &MultiThreadState, mesh: &scheme::Mesh, checkpoint_interval: f64)
+    {
+        let kzps = (mesh.total_zones() as f64) * 1e-3 / self.tasks_last_performed.elapsed().as_secs_f64();
+        self.tasks_last_performed = Instant::now();
 
-//         if state.time > 0.0
-//         {
-//             println!("[{:05}] orbit={:.3} kzps={:.2}", state.iteration, state.time / ORBITAL_PERIOD, kzps);
-//         }
-//         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
-//         {
-//             let fname = format!("data/chkpt.{:04}.h5", self.checkpoint_count);
+        if time > 0.0
+        {
+            println!("[{:05}] orbit={:.3} kzps={:.2}", iteration, time / ORBITAL_PERIOD, kzps);
+        }
+        if time / ORBITAL_PERIOD >= self.checkpoint_next_time
+        {
+            let fname = format!("data/chkpt.{:04}.h5", self.checkpoint_count);
 
-//             println!("Write checkpoint {}", fname);
-//             io::write_hdf5(&state, &fname).expect("HDF5 write failed");
+            println!("Write checkpoint {}", fname);
+            // io::write_hdf5(&state, &fname).expect("HDF5 write failed");
 
-//             self.checkpoint_count += 1;
-//             self.checkpoint_next_time += checkpoint_interval;
-//         }
-//     }
-// }
+            self.checkpoint_count += 1;
+            self.checkpoint_next_time += checkpoint_interval;
+        }
+    }
+}
 
 
 
@@ -110,7 +110,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
 {
     let arg_key_vals = kind_config::to_string_map_from_key_val_pairs(std::env::args().skip(1))?;
     let opts = kind_config::Form::new()
-        .item("block_size"      , 100    , "Number of grid cells to use")
+        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
+        .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
@@ -130,7 +131,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
     // let rk_order:            rk::RungeKuttaOrder = i64::from(opts.get("rk_order")).try_into()?;
     let block_size:          usize               = i64::from(opts.get("block_size")) as usize;
     let one_body:            bool                = opts.get("one_body")     .into();
-    // let cpi:                 f64                 = opts.get("cpi")          .into();
+    let cpi:                 f64                 = opts.get("cpi")          .into();
     let tfinal:              f64                 = opts.get("tfinal")       .into();
 
     println!();
@@ -155,7 +156,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
     };
 
     let mesh = scheme::Mesh{
-        num_blocks: 1,
+        num_blocks: i64::from(opts.get("num_blocks")) as usize,
         block_size: block_size,
         domain_radius: opts.get("domain_radius").into(),
     };
@@ -173,25 +174,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
         (state, block_data, solver)
     };
 
-    let mut multi_thread_state: MultiThreadState = (0..2)
-        .map(|i| (0..2)
+    let mut state: MultiThreadState = (0..mesh.num_blocks)
+        .map(|i| (0..mesh.num_blocks)
         .map(move |j| (i, j)))
         .flatten()
         .map(single_thread_state)
         .collect();
 
-    // tasks.perform(&state, block_size, cpi);
-
     let mut time = 0.0;
-    let mut iteration = 0;
+    let mut iteration: usize = 0;
+    let mut tasks = TaskList::new();
+
+    tasks.perform(time, iteration, &state, &mesh, cpi);
 
     while time < tfinal * ORBITAL_PERIOD
     {
-        multi_thread_state = scheme::advance_multi(multi_thread_state);
-        println!("iteration {}", iteration);
+        state = scheme::advance_multi(state, &mesh);
         iteration += 1;
         time += 0.1;
-        // tasks.perform(&state, block_size, cpi);
+        tasks.perform(time, iteration, &state, &mesh, cpi);
     }
     Ok(())
 }
