@@ -80,14 +80,16 @@ impl TaskList
             tasks_last_performed: Instant::now(),
         }
     }
-    fn perform(&mut self, time: f64, iteration: usize, _state: &MultiThreadState, mesh: &scheme::Mesh, checkpoint_interval: f64)
+    fn perform(&mut self, time: f64, iteration: usize, _state: &MultiThreadState, mesh: &scheme::Mesh, fold: usize, checkpoint_interval: f64)
     {
-        let kzps = (mesh.total_zones() as f64) * 1e-3 / self.tasks_last_performed.elapsed().as_secs_f64();
+        let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
+        let kzps_per_cu = (mesh.zones_per_block() as f64 * fold as f64) * 1e-3 / elapsed;
+        let kzps        = (mesh.total_zones()     as f64 * fold as f64) * 1e-3 / elapsed;
         self.tasks_last_performed = Instant::now();
 
         if time > 0.0
         {
-            println!("[{:05}] orbit={:.3} kzps={:.2}", iteration, time / ORBITAL_PERIOD, kzps);
+            println!("[{:05}] orbit={:.3} kzps={:.0} (per cu={:.0})", iteration, time / ORBITAL_PERIOD, kzps, kzps_per_cu);
         }
         if time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
@@ -184,15 +186,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
     let mut time = 0.0;
     let mut iteration: usize = 0;
     let mut tasks = TaskList::new();
+    let dt = solver.min_time_step(&mesh);
+    let fold = 10;
 
-    tasks.perform(time, iteration, &state, &mesh, cpi);
+    tasks.perform(time, iteration, &state, &mesh, fold, cpi);
 
     while time < tfinal * ORBITAL_PERIOD
     {
-        state = scheme::advance_multi(state, &mesh);
-        iteration += 1;
-        time += 0.1;
-        tasks.perform(time, iteration, &state, &mesh, cpi);
+        state = scheme::advance_multi(state, dt, fold, mesh);
+        iteration += fold;
+        time += dt * fold as f64;
+        tasks.perform(time, iteration, &state, &mesh, fold, cpi);
     }
     Ok(())
 }

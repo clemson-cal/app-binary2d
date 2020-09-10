@@ -1,6 +1,6 @@
 use std::sync::mpsc;
 use kepler_two_body::OrbitalElements;
-use ndarray::{Axis, Array, Ix1, Ix2};
+use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use hydro_iso2d::*;
 use kepler_two_body::OrbitalState;
 use crate::SolutionState;
@@ -9,7 +9,7 @@ use crate::SolutionState;
 
 
 type BlockIndex = (usize, usize);
-type NeighborPrimitiveBlock = [[Array<Primitive, Ix2>; 3]; 3];
+type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
 
 
 
@@ -103,6 +103,11 @@ impl Solver
         1.0 / self.softening_length.sqrt()
     }
 
+    pub fn min_time_step(&self, mesh: &Mesh) -> f64
+    {
+        self.cfl * f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y()) / self.maximum_orbital_velocity()
+    }
+
     fn sink_kernel(&self, dx: f64, dy: f64) -> f64
     {
         let r2 = dx * dx + dy * dy;
@@ -113,6 +118,99 @@ impl Solver
         } else {
             0.0
         }
+    }
+}
+
+
+
+
+// ============================================================================
+#[derive(Copy, Clone)]
+pub struct Mesh
+{
+    pub num_blocks: usize,
+    pub block_size: usize,
+    pub domain_radius: f64,
+}
+
+impl Mesh
+{
+    pub fn block_length(&self) -> f64
+    {
+        2.0 * self.domain_radius / (self.num_blocks as f64)
+    }
+
+    pub fn block_start(&self, block_index: (usize, usize)) -> (f64, f64)
+    {
+        (
+            -self.domain_radius + (block_index.0 as f64) * self.block_length(),
+            -self.domain_radius + (block_index.1 as f64) * self.block_length(),
+        )
+    }
+
+    pub fn block_vertices(&self, block_index: (usize, usize)) -> (Array<f64, Ix1>, Array<f64, Ix1>)
+    {
+        let start = self.block_start(block_index);
+        let xv = Array::linspace(start.0, start.0 + self.block_length(), self.block_size + 1);
+        let yv = Array::linspace(start.1, start.1 + self.block_length(), self.block_size + 1);
+        (xv, yv)
+    }
+
+    pub fn cell_centers(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
+    {
+        use ndarray_ops::{adjacent_mean, cartesian_product2};
+        let (xv, yv) = self.block_vertices(block_index);
+        let xc = adjacent_mean(&xv, Axis(0));
+        let yc = adjacent_mean(&yv, Axis(0));
+        return cartesian_product2(xc, yc);
+    }
+
+    pub fn face_centers_x(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
+    {
+        use ndarray_ops::{adjacent_mean, cartesian_product2};
+        let (xv, yv) = self.block_vertices(block_index);
+        let yc = adjacent_mean(&yv, Axis(0));
+        return cartesian_product2(xv, yc);
+    }
+
+    pub fn face_centers_y(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
+    {
+        use ndarray_ops::{adjacent_mean, cartesian_product2};
+        let (xv, yv) = self.block_vertices(block_index);
+        let xc = adjacent_mean(&xv, Axis(0));
+        return cartesian_product2(xc, yv);
+    }
+
+    pub fn cell_spacing_x(&self) -> f64
+    {
+        self.block_length() / (self.block_size as f64)
+    }
+
+    pub fn cell_spacing_y(&self) -> f64
+    {
+        self.block_length() / (self.block_size as f64)
+    }
+
+    pub fn total_zones(&self) -> usize
+    {
+        self.num_blocks * self.num_blocks * self.block_size * self.block_size
+    }
+
+    pub fn zones_per_block(&self) -> usize
+    {
+        self.block_size * self.block_size
+    }
+
+    pub fn neighbor_block_indexes(&self, block_index: (usize, usize)) -> [[(usize, usize); 3]; 3]
+    {
+        let b = self.num_blocks;
+        let m = |i, j| (i % b, j % b);
+        let (i, j) = block_index;
+        [
+            [m(i + b - 1, j + b - 1), m(i + b - 1, j + b + 0), m(i + b - 0, j + b + 1)],
+            [m(i + b + 0, j + b - 1), m(i + b + 0, j + b + 0), m(i + b + 0, j + b + 1)],
+            [m(i + b + 1, j + b - 1), m(i + b + 1, j + b + 0), m(i + b + 1, j + b + 1)],
+        ]
     }
 }
 
@@ -171,86 +269,14 @@ impl<'a> CellData<'_>
 
 
 // ============================================================================
-pub struct Mesh
-{
-    pub num_blocks: usize,
-    pub block_size: usize,
-    pub domain_radius: f64,
-}
-
-impl Mesh
-{
-    pub fn block_length(&self) -> f64
-    {
-        2.0 * self.domain_radius / (self.num_blocks as f64)
-    }
-
-    pub fn block_start(&self, block_index: (usize, usize)) -> (f64, f64)
-    {
-        (
-            -self.domain_radius + (block_index.0 as f64) * self.block_length(),
-            -self.domain_radius + (block_index.1 as f64) * self.block_length(),
-        )
-    }
-
-    pub fn block_vertices(&self, block_index: (usize, usize)) -> (Array<f64, Ix1>, Array<f64, Ix1>)
-    {
-        let start = self.block_start(block_index);
-        let xv = Array::linspace(start.0, start.0 + self.block_length(), self.block_size + 1);
-        let yv = Array::linspace(start.1, start.1 + self.block_length(), self.block_size + 1);
-        (xv, yv)
-    }
-
-    pub fn cell_centers(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
-    {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
-        let (xv, yv) = self.block_vertices(block_index);
-        let xc = adjacent_mean(&xv, Axis(0));
-        let yc = adjacent_mean(&yv, Axis(0));
-        return cartesian_product2(xc, yc);
-    }
-
-    pub fn face_centers_x(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
-    {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
-        let (xv, yv) = self.block_vertices(block_index);
-        let yc = adjacent_mean(&yv, Axis(0));
-        return cartesian_product2(xv, yc);
-    }
-
-    pub fn face_centers_y(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
-    {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
-        let (xv, yv) = self.block_vertices(block_index);
-        let xc = adjacent_mean(&xv, Axis(0));
-        return cartesian_product2(xc, yv);
-    }
-
-    pub fn total_zones(&self) -> usize
-    {
-        self.num_blocks * self.num_blocks * self.block_size * self.block_size
-    }
-
-    pub fn neighbor_block_indexes(&self, block_index: (usize, usize)) -> [[(usize, usize); 3]; 3]
-    {
-        let b = self.num_blocks;
-        let m = |i, j| (i % b, j % b);
-        let (i, j) = block_index;
-        [
-            [m(i + b - 1, j + b - 1), m(i + b - 1, j + b + 0), m(i + b - 0, j + b + 1)],
-            [m(i + b + 0, j + b - 1), m(i + b + 0, j + b + 0), m(i + b + 0, j + b + 1)],
-            [m(i + b + 1, j + b - 1), m(i + b + 1, j + b + 0), m(i + b + 1, j + b + 1)],
-        ]
-    }
-}
-
-
-
-
-// ============================================================================
-fn advance_internal(state: SolutionState, block_data: BlockData, solver: Solver,
-    sender: mpsc::Sender<Array<Primitive, Ix2>>,
-    receiver: mpsc::Receiver<NeighborPrimitiveBlock>) -> (SolutionState, BlockData, Solver)
+fn advance_internal(
+    state:      SolutionState,
+    block_data: BlockData,
+    solver:     Solver,
+    mesh:       Mesh,
+    dt:         f64,
+    sender:     &mpsc::Sender<Array<Primitive, Ix2>>,
+    receiver:   &mpsc::Receiver<NeighborPrimitiveBlock>) -> (SolutionState, BlockData, Solver)
 {
     // ============================================================================
     use ndarray::{s, azip};
@@ -261,9 +287,8 @@ fn advance_internal(state: SolutionState, block_data: BlockData, solver: Solver,
     // ============================================================================
     let a0 = Axis(0);
     let a1 = Axis(1);
-    let dx = block_data.face_centers_x[[1,0]].0 - block_data.face_centers_x[[0,0]].0;
-    let dy = block_data.face_centers_y[[0,1]].1 - block_data.face_centers_y[[0,0]].1;
-    let dt = solver.cfl * f64::min(dx, dy) / solver.maximum_orbital_velocity();
+    let dx = mesh.cell_spacing_x();
+    let dy = mesh.cell_spacing_y();
     let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
 
     // ============================================================================
@@ -278,8 +303,17 @@ fn advance_internal(state: SolutionState, block_data: BlockData, solver: Solver,
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
     };
 
+    let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
     // ============================================================================
     sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
+
+    // ============================================================================
+    let sources = azip![
+        &state.conserved,
+        &block_data.initial_conserved,
+        &block_data.cell_centers]
+    .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
     let pe = ndarray_ops::extend_from_neighbor_arrays(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let gx = map_stencil3(&pe, a0, |a, b, c| plm_gradient3(solver.plm, a, b, c));
@@ -317,17 +351,10 @@ fn advance_internal(state: SolutionState, block_data: BlockData, solver: Solver,
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
     // ============================================================================
-    let sources = azip![
-        &state.conserved,
-        &block_data.initial_conserved,
-        &block_data.cell_centers]
-    .apply_collect(|&u, &u0, &(x, y)| solver.source_terms(u, u0, x, y, dt, &two_body_state));
-
-    // ============================================================================
     let new_state = SolutionState{
         time:      state.time + dt,
         iteration: state.iteration + 1,
-        conserved: state.conserved + &du + sources.map(|s| s[0] + s[1] + s[2] + s[3] + s[4]),
+        conserved: state.conserved + &du + &sources,
     };
     return (new_state, block_data, solver);
 }
@@ -349,8 +376,7 @@ fn map_array_3_by_3<F: Fn(&T) -> U, T, U>(a: [[T; 3]; 3], f: F) -> [[U; 3]; 3]
 
 
 // ============================================================================
-#[allow(unused)]
-pub fn advance_multi(multi_thread_state: Vec<(SolutionState, BlockData, Solver)>, mesh: &Mesh) -> Vec<(SolutionState, BlockData, Solver)>
+pub fn advance_multi(multi_thread_state: Vec<(SolutionState, BlockData, Solver)>, dt: f64, fold: usize, mesh: Mesh) -> Vec<(SolutionState, BlockData, Solver)>
 {
     use std::collections::HashMap;
 
@@ -362,25 +388,35 @@ pub fn advance_multi(multi_thread_state: Vec<(SolutionState, BlockData, Solver)>
 
     for thread_state in multi_thread_state
     {
-        let (a, b, c) = thread_state;
         let (their_s, my_r) = mpsc::channel();
         let (my_s, their_r) = mpsc::channel();
 
-        block_indexes.push(b.index);
+        block_indexes.push((&thread_state.1).index);
         senders.push(my_s);
         receivers.push(my_r);
-        join_handles.push(std::thread::spawn(move || advance_internal(a, b, c, their_s, their_r)));
+        join_handles.push(std::thread::spawn(move || -> (SolutionState, BlockData, Solver)
+        {
+            let mut a = thread_state;
+
+            for _ in 0..fold {
+                a = advance_internal(a.0, a.1, a.2, mesh, dt, &their_s, &their_r);
+            }
+            return a;
+        }));
     }
 
-    for (&block_index, r) in block_indexes.iter().zip(receivers)
+    for _ in 0..fold
     {
-        block_primitive.insert(block_index, r.recv().unwrap());
-    }
+        for (&block_index, r) in block_indexes.iter().zip(receivers.iter())
+        {
+            block_primitive.insert(block_index, r.recv().unwrap().to_shared());
+        }
 
-    for (&block_index, s) in block_indexes.iter().zip(senders)
-    {
-        let primitives = map_array_3_by_3(mesh.neighbor_block_indexes(block_index), |i| block_primitive.get(i).unwrap().to_owned());
-        s.send(primitives);
+        for (&block_index, s) in block_indexes.iter().zip(senders.iter())
+        {
+            let primitives = map_array_3_by_3(mesh.neighbor_block_indexes(block_index), |i| block_primitive.get(i).unwrap().clone());
+            s.send(primitives).unwrap();
+        }
     }
 
     join_handles
