@@ -1,14 +1,12 @@
-use std::sync::mpsc;
 use kepler_two_body::OrbitalElements;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use hydro_iso2d::*;
 use kepler_two_body::OrbitalState;
-use crate::SolutionState;
 
 
 
 
-type BlockIndex = (usize, usize);
+pub type BlockIndex = (usize, usize);
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
 
 
@@ -140,7 +138,7 @@ impl Mesh
         2.0 * self.domain_radius / (self.num_blocks as f64)
     }
 
-    pub fn block_start(&self, block_index: (usize, usize)) -> (f64, f64)
+    pub fn block_start(&self, block_index: BlockIndex) -> (f64, f64)
     {
         (
             -self.domain_radius + (block_index.0 as f64) * self.block_length(),
@@ -148,7 +146,7 @@ impl Mesh
         )
     }
 
-    pub fn block_vertices(&self, block_index: (usize, usize)) -> (Array<f64, Ix1>, Array<f64, Ix1>)
+    pub fn block_vertices(&self, block_index: BlockIndex) -> (Array<f64, Ix1>, Array<f64, Ix1>)
     {
         let start = self.block_start(block_index);
         let xv = Array::linspace(start.0, start.0 + self.block_length(), self.block_size + 1);
@@ -156,7 +154,7 @@ impl Mesh
         (xv, yv)
     }
 
-    pub fn cell_centers(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
+    pub fn cell_centers(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
     {
         use ndarray_ops::{adjacent_mean, cartesian_product2};
         let (xv, yv) = self.block_vertices(block_index);
@@ -165,7 +163,7 @@ impl Mesh
         return cartesian_product2(xc, yc);
     }
 
-    pub fn face_centers_x(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
+    pub fn face_centers_x(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
     {
         use ndarray_ops::{adjacent_mean, cartesian_product2};
         let (xv, yv) = self.block_vertices(block_index);
@@ -173,7 +171,7 @@ impl Mesh
         return cartesian_product2(xv, yc);
     }
 
-    pub fn face_centers_y(&self, block_index: (usize, usize)) -> Array<(f64, f64), Ix2>
+    pub fn face_centers_y(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
     {
         use ndarray_ops::{adjacent_mean, cartesian_product2};
         let (xv, yv) = self.block_vertices(block_index);
@@ -201,7 +199,16 @@ impl Mesh
         self.block_size * self.block_size
     }
 
-    pub fn neighbor_block_indexes(&self, block_index: (usize, usize)) -> [[(usize, usize); 3]; 3]
+    pub fn block_indexes(&self) -> Vec<BlockIndex>
+    {
+        (0..self.num_blocks)
+        .map(|i| (0..self.num_blocks)
+        .map(move |j| (i, j)))
+        .flatten()
+        .collect()
+    }
+
+    pub fn neighbor_block_indexes(&self, block_index: BlockIndex) -> [[BlockIndex; 3]; 3]
     {
         let b = self.num_blocks;
         let m = |i, j| (i % b, j % b);
@@ -269,14 +276,15 @@ impl<'a> CellData<'_>
 
 
 // ============================================================================
-fn advance_internal(
-    state:      SolutionState,
-    block_data: BlockData,
-    solver:     Solver,
-    mesh:       Mesh,
-    dt:         f64,
-    sender:     &mpsc::Sender<Array<Primitive, Ix2>>,
-    receiver:   &mpsc::Receiver<NeighborPrimitiveBlock>) -> (SolutionState, BlockData, Solver)
+fn advance_internal2(
+    conserved:  &mut Array<Conserved, Ix2>,
+    block_data: &BlockData,
+    solver:     &Solver,
+    mesh:       &Mesh,
+    sender:     crossbeam::Sender<Array<Primitive, Ix2>>,
+    receiver:   crossbeam::Receiver<NeighborPrimitiveBlock>,
+    time:       f64,
+    dt:         f64)
 {
     // ============================================================================
     use ndarray::{s, azip};
@@ -289,7 +297,7 @@ fn advance_internal(
     let a1 = Axis(1);
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
+    let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
 
     // ============================================================================
     let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
@@ -304,13 +312,14 @@ fn advance_internal(
     };
 
     let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+    let u0 = conserved.clone();
 
     // ============================================================================
-    sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
+    sender.send(conserved.mapv(Conserved::to_primitive)).unwrap();
 
     // ============================================================================
     let sources = azip![
-        &state.conserved,
+        &u0,
         &block_data.initial_conserved,
         &block_data.cell_centers]
     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
@@ -351,12 +360,7 @@ fn advance_internal(
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
     // ============================================================================
-    let new_state = SolutionState{
-        time:      state.time + dt,
-        iteration: state.iteration + 1,
-        conserved: state.conserved + &du + &sources,
-    };
-    return (new_state, block_data, solver);
+    *conserved = &u0 + &du + &sources;
 }
 
 
@@ -376,51 +380,43 @@ fn map_array_3_by_3<F: Fn(&T) -> U, T, U>(a: [[T; 3]; 3], f: F) -> [[U; 3]; 3]
 
 
 // ============================================================================
-pub fn advance_multi(multi_thread_state: Vec<(SolutionState, BlockData, Solver)>, dt: f64, fold: usize, mesh: Mesh) -> Vec<(SolutionState, BlockData, Solver)>
+pub fn advance_super(super_state: &mut crate::SuperState, super_block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64)
 {
-    use std::collections::HashMap;
-
-    let mut join_handles    = Vec::new();
-    let mut receivers       = Vec::new();
-    let mut senders         = Vec::new();
-    let mut block_indexes   = Vec::new();
-    let mut block_primitive = HashMap::new();
-
-    for thread_state in multi_thread_state
+    crossbeam::scope(|scope|
     {
-        let (their_s, my_r) = mpsc::channel();
-        let (my_s, their_r) = mpsc::channel();
+        use std::collections::HashMap;
 
-        block_indexes.push((&thread_state.1).index);
-        senders.push(my_s);
-        receivers.push(my_r);
-        join_handles.push(std::thread::spawn(move || -> (SolutionState, BlockData, Solver)
+        let time = super_state.time;
+        let mut receivers       = Vec::new();
+        let mut senders         = Vec::new();
+        let mut block_primitive = HashMap::new();
+
+        for (u, b) in super_state.conserved.iter_mut().zip(super_block_data)
         {
-            let mut a = thread_state;
+            let (their_s, my_r) = crossbeam::channel::unbounded();
+            let (my_s, their_r) = crossbeam::channel::unbounded();
 
-            for _ in 0..fold {
-                a = advance_internal(a.0, a.1, a.2, mesh, dt, &their_s, &their_r);
-            }
-            return a;
-        }));
-    }
+            senders.push(my_s);
+            receivers.push(my_r);
 
-    for _ in 0..fold
-    {
-        for (&block_index, r) in block_indexes.iter().zip(receivers.iter())
-        {
-            block_primitive.insert(block_index, r.recv().unwrap().to_shared());
+            scope.spawn(move |_| advance_internal2(u, b, solver, mesh, their_s, their_r, time, dt));
         }
 
-        for (&block_index, s) in block_indexes.iter().zip(senders.iter())
+        for (block_data, r) in super_block_data.iter().zip(receivers.iter())
         {
-            let primitives = map_array_3_by_3(mesh.neighbor_block_indexes(block_index), |i| block_primitive.get(i).unwrap().clone());
-            s.send(primitives).unwrap();
+            block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
         }
-    }
 
-    join_handles
-        .into_iter()
-        .map(|handle| handle.join().unwrap())
-        .collect()
+        for (block_data, s) in super_block_data.iter().zip(senders.iter())
+        {
+            s.send(map_array_3_by_3(mesh.neighbor_block_indexes(block_data.index), |i| block_primitive
+                .get(i)
+                .unwrap()
+                .clone()))
+            .unwrap();
+        }
+
+        super_state.iteration += 1;
+        super_state.time += dt;
+    }).unwrap();
 }
