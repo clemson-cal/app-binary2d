@@ -14,13 +14,59 @@ use scheme::{State, BlockIndex, BlockData};
 use std::time::Instant;
 use num::rational::Rational64;
 use ndarray::{Array, Ix2};
+use clap::Clap;
 use kind_config;
 use hydro_iso2d::*;
 
 mod io;
 mod scheme;
-
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+
+
+
+
+// ============================================================================
+#[derive(Debug)]
+#[derive(clap::Clap)]
+#[clap(
+    version="0.1.0",
+    author="J. Zrake <jzrake@clemson.edu>",
+    about="Gas-driven binary evolution with 2d/isothermal approximation")]
+
+
+
+
+// ============================================================================
+struct Opts
+{
+    #[clap(about="Model parameters")]
+    model_parameters: Vec<String>,
+
+    #[clap(short, long, about="Restart file or directory [uses latest checkpoint therein]")]
+    restart: Option<String>,
+
+    #[clap(short, long, about="Output directory [default: data/ or restart directory]")]
+    outdir: Option<String>,
+}
+
+impl Opts
+{
+    fn restart_file_path(&self) -> std::path::PathBuf
+    {
+        std::path::Path::new(&self.restart.clone().unwrap()).into()
+    }
+
+    fn output_directory(&self) -> String
+    {
+        if self.outdir.is_some() {
+            self.outdir.clone().unwrap()
+        } else if self.restart.is_some() {
+            self.restart_file_path().parent().unwrap().to_str().unwrap().into()
+        } else {
+            "data".into()
+        }
+    }
+}
 
 
 
@@ -43,9 +89,22 @@ impl TaskList
             tasks_last_performed: Instant::now(),
         }
     }
-    fn perform(&mut self, state: &State, mesh: &scheme::Mesh, block_data: &Vec<BlockData>, run_config: &kind_config::Form)
+    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, opts: &Opts)
     {
-        let checkpoint_interval: f64 = run_config.get("cpi").into();
+        let checkpoint_interval: f64 = model.get("cpi").into();
+        let outdir = opts.output_directory();
+        let fname = format!("{}/chkpt.{:04}.h5", outdir, self.checkpoint_count);
+
+        std::fs::create_dir_all(outdir).unwrap();
+
+        self.checkpoint_count += 1;
+        self.checkpoint_next_time += checkpoint_interval;
+
+        println!("Write checkpoint {}", fname);
+        io::write_checkpoint(&fname, &state, &block_data, &model).expect("HDF5 write failed");
+    }
+    fn perform(&mut self, state: &State, mesh: &scheme::Mesh, block_data: &Vec<BlockData>, model: &kind_config::Form, opts: &Opts)
+    {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let kzps_per_cu = (mesh.zones_per_block() as f64) * 1e-3 / elapsed;
         let kzps        = (mesh.total_zones()     as f64) * 1e-3 / elapsed;
@@ -57,13 +116,7 @@ impl TaskList
         }
         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
-            let fname = format!("data/chkpt.{:04}.h5", self.checkpoint_count);
-
-            self.checkpoint_count += 1;
-            self.checkpoint_next_time += checkpoint_interval;
-
-            println!("Write checkpoint {}", fname);
-            io::write_checkpoint(&fname, &state, &block_data, &run_config).expect("HDF5 write failed");
+            self.write_checkpoint(state, block_data, model, opts);
         }
     }
 }
@@ -105,9 +158,9 @@ fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
 
 
 // ============================================================================
-fn run() -> Result<(), Box<dyn std::error::Error>>
+fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>>
 {
-    let opts = kind_config::Form::new()
+    let model = kind_config::Form::new()
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
@@ -123,39 +176,38 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
         .item("sink_radius"     , 0.05   , "Radius of the sink region")
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
         .item("softening_length", 0.05   , "Gravitational softening length")
-        .item("tfinal"          , 1.0    , "Time at which to stop the simulation [Orbits]")
-        .merge_string_args(std::env::args().skip(1))?;
+        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
+        .merge_string_args(opts.model_parameters.clone())?;
 
-    let block_size:          usize               = i64::from(opts.get("block_size")) as usize;
-    let one_body:            bool                = opts.get("one_body")     .into();
-    let tfinal:              f64                 = opts.get("tfinal")       .into();
+    let one_body:   bool = model.get("one_body").into();
+    let tfinal:     f64  = model.get("tfinal")  .into();
 
     println!();
-    for key in &opts.sorted_keys() {
-        println!("\t{:.<24} {: <8} {}", key, opts.get(key), opts.about(key));
+    for key in &model.sorted_keys() {
+        println!("\t{:.<24} {: <8} {}", key, model.get(key), model.about(key));
     }
     println!();
 
     // ============================================================================
     let solver = scheme::Solver{
-        buffer_rate:      opts.get("buffer_rate").into(),
-        buffer_scale:     opts.get("buffer_scale").into(),
-        cfl:              opts.get("cfl").into(),
-        domain_radius:    opts.get("domain_radius").into(),
-        mach_number:      opts.get("mach_number").into(),
-        nu:               opts.get("nu").into(),
-        plm:              opts.get("plm").into(),
-        rk_order:         opts.get("rk_order").into(),
-        sink_radius:      opts.get("sink_radius").into(),
-        sink_rate:        opts.get("sink_rate").into(),
-        softening_length: opts.get("softening_length").into(),
+        buffer_rate:      model.get("buffer_rate").into(),
+        buffer_scale:     model.get("buffer_scale").into(),
+        cfl:              model.get("cfl").into(),
+        domain_radius:    model.get("domain_radius").into(),
+        mach_number:      model.get("mach_number").into(),
+        nu:               model.get("nu").into(),
+        plm:              model.get("plm").into(),
+        rk_order:         model.get("rk_order").into(),
+        sink_radius:      model.get("sink_radius").into(),
+        sink_rate:        model.get("sink_rate").into(),
+        softening_length: model.get("softening_length").into(),
         orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
     };
 
     let mesh = scheme::Mesh{
-        num_blocks: i64::from(opts.get("num_blocks")) as usize,
-        block_size: block_size,
-        domain_radius: opts.get("domain_radius").into(),
+        num_blocks: i64::from(model.get("num_blocks")) as usize,
+        block_size: i64::from(model.get("block_size")) as usize,
+        domain_radius: model.get("domain_radius").into(),
     };
 
     let mut state = State{
@@ -168,12 +220,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
     let dt = solver.min_time_step(&mesh);
     let mut tasks = TaskList::new();
 
-    tasks.perform(&state, &mesh, &block_data, &opts);
+    tasks.perform(&state, &mesh, &block_data, &model, &opts);
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
         scheme::advance_super(&mut state, &block_data, &mesh, &solver, dt);
-        tasks.perform(&state, &mesh, &block_data, &opts);
+        tasks.perform(&state, &mesh, &block_data, &model, &opts);
     }
     Ok(())
 }
@@ -184,5 +236,5 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
 // ============================================================================
 fn main()
 {
-    run().unwrap_or_else(|error| println!("{}", error));
+    run(Opts::parse()).unwrap_or_else(|error| println!("{}", error));
 }

@@ -301,8 +301,6 @@ fn advance_internal(
     use Direction::{X, Y};
 
     // ============================================================================
-    let a0 = Axis(0);
-    let a1 = Axis(1);
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
     let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
@@ -332,8 +330,8 @@ fn advance_internal(
     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
     let pe = ndarray_ops::extend_from_neighbor_arrays(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let gx = map_stencil3(&pe, a0, |a, b, c| plm_gradient3(solver.plm, a, b, c));
-    let gy = map_stencil3(&pe, a1, |a, b, c| plm_gradient3(solver.plm, a, b, c));
+    let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+    let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let xf = &block_data.face_centers_x;
     let yf = &block_data.face_centers_y;
 

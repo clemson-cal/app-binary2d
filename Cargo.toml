@@ -11,6 +11,7 @@ crossbeam       = "0.7"
 num             = "0.3"
 ndarray         = "0.13"
 hdf5            = "0.7"
+clap            = "3.0.0-beta.1"
 kind-config     = {version = "0.2", features = ["hdf5"]}
 
 kepler-two-body = { git = "https://github.com/clemson-cal/kepler-two-body" }
@@ -19,4 +20,4 @@ godunov-core    = { git = "https://github.com/clemson-cal/godunov-core" }
 ndarray-ops     = { path = "ndarray-ops" }
 
 [profile.release]
-lto = true
+lto = "thin"
