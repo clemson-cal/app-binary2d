@@ -79,7 +79,7 @@ impl Solver
 
     fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64
     {
-        -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number
+        -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number.powi(2)
     }
 
     fn maximum_orbital_velocity(&self) -> f64
