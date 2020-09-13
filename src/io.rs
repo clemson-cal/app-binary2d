@@ -27,7 +27,7 @@ pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<c
     let file = File::create(filename)?;
     let cfg_group = file.create_group("run_config")?;
     write_state(&file, &state, block_data)?;
-    io::write_to_hdf5(&run_config.value_map(), &cfg_group)?;
+    io::write_to_hdf5(&cfg_group, &run_config.value_map())?;
 
     Ok(())
 }

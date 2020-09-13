@@ -130,7 +130,6 @@ impl TaskList
 // ============================================================================
 fn run() -> Result<(), Box<dyn std::error::Error>>
 {
-    let arg_key_vals = kind_config::to_string_map_from_key_val_pairs(std::env::args().skip(1))?;
     let opts = kind_config::Form::new()
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
@@ -148,7 +147,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
         .item("softening_length", 0.05   , "Gravitational softening length")
         .item("tfinal"          , 1.0    , "Time at which to stop the simulation [Orbits]")
-        .merge_string_map(arg_key_vals)?;
+        .merge_string_args(std::env::args().skip(1))?;
 
     // let rk_order:            rk::RungeKuttaOrder = i64::from(opts.get("rk_order")).try_into()?;
     let block_size:          usize               = i64::from(opts.get("block_size")) as usize;
