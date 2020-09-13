@@ -11,7 +11,7 @@ crossbeam       = "0.7"
 num             = "0.3"
 ndarray         = "0.13"
 hdf5            = "0.7"
-kind-config     = "0.2"
+kind-config     = {version = "0.2", features = ["hdf5"]}
 
 kepler-two-body = { git = "https://github.com/clemson-cal/kepler-two-body" }
 hydro-iso2d     = { git = "https://github.com/clemson-cal/hydro-iso2d" }

@@ -10,20 +10,40 @@
 
 
 // ============================================================================
-// use std::convert::TryInto;
-use crate::scheme::BlockData;
 use std::time::Instant;
 use num::rational::Rational64;
 use ndarray::{Array, Ix2};
 use kind_config;
 use hydro_iso2d::*;
+// use std::convert::TryInto;
 // use godunov_core::runge_kutta as rk;
-// use godunov_core::solution_states::SolutionStateArray;
 mod io;
 mod scheme;
 
 
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+
+
+
+
+// ============================================================================
+pub type BlockIndex = (usize, usize);
+
+pub struct BlockData
+{
+    pub initial_conserved: Array<Conserved, Ix2>,
+    pub cell_centers:   Array<(f64, f64), Ix2>,
+    pub face_centers_x: Array<(f64, f64), Ix2>,
+    pub face_centers_y: Array<(f64, f64), Ix2>,
+    pub index:          BlockIndex,
+}
+
+pub struct State
+{
+    time: f64,
+    iteration: Rational64,
+    conserved: Vec<Array<Conserved, Ix2>>,
+}
 
 
 
@@ -47,26 +67,15 @@ fn initial_conserved(mesh: &scheme::Mesh, block_index: (usize, usize)) -> Array<
         .mapv(Primitive::to_conserved)
 }
 
-fn block_data(block_index: scheme::BlockIndex, mesh: &scheme::Mesh) -> scheme::BlockData
+fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
 {
-    scheme::BlockData{
+    BlockData{
         cell_centers:    mesh.cell_centers(block_index),
         face_centers_x:  mesh.face_centers_x(block_index),
         face_centers_y:  mesh.face_centers_y(block_index),
         initial_conserved: initial_conserved(&mesh, block_index),
         index: block_index,
     }
-}
-
-
-
-
-// ============================================================================
-pub struct SuperState
-{
-    time: f64,
-    iteration: Rational64,
-    conserved: Vec<Array<Conserved, Ix2>>,
 }
 
 
@@ -90,8 +99,9 @@ impl TaskList
             tasks_last_performed: Instant::now(),
         }
     }
-    fn perform(&mut self, state: &SuperState, mesh: &scheme::Mesh, checkpoint_interval: f64)
+    fn perform(&mut self, state: &State, mesh: &scheme::Mesh, block_data: &Vec<BlockData>, run_config: &kind_config::Form)
     {
+        let checkpoint_interval: f64 = run_config.get("cpi").into();
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let kzps_per_cu = (mesh.zones_per_block() as f64) * 1e-3 / elapsed;
         let kzps        = (mesh.total_zones()     as f64) * 1e-3 / elapsed;
@@ -105,11 +115,11 @@ impl TaskList
         {
             let fname = format!("data/chkpt.{:04}.h5", self.checkpoint_count);
 
-            println!("Write checkpoint {}", fname);
-            // io::write_hdf5(&state, &fname).expect("HDF5 write failed");
-
             self.checkpoint_count += 1;
             self.checkpoint_next_time += checkpoint_interval;
+
+            println!("Write checkpoint {}", fname);
+            io::write_checkpoint(&fname, &state, &block_data, &run_config).expect("HDF5 write failed");
         }
     }
 }
@@ -143,7 +153,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
     // let rk_order:            rk::RungeKuttaOrder = i64::from(opts.get("rk_order")).try_into()?;
     let block_size:          usize               = i64::from(opts.get("block_size")) as usize;
     let one_body:            bool                = opts.get("one_body")     .into();
-    let cpi:                 f64                 = opts.get("cpi")          .into();
     let tfinal:              f64                 = opts.get("tfinal")       .into();
 
     println!();
@@ -173,22 +182,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>>
         domain_radius: opts.get("domain_radius").into(),
     };
 
-    let mut super_state = SuperState{
+    let mut state = State{
         time: 0.0,
         iteration: Rational64::new(0, 1),
         conserved: mesh.block_indexes().into_iter().map(|i| initial_conserved(&mesh, i)).collect()
     };
 
-    let super_block_data: Vec<BlockData> = mesh.block_indexes().into_iter().map(|i| block_data(i, &mesh)).collect();
+    let block_data: Vec<BlockData> = mesh.block_indexes().into_iter().map(|i| block_data(i, &mesh)).collect();
     let dt = solver.min_time_step(&mesh);
     let mut tasks = TaskList::new();
 
-    tasks.perform(&super_state, &mesh, cpi);
+    tasks.perform(&state, &mesh, &block_data, &opts);
 
-    while super_state.time < tfinal * ORBITAL_PERIOD
+    while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme::advance_super(&mut super_state, &super_block_data, &mesh, &solver, dt);
-        tasks.perform(&super_state, &mesh, cpi);
+        scheme::advance_super(&mut state, &block_data, &mesh, &solver, dt);
+        tasks.perform(&state, &mesh, &block_data, &opts);
     }
     Ok(())
 }

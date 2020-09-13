@@ -1,3 +1,4 @@
+use crate::BlockIndex;
 use kepler_two_body::OrbitalElements;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use hydro_iso2d::*;
@@ -6,22 +7,7 @@ use kepler_two_body::OrbitalState;
 
 
 
-pub type BlockIndex = (usize, usize);
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-
-
-
-
-// ============================================================================
-#[derive(Clone)]
-pub struct BlockData
-{
-    pub initial_conserved: Array<Conserved, Ix2>,
-    pub cell_centers:   Array<(f64, f64), Ix2>,
-    pub face_centers_x: Array<(f64, f64), Ix2>,
-    pub face_centers_y: Array<(f64, f64), Ix2>,
-    pub index:          BlockIndex,
-}
 
 
 
@@ -278,7 +264,7 @@ impl<'a> CellData<'_>
 // ============================================================================
 fn advance_internal2(
     conserved:  &mut Array<Conserved, Ix2>,
-    block_data: &BlockData,
+    block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
     sender:     crossbeam::Sender<Array<Primitive, Ix2>>,
@@ -315,7 +301,7 @@ fn advance_internal2(
     let u0 = conserved.clone();
 
     // ============================================================================
-    sender.send(conserved.mapv(Conserved::to_primitive)).unwrap();
+    sender.send(u0.mapv(Conserved::to_primitive)).unwrap();
 
     // ============================================================================
     let sources = azip![
@@ -380,18 +366,18 @@ fn map_array_3_by_3<F: Fn(&T) -> U, T, U>(a: [[T; 3]; 3], f: F) -> [[U; 3]; 3]
 
 
 // ============================================================================
-pub fn advance_super(super_state: &mut crate::SuperState, super_block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64)
+pub fn advance_super(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64)
 {
     crossbeam::scope(|scope|
     {
         use std::collections::HashMap;
 
-        let time = super_state.time;
+        let time = state.time;
         let mut receivers       = Vec::new();
         let mut senders         = Vec::new();
         let mut block_primitive = HashMap::new();
 
-        for (u, b) in super_state.conserved.iter_mut().zip(super_block_data)
+        for (u, b) in state.conserved.iter_mut().zip(block_data)
         {
             let (their_s, my_r) = crossbeam::channel::unbounded();
             let (my_s, their_r) = crossbeam::channel::unbounded();
@@ -402,12 +388,12 @@ pub fn advance_super(super_state: &mut crate::SuperState, super_block_data: &Vec
             scope.spawn(move |_| advance_internal2(u, b, solver, mesh, their_s, their_r, time, dt));
         }
 
-        for (block_data, r) in super_block_data.iter().zip(receivers.iter())
+        for (block_data, r) in block_data.iter().zip(receivers.iter())
         {
             block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
         }
 
-        for (block_data, s) in super_block_data.iter().zip(senders.iter())
+        for (block_data, s) in block_data.iter().zip(senders.iter())
         {
             s.send(map_array_3_by_3(mesh.neighbor_block_indexes(block_data.index), |i| block_primitive
                 .get(i)
@@ -416,7 +402,7 @@ pub fn advance_super(super_state: &mut crate::SuperState, super_block_data: &Vec
             .unwrap();
         }
 
-        super_state.iteration += 1;
-        super_state.time += dt;
+        state.iteration += 1;
+        state.time += dt;
     }).unwrap();
 }

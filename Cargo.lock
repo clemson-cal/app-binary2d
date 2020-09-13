@@ -207,6 +207,9 @@ name = "kind-config"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a713d0668c3a4ef55a9dccd456e137716063a741ef8669ffd2d52a9ecedd0ac"
+dependencies = [
+ "hdf5",
+]
 
 [[package]]
 name = "lazy_static"
