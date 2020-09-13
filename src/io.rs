@@ -5,7 +5,7 @@ pub fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<c
 
     for (b, u) in block_data.iter().zip(&state.conserved)
     {
-        let gname = format!("{:03}-{:03}", b.index.0, b.index.1);
+        let gname = format!("0:{:03}-{:03}", b.index.0, b.index.1);
         let udata = u.mapv(Into::<[f64; 3]>::into);
         cons.new_dataset::<[f64; 3]>().create(&gname, u.dim())?.write(&udata)?;
     }
