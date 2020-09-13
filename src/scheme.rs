@@ -1,38 +1,62 @@
-use crate::BlockIndex;
-use kepler_two_body::OrbitalElements;
+use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use hydro_iso2d::*;
-use kepler_two_body::OrbitalState;
-
-
-
-
-type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
+use kepler_two_body::{OrbitalElements, OrbitalState};
+use godunov_core::solution_states;
+use godunov_core::runge_kutta;
 
 
 
 
 // ============================================================================
-#[derive(Clone)]
-pub struct Solver
+type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
+type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
+pub type BlockIndex = (usize, usize);
+
+
+
+
+// ============================================================================
+pub struct BlockData
 {
-    pub sink_rate: f64,
-    pub buffer_rate: f64,
-    pub buffer_scale: f64,
-    pub softening_length: f64,
-    pub sink_radius: f64,
-    pub domain_radius: f64,
-    pub cfl: f64,
-    pub plm: f64,
-    pub nu: f64,
-    pub mach_number: f64,
-    pub orbital_elements: OrbitalElements,
+    pub initial_conserved: Array<Conserved, Ix2>,
+    pub cell_centers:   Array<(f64, f64), Ix2>,
+    pub face_centers_x: Array<(f64, f64), Ix2>,
+    pub face_centers_y: Array<(f64, f64), Ix2>,
+    pub index:          BlockIndex,
 }
 
 
 
 
 // ============================================================================
+pub struct State
+{
+    pub time: f64,
+    pub iteration: Rational64,
+    pub conserved: Vec<Array<Conserved, Ix2>>,
+}
+
+
+
+
+// ============================================================================
+pub struct Solver
+{
+    pub buffer_rate: f64,
+    pub buffer_scale: f64,
+    pub cfl: f64,
+    pub domain_radius: f64,
+    pub mach_number: f64,
+    pub nu: f64,
+    pub plm: f64,
+    pub rk_order: i64,
+    pub sink_radius: f64,
+    pub sink_rate: f64,
+    pub softening_length: f64,
+    pub orbital_elements: OrbitalElements,
+}
+
 impl Solver
 {
     fn source_terms(&self,
@@ -109,7 +133,6 @@ impl Solver
 
 
 // ============================================================================
-#[derive(Copy, Clone)]
 pub struct Mesh
 {
     pub num_blocks: usize,
@@ -262,15 +285,14 @@ impl<'a> CellData<'_>
 
 
 // ============================================================================
-fn advance_internal2(
-    conserved:  &mut Array<Conserved, Ix2>,
+fn advance_internal(
+    state:      BlockState,
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   crossbeam::Receiver<NeighborPrimitiveBlock>,
-    time:       f64,
-    dt:         f64)
+    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    dt:         f64) -> BlockState
 {
     // ============================================================================
     use ndarray::{s, azip};
@@ -283,7 +305,7 @@ fn advance_internal2(
     let a1 = Axis(1);
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
 
     // ============================================================================
     let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
@@ -298,14 +320,13 @@ fn advance_internal2(
     };
 
     let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-    let u0 = conserved.clone();
 
     // ============================================================================
-    sender.send(u0.mapv(Conserved::to_primitive)).unwrap();
+    sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
 
     // ============================================================================
     let sources = azip![
-        &u0,
+        &state.conserved,
         &block_data.initial_conserved,
         &block_data.cell_centers]
     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
@@ -346,7 +367,37 @@ fn advance_internal2(
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
     // ============================================================================
-    *conserved = &u0 + &du + &sources;
+    BlockState{
+        time: state.time + dt,
+        iteration: state.iteration + 1,
+        conserved: state.conserved + du + sources,
+    }
+}
+
+
+
+
+// ============================================================================
+fn advance_internal_rk(
+    conserved:  &mut Array<Conserved, Ix2>,
+    block_data: &crate::BlockData,
+    solver:     &Solver,
+    mesh:       &Mesh,
+    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    time:       f64,
+    dt:         f64)
+{
+    use std::convert::TryFrom;
+
+    let update = |state| advance_internal(state, block_data, solver, mesh, sender, receiver, dt);
+    let s0 = BlockState {
+        time: time,
+        iteration: Rational64::new(0, 1),
+        conserved: conserved.clone(),
+    };
+    let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
+    *conserved = rk_order.advance(s0, update).conserved;
 }
 
 
@@ -385,21 +436,24 @@ pub fn advance_super(state: &mut crate::State, block_data: &Vec<crate::BlockData
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_internal2(u, b, solver, mesh, their_s, their_r, time, dt));
+            scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt));
         }
 
-        for (block_data, r) in block_data.iter().zip(receivers.iter())
+        for _ in 0..solver.rk_order
         {
-            block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
-        }
+            for (block_data, r) in block_data.iter().zip(receivers.iter())
+            {
+                block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+            }
 
-        for (block_data, s) in block_data.iter().zip(senders.iter())
-        {
-            s.send(map_array_3_by_3(mesh.neighbor_block_indexes(block_data.index), |i| block_primitive
-                .get(i)
-                .unwrap()
-                .clone()))
-            .unwrap();
+            for (block_data, s) in block_data.iter().zip(senders.iter())
+            {
+                s.send(map_array_3_by_3(mesh.neighbor_block_indexes(block_data.index), |i| block_primitive
+                    .get(i)
+                    .unwrap()
+                    .clone()))
+                .unwrap();
+            }            
         }
 
         state.iteration += 1;
