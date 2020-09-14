@@ -1,5 +1,12 @@
+use std::collections::HashMap;
+use std::time::Instant;
+use hdf5::File;
+
+
+
+
 // ============================================================================
-pub fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<crate::BlockData>) -> Result<(), hdf5::Error>
+fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<crate::BlockData>) -> Result<(), hdf5::Error>
 {
     let cons = group.create_group("conserved")?;
 
@@ -15,19 +22,89 @@ pub fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<c
     Ok(())
 }
 
+pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
+{
+    use ndarray::Ix2;
+
+    let file = File::open(filename)?;
+    let cons = file.group("conserved")?;
+    let mut conserved = Vec::new();
+
+    for key in cons.member_names()?
+    {
+        let u = cons.dataset(&key)?
+            .read_dyn::<[f64; 3]>()?
+            .into_dimensionality::<Ix2>()?
+            .mapv(Into::<hydro_iso2d::Conserved>::into);
+        conserved.push(u);
+    }
+
+    let time      = file.dataset("time")     ?.read_scalar::<f64>()?;
+    let iteration = file.dataset("iteration")?.read_scalar::<usize>()?;
+
+    let result = crate::State{
+        conserved: conserved,
+        time: time,
+        iteration: (iteration as i64).into(),
+    };
+    Ok(result)
+}
+
 
 
 
 // ============================================================================
-pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<crate::BlockData>, run_config: &kind_config::Form) -> Result<(), hdf5::Error>
+fn write_tasks(group: &hdf5::Group, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
 {
-    use hdf5::File;
-    use kind_config::io;
+    group.new_dataset::<f64>  ().create("checkpoint_next_time", ())?.write_scalar(&tasks.checkpoint_next_time)?;
+    group.new_dataset::<usize>().create("checkpoint_count",     ())?.write_scalar(&tasks.checkpoint_count)?;
+    Ok(())
+}
 
+pub fn read_tasks(filename: &str) -> Result<crate::Tasks, hdf5::Error>
+{
+    let file = File::open(filename)?;
+    let group = file.group("tasks")?;
+
+    let result = crate::Tasks{
+        checkpoint_next_time: group.dataset("checkpoint_next_time")?.read_scalar::<f64>()?,
+        checkpoint_count:     group.dataset("checkpoint_count")    ?.read_scalar::<usize>()?,
+        call_count_this_run: 0,
+        tasks_last_performed: Instant::now(),
+    };
+    Ok(result)
+}
+
+
+
+
+// ============================================================================
+fn write_model(group: &hdf5::Group, model: &HashMap::<String, kind_config::Value>) -> Result<(), hdf5::Error>
+{
+    kind_config::io::write_to_hdf5(&group, &model)?;
+    Ok(())
+}
+
+pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value>, hdf5::Error>
+{
+    let file = File::open(filename)?;
+    let group = file.group("model")?;
+    kind_config::io::read_from_hdf5(&group)
+}
+
+
+
+
+// ============================================================================
+pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<crate::BlockData>, model: &HashMap::<String, kind_config::Value>, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
+{
     let file = File::create(filename)?;
-    let cfg_group = file.create_group("run_config")?;
+    let tasks_group = file.create_group("tasks")?;
+    let model_group = file.create_group("model")?;
+
     write_state(&file, &state, block_data)?;
-    io::write_to_hdf5(&cfg_group, &run_config.value_map())?;
+    write_tasks(&tasks_group, &tasks)?;
+    write_model(&model_group, &model)?;
 
     Ok(())
 }

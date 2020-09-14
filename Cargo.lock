@@ -283,8 +283,7 @@ source = "git+https://github.com/clemson-cal/kepler-two-body#d42ade3094e4e7dcd0c
 [[package]]
 name = "kind-config"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92bef7ddd7e85bbc0dc739e8f2ad28afbae0f7eef9a117accd0d336f0b42ede0"
+source = "git+https://github.com/clemson-cal/kind-config#d4aa74f0c642fc6b9e93c87e5f7c1373f6530839"
 dependencies = [
  "hdf5",
 ]

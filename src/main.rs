@@ -10,12 +10,13 @@
 
 
 // ============================================================================
-use scheme::{State, BlockIndex, BlockData};
 use std::time::Instant;
+use std::collections::HashMap;
 use num::rational::Rational64;
 use ndarray::{Array, Ix2};
 use clap::Clap;
 use kind_config;
+use scheme::{State, BlockIndex, BlockData};
 use hydro_iso2d::*;
 
 mod io;
@@ -42,7 +43,7 @@ struct Opts
     #[clap(about="Model parameters")]
     model_parameters: Vec<String>,
 
-    #[clap(short, long, about="Restart file or directory [uses latest checkpoint therein]")]
+    #[clap(short, long, about="Restart file or directory [use latest checkpoint if directory]")]
     restart: Option<String>,
 
     #[clap(short, long, about="Output directory [default: data/ or restart directory]")]
@@ -51,19 +52,50 @@ struct Opts
 
 impl Opts
 {
-    fn restart_file_path(&self) -> std::path::PathBuf
-    {
-        std::path::Path::new(&self.restart.clone().unwrap()).into()
-    }
-
     fn output_directory(&self) -> String
     {
-        if self.outdir.is_some() {
-            self.outdir.clone().unwrap()
-        } else if self.restart.is_some() {
-            self.restart_file_path().parent().unwrap().to_str().unwrap().into()
+        if let Some(outdir) = &self.outdir {
+            outdir.into()
+        } else if let Some(restart) = &self.restart {
+            std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into()
         } else {
             "data".into()
+        }
+    }
+
+    fn restart_model_parameters(&self) -> HashMap<String, kind_config::Value>
+    {
+        if let Some(restart) = &self.restart {
+            io::read_model(restart).unwrap()
+        } else {
+            HashMap::new()
+        }        
+    }
+
+    fn create_tasks(&self) -> Tasks
+    {
+        if let Some(restart) = &self.restart {
+            io::read_tasks(restart).unwrap()
+        } else {
+            Tasks{
+                checkpoint_next_time: 0.0,
+                checkpoint_count: 0,
+                call_count_this_run: 0,
+                tasks_last_performed: Instant::now(),
+            }            
+        }
+    }
+
+    fn create_initial_state(&self, mesh: &scheme::Mesh) -> State
+    {
+        if let Some(restart) = &self.restart {
+            io::read_state(restart).unwrap()
+        } else {
+            State{
+                time: 0.0,
+                iteration: Rational64::new(0, 1),
+                conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect()
+            }            
         }
     }
 }
@@ -72,23 +104,16 @@ impl Opts
 
 
 // ============================================================================
-struct TaskList
+pub struct Tasks
 {
-    checkpoint_next_time: f64,
-    checkpoint_count: usize,
-    tasks_last_performed: Instant,
+    pub checkpoint_next_time: f64,
+    pub checkpoint_count: usize,
+    pub call_count_this_run: usize,
+    pub tasks_last_performed: Instant,
 }
 
-impl TaskList
+impl Tasks
 {
-    fn new() -> TaskList
-    {
-        TaskList{
-            checkpoint_next_time: 0.0,
-            checkpoint_count: 0,
-            tasks_last_performed: Instant::now(),
-        }
-    }
     fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, opts: &Opts)
     {
         let checkpoint_interval: f64 = model.get("cpi").into();
@@ -101,8 +126,9 @@ impl TaskList
         self.checkpoint_next_time += checkpoint_interval;
 
         println!("Write checkpoint {}", fname);
-        io::write_checkpoint(&fname, &state, &block_data, &model).expect("HDF5 write failed");
+        io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
     }
+
     fn perform(&mut self, state: &State, mesh: &scheme::Mesh, block_data: &Vec<BlockData>, model: &kind_config::Form, opts: &Opts)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
@@ -110,7 +136,7 @@ impl TaskList
         let kzps        = (mesh.total_zones()     as f64) * 1e-3 / elapsed;
         self.tasks_last_performed = Instant::now();
 
-        if state.time > 0.0
+        if self.call_count_this_run > 0
         {
             println!("[{:05}] orbit={:.3} kzps={:.0} (per cu={:.0})", state.iteration, state.time / ORBITAL_PERIOD, kzps, kzps_per_cu);
         }
@@ -118,6 +144,7 @@ impl TaskList
         {
             self.write_checkpoint(state, block_data, model, opts);
         }
+        self.call_count_this_run += 1;
     }
 }
 
@@ -136,7 +163,7 @@ fn initial_primitive(xy: (f64, f64)) -> Primitive
     return Primitive(1.0, vx, vy);
 }
 
-fn initial_conserved(mesh: &scheme::Mesh, block_index: (usize, usize)) -> Array<Conserved, Ix2>
+fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Conserved, Ix2>
 {
     mesh.cell_centers(block_index)
         .mapv(initial_primitive)
@@ -149,7 +176,7 @@ fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
         cell_centers:    mesh.cell_centers(block_index),
         face_centers_x:  mesh.face_centers_x(block_index),
         face_centers_y:  mesh.face_centers_y(block_index),
-        initial_conserved: initial_conserved(&mesh, block_index),
+        initial_conserved: initial_conserved(block_index, &mesh),
         index: block_index,
     }
 }
@@ -177,16 +204,17 @@ fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>>
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
         .item("softening_length", 0.05   , "Gravitational softening length")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
-        .merge_string_args(opts.model_parameters.clone())?;
-
-    let one_body:   bool = model.get("one_body").into();
-    let tfinal:     f64  = model.get("tfinal")  .into();
+        .merge_value_map(&opts.restart_model_parameters())?
+        .merge_string_args(&opts.model_parameters)?;
 
     println!();
     for key in &model.sorted_keys() {
         println!("\t{:.<24} {: <8} {}", key, model.get(key), model.about(key));
     }
     println!();
+
+    let one_body: bool = model.get("one_body").into();
+    let tfinal:   f64  = model.get("tfinal")  .into();
 
     // ============================================================================
     let solver = scheme::Solver{
@@ -210,15 +238,10 @@ fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>>
         domain_radius: model.get("domain_radius").into(),
     };
 
-    let mut state = State{
-        time: 0.0,
-        iteration: Rational64::new(0, 1),
-        conserved: mesh.block_indexes().into_iter().map(|i| initial_conserved(&mesh, i)).collect()
-    };
-
-    let block_data: Vec<BlockData> = mesh.block_indexes().into_iter().map(|i| block_data(i, &mesh)).collect();
+    let block_data: Vec<BlockData> = mesh.block_indexes().iter().map(|&i| block_data(i, &mesh)).collect();
     let dt = solver.min_time_step(&mesh);
-    let mut tasks = TaskList::new();
+    let mut state = opts.create_initial_state(&mesh);
+    let mut tasks = opts.create_tasks();
 
     tasks.perform(&state, &mesh, &block_data, &model, &opts);
 
