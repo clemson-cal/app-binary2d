@@ -52,11 +52,39 @@ struct Opts
 
 impl Opts
 {
+    fn last_checkpoint_in_directory(&self, mut path: std::path::PathBuf) -> Option<String>
+    {
+        path.push("chkpt.*.h5");
+        let mut checkpoints: Vec<_> = glob::glob(&path.to_str().unwrap())
+            .unwrap()
+            .map(|x| x.unwrap().to_str().unwrap().to_string())
+            .collect();
+        checkpoints.sort();
+        checkpoints.last().map(|x| x.to_string())
+    }
+
+    fn restart_file(&self) -> Option<String>
+    {
+        if let Some(restart) = &self.restart {
+            let path = std::path::PathBuf::from(&restart);
+
+            if path.is_file() {
+                Some(restart.into())
+            } else if path.is_dir() {
+                self.last_checkpoint_in_directory(path)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     fn output_directory(&self) -> String
     {
         if let Some(outdir) = &self.outdir {
             outdir.into()
-        } else if let Some(restart) = &self.restart {
+        } else if let Some(restart) = &self.restart_file() {
             std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into()
         } else {
             "data".into()
@@ -65,37 +93,28 @@ impl Opts
 
     fn restart_model_parameters(&self) -> HashMap<String, kind_config::Value>
     {
-        if let Some(restart) = &self.restart {
+        if let Some(restart) = &self.restart_file() {
             io::read_model(restart).unwrap()
         } else {
             HashMap::new()
-        }        
-    }
-
-    fn create_tasks(&self) -> Tasks
-    {
-        if let Some(restart) = &self.restart {
-            io::read_tasks(restart).unwrap()
-        } else {
-            Tasks{
-                checkpoint_next_time: 0.0,
-                checkpoint_count: 0,
-                call_count_this_run: 0,
-                tasks_last_performed: Instant::now(),
-            }            
         }
     }
 
-    fn create_initial_state(&self, mesh: &scheme::Mesh) -> State
+    fn create_tasks(&self) -> Option<Tasks>
     {
-        if let Some(restart) = &self.restart {
-            io::read_state(restart).unwrap()
+        if let Some(restart) = &self.restart_file() {
+            Some(io::read_tasks(restart).unwrap())
         } else {
-            State{
-                time: 0.0,
-                iteration: Rational64::new(0, 1),
-                conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect()
-            }            
+            None
+        }
+    }
+
+    fn create_initial_state(&self) -> Option<State>
+    {
+        if let Some(restart) = &self.restart_file() {
+            Some(io::read_state(restart).unwrap())
+        } else {
+            None
         }
     }
 }
@@ -129,7 +148,7 @@ impl Tasks
         io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
     }
 
-    fn perform(&mut self, state: &State, mesh: &scheme::Mesh, block_data: &Vec<BlockData>, model: &kind_config::Form, opts: &Opts)
+    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, opts: &Opts)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let kzps_per_cu = (mesh.zones_per_block() as f64) * 1e-3 / elapsed;
@@ -170,6 +189,25 @@ fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Cons
         .mapv(Primitive::to_conserved)
 }
 
+fn initial_state(mesh: &scheme::Mesh) -> State
+{
+    State{
+        time: 0.0,
+        iteration: Rational64::new(0, 1),
+        conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect()
+    } 
+}
+
+fn initial_tasks() -> Tasks
+{
+    Tasks{
+        checkpoint_next_time: 0.0,
+        checkpoint_count: 0,
+        call_count_this_run: 0,
+        tasks_last_performed: Instant::now(),
+    }
+}
+
 fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
 {
     BlockData{
@@ -179,6 +217,40 @@ fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
         initial_conserved: initial_conserved(block_index, &mesh),
         index: block_index,
     }
+}
+
+fn create_solver(model: &kind_config::Form) -> scheme::Solver
+{
+    let one_body: bool = model.get("one_body").into();
+
+    scheme::Solver{
+        buffer_rate:      model.get("buffer_rate").into(),
+        buffer_scale:     model.get("buffer_scale").into(),
+        cfl:              model.get("cfl").into(),
+        domain_radius:    model.get("domain_radius").into(),
+        mach_number:      model.get("mach_number").into(),
+        nu:               model.get("nu").into(),
+        plm:              model.get("plm").into(),
+        rk_order:         model.get("rk_order").into(),
+        sink_radius:      model.get("sink_radius").into(),
+        sink_rate:        model.get("sink_rate").into(),
+        softening_length: model.get("softening_length").into(),
+        orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
+    }
+}
+
+fn create_mesh(model: &kind_config::Form) -> scheme::Mesh
+{
+    scheme::Mesh{
+        num_blocks: i64::from(model.get("num_blocks")) as usize,
+        block_size: i64::from(model.get("block_size")) as usize,
+        domain_radius: model.get("domain_radius").into(),
+    }
+}
+
+fn create_block_data(mesh: &scheme::Mesh) -> Vec<BlockData>
+{
+    mesh.block_indexes().iter().map(|&i| block_data(i, &mesh)).collect()
 }
 
 
@@ -213,42 +285,25 @@ fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>>
     }
     println!();
 
-    let one_body: bool = model.get("one_body").into();
-    let tfinal:   f64  = model.get("tfinal")  .into();
+    if let Some(restart) = opts.restart_file()
+    {
+        println!("restart from {:}", restart);
+    }
 
-    // ============================================================================
-    let solver = scheme::Solver{
-        buffer_rate:      model.get("buffer_rate").into(),
-        buffer_scale:     model.get("buffer_scale").into(),
-        cfl:              model.get("cfl").into(),
-        domain_radius:    model.get("domain_radius").into(),
-        mach_number:      model.get("mach_number").into(),
-        nu:               model.get("nu").into(),
-        plm:              model.get("plm").into(),
-        rk_order:         model.get("rk_order").into(),
-        sink_radius:      model.get("sink_radius").into(),
-        sink_rate:        model.get("sink_rate").into(),
-        softening_length: model.get("softening_length").into(),
-        orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
-    };
+    let solver         = create_solver(&model);
+    let mesh           = create_mesh(&model);
+    let block_data     = create_block_data(&mesh);
+    let tfinal:   f64  = model.get("tfinal").into();
+    let dt             = solver.min_time_step(&mesh);
+    let mut state      = opts.create_initial_state().unwrap_or_else(|| initial_state(&mesh));
+    let mut tasks      = opts.create_tasks().unwrap_or_else(|| initial_tasks());
 
-    let mesh = scheme::Mesh{
-        num_blocks: i64::from(model.get("num_blocks")) as usize,
-        block_size: i64::from(model.get("block_size")) as usize,
-        domain_radius: model.get("domain_radius").into(),
-    };
-
-    let block_data: Vec<BlockData> = mesh.block_indexes().iter().map(|&i| block_data(i, &mesh)).collect();
-    let dt = solver.min_time_step(&mesh);
-    let mut state = opts.create_initial_state(&mesh);
-    let mut tasks = opts.create_tasks();
-
-    tasks.perform(&state, &mesh, &block_data, &model, &opts);
+    tasks.perform(&state, &block_data, &mesh, &model, &opts);
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme::advance_super(&mut state, &block_data, &mesh, &solver, dt);
-        tasks.perform(&state, &mesh, &block_data, &model, &opts);
+        scheme::advance(&mut state, &block_data, &mesh, &solver, dt);
+        tasks.perform(&state, &block_data, &mesh, &model, &opts);
     }
     Ok(())
 }

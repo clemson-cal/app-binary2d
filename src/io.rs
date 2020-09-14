@@ -24,8 +24,6 @@ fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<crate
 
 pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
 {
-    use ndarray::Ix2;
-
     let file = File::open(filename)?;
     let cons = file.group("conserved")?;
     let mut conserved = Vec::new();
@@ -34,7 +32,7 @@ pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
     {
         let u = cons.dataset(&key)?
             .read_dyn::<[f64; 3]>()?
-            .into_dimensionality::<Ix2>()?
+            .into_dimensionality::<ndarray::Ix2>()?
             .mapv(Into::<hydro_iso2d::Conserved>::into);
         conserved.push(u);
     }
