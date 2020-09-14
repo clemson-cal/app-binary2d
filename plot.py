@@ -47,6 +47,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     rho = conserved(args.filename, 0)
-    plt.imshow(np.log10(rho), cmap='inferno', extent=extent(args.filename))
+    plt.imshow(np.log10(rho).T, cmap='inferno', origin='lower', extent=extent(args.filename), vmin=-3, vmax=1.5)
     plt.colorbar()
     plt.show()

@@ -122,7 +122,7 @@ impl Solver
         let s2 = self.sink_radius * self.sink_radius;
 
         if r2 < s2 * 9.0 {
-            self.sink_rate * f64::exp(-r2 * r2 / s2 / s2)
+            self.sink_rate * f64::exp(-(r2 / s2).powi(3))
         } else {
             0.0
         }
@@ -415,7 +415,7 @@ fn map_array_3_by_3<F: Fn(&T) -> U, T, U>(a: [[T; 3]; 3], f: F) -> [[U; 3]; 3]
 
 
 // ============================================================================
-pub fn advance_super(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64)
+pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64)
 {
     crossbeam::scope(|scope|
     {
@@ -451,7 +451,7 @@ pub fn advance_super(state: &mut crate::State, block_data: &Vec<crate::BlockData
                     .unwrap()
                     .clone()))
                 .unwrap();
-            }            
+            }
         }
 
         state.iteration += 1;
