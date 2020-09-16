@@ -28,17 +28,8 @@ static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 // ============================================================================
 #[derive(Debug)]
-#[derive(clap::Clap)]
-#[clap(
-    version="0.1.0",
-    author="J. Zrake <jzrake@clemson.edu>",
-    about="Gas-driven binary evolution with 2d/isothermal approximation")]
-
-
-
-
-// ============================================================================
-struct Opts
+#[derive(Clap)]
+struct App
 {
     #[clap(about="Model parameters")]
     model_parameters: Vec<String>,
@@ -48,9 +39,12 @@ struct Opts
 
     #[clap(short, long, about="Output directory [default: data/ or restart directory]")]
     outdir: Option<String>,
+
+    #[clap(long, default_value="1", about="Number of iterations between side effects")]
+    fold: usize,
 }
 
-impl Opts
+impl App
 {
     fn last_checkpoint_in_directory(&self, mut path: std::path::PathBuf) -> Option<String>
     {
@@ -99,24 +93,6 @@ impl Opts
             HashMap::new()
         }
     }
-
-    fn create_tasks(&self) -> Option<Tasks>
-    {
-        if let Some(restart) = &self.restart_file() {
-            Some(io::read_tasks(restart).unwrap())
-        } else {
-            None
-        }
-    }
-
-    fn create_initial_state(&self) -> Option<State>
-    {
-        if let Some(restart) = &self.restart_file() {
-            Some(io::read_state(restart).unwrap())
-        } else {
-            None
-        }
-    }
 }
 
 
@@ -133,10 +109,10 @@ pub struct Tasks
 
 impl Tasks
 {
-    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, opts: &Opts)
+    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App)
     {
         let checkpoint_interval: f64 = model.get("cpi").into();
-        let outdir = opts.output_directory();
+        let outdir = app.output_directory();
         let fname = format!("{}/chkpt.{:04}.h5", outdir, self.checkpoint_count);
 
         std::fs::create_dir_all(outdir).unwrap();
@@ -144,15 +120,15 @@ impl Tasks
         self.checkpoint_count += 1;
         self.checkpoint_next_time += checkpoint_interval;
 
-        println!("Write checkpoint {}", fname);
+        println!("write checkpoint {}", fname);
         io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
     }
 
-    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, opts: &Opts)
+    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
-        let kzps_per_cu = (mesh.zones_per_block() as f64) * 1e-3 / elapsed;
-        let kzps        = (mesh.total_zones()     as f64) * 1e-3 / elapsed;
+        let kzps_per_cu = (mesh.zones_per_block() as f64) * (app.fold as f64) * 1e-3 / elapsed;
+        let kzps        = (mesh.total_zones()     as f64) * (app.fold as f64) * 1e-3 / elapsed;
         self.tasks_last_performed = Instant::now();
 
         if self.call_count_this_run > 0
@@ -161,7 +137,7 @@ impl Tasks
         }
         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
-            self.write_checkpoint(state, block_data, model, opts);
+            self.write_checkpoint(state, block_data, model, app);
         }
         self.call_count_this_run += 1;
     }
@@ -171,7 +147,7 @@ impl Tasks
 
 
 // ============================================================================
-fn initial_primitive(xy: (f64, f64)) -> Primitive
+fn disk_model(xy: (f64, f64)) -> Primitive
 {
     let (x, y) = xy;
     let r0 = f64::sqrt(x * x + y * y);
@@ -185,7 +161,7 @@ fn initial_primitive(xy: (f64, f64)) -> Primitive
 fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Conserved, Ix2>
 {
     mesh.cell_centers(block_index)
-        .mapv(initial_primitive)
+        .mapv(disk_model)
         .mapv(Primitive::to_conserved)
 }
 
@@ -257,7 +233,7 @@ fn create_block_data(mesh: &scheme::Mesh) -> Vec<BlockData>
 
 
 // ============================================================================
-fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>>
+fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
 {
     let model = kind_config::Form::new()
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
@@ -276,34 +252,33 @@ fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>>
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
         .item("softening_length", 0.05   , "Gravitational softening length")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
-        .merge_value_map(&opts.restart_model_parameters())?
-        .merge_string_args(&opts.model_parameters)?;
+        .merge_value_map(&app.restart_model_parameters())?
+        .merge_string_args(&app.model_parameters)?;
+
+    let solver     = create_solver(&model);
+    let mesh       = create_mesh(&model);
+    let block_data = create_block_data(&mesh);
+    let tfinal     = f64::from(model.get("tfinal"));
+    let dt         = solver.min_time_step(&mesh);
+    let mut state  = app.restart_file().map(|r| io::read_state(&r).unwrap()).unwrap_or_else(|| initial_state(&mesh));
+    let mut tasks  = app.restart_file().map(|r| io::read_tasks(&r).unwrap()).unwrap_or_else(|| initial_tasks());
 
     println!();
     for key in &model.sorted_keys() {
-        println!("\t{:.<24} {: <8} {}", key, model.get(key), model.about(key));
+        println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
     }
     println!();
+    println!("\trestart file            = {}",      app.restart_file().unwrap_or("none".to_string()));
+    println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
+    println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
+    println!();
 
-    if let Some(restart) = opts.restart_file()
-    {
-        println!("restart from {:}", restart);
-    }
-
-    let solver         = create_solver(&model);
-    let mesh           = create_mesh(&model);
-    let block_data     = create_block_data(&mesh);
-    let tfinal:   f64  = model.get("tfinal").into();
-    let dt             = solver.min_time_step(&mesh);
-    let mut state      = opts.create_initial_state().unwrap_or_else(|| initial_state(&mesh));
-    let mut tasks      = opts.create_tasks().unwrap_or_else(|| initial_tasks());
-
-    tasks.perform(&state, &block_data, &mesh, &model, &opts);
+    tasks.perform(&state, &block_data, &mesh, &model, &app);
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme::advance(&mut state, &block_data, &mesh, &solver, dt);
-        tasks.perform(&state, &block_data, &mesh, &model, &opts);
+        scheme::advance(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        tasks.perform(&state, &block_data, &mesh, &model, &app);
     }
     Ok(())
 }
@@ -314,5 +289,5 @@ fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>>
 // ============================================================================
 fn main()
 {
-    run(Opts::parse()).unwrap_or_else(|error| println!("{}", error));
+    run(App::parse()).unwrap_or_else(|error| println!("{}", error));
 }

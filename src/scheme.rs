@@ -111,9 +111,14 @@ impl Solver
         1.0 / self.softening_length.sqrt()
     }
 
+    pub fn effective_resolution(&self, mesh: &Mesh) -> f64
+    {
+        f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
+    }
+
     pub fn min_time_step(&self, mesh: &Mesh) -> f64
     {
-        self.cfl * f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y()) / self.maximum_orbital_velocity()
+        self.cfl * self.effective_resolution(mesh) / self.maximum_orbital_velocity()
     }
 
     fn sink_kernel(&self, dx: f64, dy: f64) -> f64
@@ -384,18 +389,24 @@ fn advance_internal_rk(
     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
     time:       f64,
-    dt:         f64)
+    dt:         f64,
+    fold:       usize)
 {
     use std::convert::TryFrom;
 
     let update = |state| advance_internal(state, block_data, solver, mesh, sender, receiver, dt);
-    let s0 = BlockState {
+    let mut state = BlockState {
         time: time,
         iteration: Rational64::new(0, 1),
         conserved: conserved.clone(),
     };
     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
-    *conserved = rk_order.advance(s0, update).conserved;
+
+    for _ in 0..fold
+    {
+        state = rk_order.advance(state, update);
+    }
+    *conserved = state.conserved;
 }
 
 
@@ -415,7 +426,7 @@ fn map_array_3_by_3<F: Fn(&T) -> U, T, U>(a: [[T; 3]; 3], f: F) -> [[U; 3]; 3]
 
 
 // ============================================================================
-pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64)
+pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
 {
     crossbeam::scope(|scope|
     {
@@ -434,27 +445,30 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt));
+            scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
         }
 
-        for _ in 0..solver.rk_order
+        for _ in 0..fold
         {
-            for (block_data, r) in block_data.iter().zip(receivers.iter())
+            for _ in 0..solver.rk_order
             {
-                block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+                for (block_data, r) in block_data.iter().zip(receivers.iter())
+                {
+                    block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+                }
+
+                for (block_data, s) in block_data.iter().zip(senders.iter())
+                {
+                    s.send(map_array_3_by_3(mesh.neighbor_block_indexes(block_data.index), |i| block_primitive
+                        .get(i)
+                        .unwrap()
+                        .clone()))
+                    .unwrap();
+                }
             }
 
-            for (block_data, s) in block_data.iter().zip(senders.iter())
-            {
-                s.send(map_array_3_by_3(mesh.neighbor_block_indexes(block_data.index), |i| block_primitive
-                    .get(i)
-                    .unwrap()
-                    .clone()))
-                .unwrap();
-            }
+            state.iteration += 1;
+            state.time += dt;
         }
-
-        state.iteration += 1;
-        state.time += dt;
     }).unwrap();
 }
