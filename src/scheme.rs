@@ -1,5 +1,6 @@
 use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
+use ndarray_ops::MapArray3by3;
 use hydro_iso2d::*;
 use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::solution_states;
@@ -407,28 +408,6 @@ fn advance_internal_rk(
         state = rk_order.advance(state, update);
     }
     *conserved = state.conserved;
-}
-
-
-
-
-// ============================================================================
-trait MapArray3by3
-{
-    type Elem;
-    fn map<F: Fn(&Self::Elem) -> U, U>(self, f: F) -> [[U; 3]; 3];
-}
-
-impl<T> MapArray3by3 for [[T; 3]; 3]
-{
-    type Elem = T;
-    fn map<F, U>(self, f: F) -> [[U; 3]; 3] where F: Fn(&Self::Elem) -> U {
-        [
-            [f(&self[0][0]), f(&self[0][1]), f(&self[0][2])],
-            [f(&self[1][0]), f(&self[1][1]), f(&self[1][2])],
-            [f(&self[2][0]), f(&self[2][1]), f(&self[2][2])],
-        ]
-    }
 }
 
 
