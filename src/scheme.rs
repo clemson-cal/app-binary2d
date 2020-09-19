@@ -413,13 +413,22 @@ fn advance_internal_rk(
 
 
 // ============================================================================
-fn map_array_3_by_3<F: Fn(&T) -> U, T, U>(a: [[T; 3]; 3], f: F) -> [[U; 3]; 3]
+trait MapArray3by3
 {
-    [
-        [f(&a[0][0]), f(&a[0][1]), f(&a[0][2])],
-        [f(&a[1][0]), f(&a[1][1]), f(&a[1][2])],
-        [f(&a[2][0]), f(&a[2][1]), f(&a[2][2])],
-    ]
+    type Elem;
+    fn map<F: Fn(&Self::Elem) -> U, U>(self, f: F) -> [[U; 3]; 3];
+}
+
+impl<T> MapArray3by3 for [[T; 3]; 3]
+{
+    type Elem = T;
+    fn map<F, U>(self, f: F) -> [[U; 3]; 3] where F: Fn(&Self::Elem) -> U {
+        [
+            [f(&self[0][0]), f(&self[0][1]), f(&self[0][2])],
+            [f(&self[1][0]), f(&self[1][1]), f(&self[1][2])],
+            [f(&self[2][0]), f(&self[2][1]), f(&self[2][2])],
+        ]
+    }
 }
 
 
@@ -459,7 +468,7 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
 
                 for (block_data, s) in block_data.iter().zip(senders.iter())
                 {
-                    s.send(map_array_3_by_3(mesh.neighbor_block_indexes(block_data.index), |i| block_primitive
+                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
                         .get(i)
                         .unwrap()
                         .clone()))
