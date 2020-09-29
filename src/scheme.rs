@@ -7,8 +7,6 @@ use godunov_core::solution_states;
 use godunov_core::runge_kutta;
 
 
-
-
 // ============================================================================
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
 type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
@@ -36,6 +34,7 @@ pub struct State
     pub time: f64,
     pub iteration: Rational64,
     pub conserved: Vec<Array<Conserved, Ix2>>,
+    pub tracers  : Vec<Vec<crate::tracers::Tracer>>,
 }
 
 
@@ -144,6 +143,7 @@ pub struct Mesh
     pub num_blocks: usize,
     pub block_size: usize,
     pub domain_radius: f64,
+    pub ntracers: usize,
 }
 
 impl Mesh

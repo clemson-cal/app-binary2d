@@ -21,6 +21,7 @@ use hydro_iso2d::*;
 
 mod io;
 mod scheme;
+mod tracers;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
@@ -165,12 +166,20 @@ fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Cons
         .mapv(Primitive::to_conserved)
 }
 
+fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize) -> Vec<tracers::Tracer>
+{
+    let init = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.domain_radius, n);
+    return (0..ntracers).map(init).collect();
+}
+
 fn initial_state(mesh: &scheme::Mesh) -> State
 {
+    let tracers_per_block = mesh.ntracers / mesh.num_blocks;
     State{
         time: 0.0,
         iteration: Rational64::new(0, 1),
-        conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect()
+        conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect(),
+        tracers  : mesh.block_indexes().iter().map(|&i| initial_tracers(i, mesh, tracers_per_block)).collect(),
     } 
 }
 
@@ -221,6 +230,7 @@ fn create_mesh(model: &kind_config::Form) -> scheme::Mesh
         num_blocks: i64::from(model.get("num_blocks")) as usize,
         block_size: i64::from(model.get("block_size")) as usize,
         domain_radius: model.get("domain_radius").into(),
+        ntracers  : i64::from(model.get("num_tracers")) as usize,
     }
 }
 
@@ -237,6 +247,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
 {
     let model = kind_config::Form::new()
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
+        .item("num_tracers"     , 0      , "Total number of tracers")
         .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region")

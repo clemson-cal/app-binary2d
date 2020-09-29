@@ -39,11 +39,13 @@ pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
 
     let time      = file.dataset("time")     ?.read_scalar::<f64>()?;
     let iteration = file.dataset("iteration")?.read_scalar::<usize>()?;
+    let tracers : Vec<Vec<crate::tracers::Tracer>> = Vec::new();
 
     let result = crate::State{
         conserved: conserved,
         time: time,
         iteration: (iteration as i64).into(),
+        tracers: tracers,
     };
     Ok(result)
 }
