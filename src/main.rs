@@ -103,9 +103,12 @@ impl App
 pub struct Tasks
 {
     pub checkpoint_next_time: f64,
-    pub checkpoint_count: usize,
-    pub call_count_this_run: usize,
+    pub checkpoint_count    : usize,
+    pub call_count_this_run : usize,
     pub tasks_last_performed: Instant,
+    //
+    pub tracershot_next_time: f64,
+    pub tracershot_count    : usize,
 }
 
 impl Tasks
@@ -125,6 +128,21 @@ impl Tasks
         io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
     }
 
+    fn write_tracer_snapshot(&mut self, state: &State, model: &kind_config::Form, app: &App)
+    {
+        let tracer_out_interval: f64 = model.get("toi").into();
+        let outdir = app.output_directory();
+        let fname  = format!("{}/chkpt.{:04}.h5", outdir, self.tracershot_count);
+
+        std::fs::create_dir_all(outdir).unwrap();
+
+        self.tracershot_count     += 1;
+        self.tracershot_next_time += tracer_out_interval;
+
+        let ntracers = i64::from(model.get("num_tracers")) as usize;
+        io::write_tracer_snapshot(&fname, &state, ntracers).expect("HDF5 tracer snapshot failed");
+    }
+
     fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
@@ -140,6 +158,11 @@ impl Tasks
         {
             self.write_checkpoint(state, block_data, model, app);
         }
+        if state.time / ORBITAL_PERIOD >= self.tracershot_next_time
+        {
+            self.write_tracer_snapshot(state, model, app);
+        }
+
         self.call_count_this_run += 1;
     }
 }
@@ -191,6 +214,9 @@ fn initial_tasks() -> Tasks
         checkpoint_count: 0,
         call_count_this_run: 0,
         tasks_last_performed: Instant::now(),
+        //
+        tracershot_next_time: 0.0,
+        tracershot_count: 0,
     }
 }
 
@@ -260,6 +286,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("cfl"             , 0.4    , "CFL parameter")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
+        .item("toi"             , 1.0    , "Tracer output interval [Orbits]")
         .item("domain_radius"   , 24.0   , "Half-size of the domain")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")

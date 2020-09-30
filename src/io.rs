@@ -71,6 +71,11 @@ pub fn read_tasks(filename: &str) -> Result<crate::Tasks, hdf5::Error>
         checkpoint_count:     group.dataset("checkpoint_count")    ?.read_scalar::<usize>()?,
         call_count_this_run: 0,
         tasks_last_performed: Instant::now(),
+        //
+        // Needs update
+        //
+        tracershot_count: 0,
+        tracershot_next_time: 0.0,
     };
     Ok(result)
 }
@@ -95,6 +100,24 @@ pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value
 
 
 
+// ===========================================================================
+fn write_tracers(file: &hdf5::Group, state: &crate::State, ntracers: usize) -> Result<(), hdf5::Error>
+{
+    let tracers = &state.tracers;
+
+    file.new_dataset::<f64>().create("t", ())?.write_scalar(&state.time)?;
+    let tracer_data = file.new_dataset::<crate::tracers::Tracer>().create("tracers", ntracers)?;
+
+    for block_tracers in tracers
+    {
+        tracer_data.write(&block_tracers)?;
+    }
+    Ok(())
+}
+
+
+
+
 // ============================================================================
 pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<crate::BlockData>, model: &HashMap::<String, kind_config::Value>, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
 {
@@ -106,5 +129,12 @@ pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<c
     write_tasks(&tasks_group, &tasks)?;
     write_model(&model_group, &model)?;
 
+    Ok(())
+}
+
+pub fn write_tracer_snapshot(filename: &str, state: &crate::State, ntracers: usize) -> Result<(), hdf5::Error>
+{
+    let file = File::create(filename)?;
+    write_tracers(&file, &state, ntracers)?;
     Ok(())
 }

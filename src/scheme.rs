@@ -10,6 +10,7 @@ use godunov_core::runge_kutta;
 // ============================================================================
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
 type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
+type TracerList = Vec<Vec<crate::tracers::Tracer>>;
 pub type BlockIndex = (usize, usize);
 
 
@@ -34,7 +35,7 @@ pub struct State
     pub time: f64,
     pub iteration: Rational64,
     pub conserved: Vec<Array<Conserved, Ix2>>,
-    pub tracers  : Vec<Vec<crate::tracers::Tracer>>,
+    pub tracers  : TracerList,
 }
 
 
