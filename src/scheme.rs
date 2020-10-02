@@ -6,10 +6,11 @@ use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::solution_states;
 use godunov_core::runge_kutta;
 
+use std::ops::{Add, Mul};
 
 // ============================================================================
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
+type SolutionState = solution_states::SolutionStateArray<Conserved, Ix2>;
 type TracerList = Vec<Vec<crate::tracers::Tracer>>;
 pub type BlockIndex = (usize, usize);
 
@@ -37,6 +38,44 @@ pub struct State
     pub conserved: Vec<Array<Conserved, Ix2>>,
     pub tracers  : TracerList,
 }
+
+
+
+
+// ============================================================================
+#[derive(Clone)]
+pub struct BlockState
+{
+    pub solution: SolutionState,
+    pub tracers : Vec<crate::tracers::Tracer>,
+}
+
+impl Add for BlockState
+{
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self
+    {
+        Self{
+            solution: self.solution + other.solution,
+            tracers : self.tracers.into_iter().zip(other.tracers.into_iter()).map(|(a, b)| a + b).collect(),
+        }
+    }
+}
+
+impl Mul<Rational64> for BlockState
+{
+    type Output = Self;
+
+    fn mul(self, b: Rational64) -> Self
+    {
+        Self{
+            solution: self.solution * b,
+            tracers : self.tracers.into_iter().map(|t| t * b).collect(),
+        }
+    }
+}
+//TRACERS : need to implement clone, +, and *
 
 
 
@@ -290,9 +329,9 @@ impl<'a> CellData<'_>
 
 
 
-
 // ============================================================================
 fn advance_internal(
+    //TRACERS : BlockState is now struct that holds old BlockState as SolutionState and vec of tracers
     state:      BlockState,
     block_data: &crate::BlockData,
     solver:     &Solver,
@@ -310,7 +349,8 @@ fn advance_internal(
     // ============================================================================
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
+    let solution = state.solution;
+    let two_body_state = solver.orbital_elements.orbital_state_from_time(solution.time);
 
     // ============================================================================
     let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
@@ -327,11 +367,11 @@ fn advance_internal(
     let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
     // ============================================================================
-    sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
+    sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
 
     // ============================================================================
     let sources = azip![
-        &state.conserved,
+        &solution.conserved,
         &block_data.initial_conserved,
         &block_data.cell_centers]
     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
@@ -372,10 +412,16 @@ fn advance_internal(
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
     // ============================================================================
+    let solution = SolutionState{
+        time: solution.time + dt,
+        iteration: solution.iteration + 1,
+        conserved: solution.conserved + du + sources,
+    };
+
+    // ============================================================================
     BlockState{
-        time: state.time + dt,
-        iteration: state.iteration + 1,
-        conserved: state.conserved + du + sources,
+        solution: solution,
+        tracers : state.tracers,
     }
 }
 
@@ -385,6 +431,7 @@ fn advance_internal(
 // ============================================================================
 fn advance_internal_rk(
     conserved:  &mut Array<Conserved, Ix2>,
+    tracers:    &Vec<crate::tracers::Tracer>,
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
@@ -397,18 +444,25 @@ fn advance_internal_rk(
     use std::convert::TryFrom;
 
     let update = |state| advance_internal(state, block_data, solver, mesh, sender, receiver, dt);
-    let mut state = BlockState {
+
+    let solution = SolutionState {
         time: time,
         iteration: Rational64::new(0, 1),
         conserved: conserved.clone(),
     };
+
+    let mut state = BlockState {
+        solution: solution,
+        tracers : tracers.to_vec(),
+    };
+
     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
 
     for _ in 0..fold
     {
         state = rk_order.advance(state, update);
     }
-    *conserved = state.conserved;
+    *conserved = state.solution.conserved;
 }
 
 
@@ -426,7 +480,7 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         let mut senders         = Vec::new();
         let mut block_primitive = HashMap::new();
 
-        for (u, b) in state.conserved.iter_mut().zip(block_data)
+        for (i, u) in state.conserved.iter_mut().enumerate()
         {
             let (their_s, my_r) = crossbeam::channel::unbounded();
             let (my_s, their_r) = crossbeam::channel::unbounded();
@@ -434,7 +488,9 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+            let b = &block_data[i];
+            let t = &state.tracers[i];
+            scope.spawn(move |_| advance_internal_rk(u, t, b, solver, mesh, &their_s, &their_r, time, dt, fold));
         }
 
         for _ in 0..fold

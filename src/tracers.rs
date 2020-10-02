@@ -1,4 +1,7 @@
 use rand::Rng;
+use std::ops::{Add, Mul};
+use num::rational::Rational64;
+use num::ToPrimitive;
 //use crate::Direction;
 
 
@@ -6,12 +9,43 @@ use rand::Rng;
 
 // ============================================================================
 #[repr(C)]
-#[derive(hdf5::H5Type)]
+#[derive(hdf5::H5Type, Clone)]
 pub struct Tracer
 {
     pub id: usize,
     pub x : f64,
     pub y : f64,
+}
+
+
+
+// ============================================================================
+impl Add for Tracer
+{
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self
+    {
+        Self{
+            id: self.id,
+            x : self.x + other.x,
+            y : self.y + other.y,
+        }
+    }
+}
+
+impl Mul<Rational64> for Tracer
+{
+    type Output = Self;
+
+    fn mul(self, b: Rational64) -> Self
+    {
+        Self{
+            id: self.id,
+            x : self.x * b.to_f64().unwrap(),
+            y : self.y * b.to_f64().unwrap(),
+        }
+    }
 }
 
 
