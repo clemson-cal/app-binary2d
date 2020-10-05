@@ -42,7 +42,7 @@ pub struct State
 
 
 
-// ============================================================================
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #[derive(Clone)]
 pub struct BlockState
 {
@@ -75,7 +75,7 @@ impl Mul<Rational64> for BlockState
         }
     }
 }
-//TRACERS : need to implement clone, +, and *
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
 
@@ -274,6 +274,41 @@ impl Mesh
             [m(i + b + 1, j + b - 1), m(i + b + 1, j + b + 0), m(i + b + 1, j + b + 1)],
         ]
     }
+
+    //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    pub fn get_cell_index(&self, index: BlockIndex, x: f64, y: f64) -> (usize, usize)
+    {
+        let (x0, y0) = self.block_start(index);
+        let length   = self.block_length();
+        let float_i  = (x - x0) / length;
+        let float_j  = (y - y0) / length;
+
+        let n = self.block_size as f64;
+        let i = (float_i * n) as usize;
+        let j = (float_j * n) as usize;
+
+        if x > x0 + length
+        {
+            println!("Beyond x-boudnary!: {}", i);
+        }
+        if y > y0 + length
+        {
+            println!("Beyond y-boudnary!: {}", j);
+        }
+        return (i, j);
+    }
+
+    pub fn face_center(&self, index: BlockIndex, i: usize, j: usize, direction: Direction) -> (f64, f64)
+    {
+        let (x0, y0) = self.block_start(index);
+        let dx = self.cell_spacing_x();
+        let dy = self.cell_spacing_y();
+
+        match direction {
+            Direction::X => (x0 + (i as f64) * dx, y0 + (j as f64 + 0.5) * dy),
+            Direction::Y => (x0 + (i as f64 + 0.5) * dx, y0 + (j as f64) * dy),
+        }
+    }
 }
 
 
@@ -347,9 +382,10 @@ fn advance_internal(
     use Direction::{X, Y};
 
     // ============================================================================
+    let solution = state.solution;
+    let tracers  = state.tracers;
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
-    let solution = state.solution;
     let two_body_state = solver.orbital_elements.orbital_state_from_time(solution.time);
 
     // ============================================================================
@@ -403,6 +439,45 @@ fn advance_internal(
         yf]
     .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
 
+    
+
+
+    //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    let star_state = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
+    {
+        let cs2 = solver.sound_speed_squared(f, &two_body_state);
+        let pl = *l.pc + *l.gradient_field(axis) * 0.5;
+        let pr = *r.pc - *r.gradient_field(axis) * 0.5;
+        hlle_state(pl, pr, axis, cs2)
+    };
+
+    let ustar_x = azip![
+        cell_data.slice(s![..-1,1..-1]),
+        cell_data.slice(s![ 1..,1..-1]),
+        xf]
+    .apply_collect(|l, r, f| star_state(l, r, f, X));
+
+    let ustar_y = azip![
+        cell_data.slice(s![1..-1,..-1]),
+        cell_data.slice(s![1..-1, 1..]),
+        yf]
+    .apply_collect(|l, r, f| star_state(l, r, f, Y));
+    
+    let vstar_x = ustar_x.mapv(|u| u.density() / u.momentum_x()); 
+    let vstar_y = ustar_y.mapv(|u| u.density() / u.momentum_y());
+    let next_tracers = tracers.into_iter()
+                              .map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt))
+                              .collect();
+
+    // TRACERS : Add sending of tracers between blocks 
+    //              -> send away tracers that have left this block
+    //              -> collect tracers that have moved into this block
+    //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+
     // ============================================================================
     let du = azip![
         fx.slice(s![..-1,..]),
@@ -412,17 +487,17 @@ fn advance_internal(
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
     // ============================================================================
-    let solution = SolutionState{
+    let next_solution = SolutionState{
         time: solution.time + dt,
         iteration: solution.iteration + 1,
         conserved: solution.conserved + du + sources,
     };
 
     // ============================================================================
-    BlockState{
-        solution: solution,
-        tracers : state.tracers,
-    }
+    return BlockState{
+        solution: next_solution,
+        tracers : next_tracers,
+    };
 }
 
 
@@ -516,4 +591,23 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             state.time += dt;
         }
     }).unwrap();
+}
+
+
+
+
+// ============================================================================
+pub fn hlle_state(pl: Primitive, pr: Primitive, direction: Direction, sound_speed_squared: f64) -> Conserved
+{
+    let ul = pl.to_conserved();
+    let ur = pr.to_conserved();
+    let fl = pl.flux_vector(direction, sound_speed_squared);
+    let fr = pr.flux_vector(direction, sound_speed_squared);
+
+    let (alm, alp) = pl.outer_wavespeeds(direction, sound_speed_squared);
+    let (arm, arp) = pr.outer_wavespeeds(direction, sound_speed_squared);
+    let ap = alp.max(arp).max(0.0);
+    let am = alm.min(arm).min(0.0);
+
+    (ur * ap - ul * am + fl - fr) / (ap - am)
 }

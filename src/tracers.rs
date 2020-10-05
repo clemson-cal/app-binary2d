@@ -1,8 +1,9 @@
 use rand::Rng;
 use std::ops::{Add, Mul};
+use ndarray::{Array, Ix2};
 use num::rational::Rational64;
 use num::ToPrimitive;
-//use crate::Direction;
+use crate::Direction;
 
 
 
@@ -67,19 +68,23 @@ impl Tracer
         return Tracer{x: rand_x, y: rand_y, id: id};
     }
 
-    // pub fn update(&self, grid: &crate::Grid, vfields: &crate::Velocities, dt: f64) -> Tracer
-    // {
-    //     let (ix, iy) = grid.get_cell_index(self.x, self.y);
-    //     let dx = (grid.x1 - grid.x0) / grid.nx as f64;
-    //     let dy = (grid.y1 - grid.y0) / grid.ny as f64;
-    //     let wx = (self.x - grid.face_center(ix + 1, iy, Direction::X).0) / dx; 
-    //     let wy = (self.y - grid.face_center(ix, iy + 1, Direction::Y).1) / dy; 
-    //     let vx = (1.0 - wx) * vfields.face_vx[[ix, iy]] + wx * vfields.face_vx[[ix + 1, iy]];
-    //     let vy = (1.0 - wy) * vfields.face_vy[[ix, iy]] + wy * vfields.face_vy[[ix, iy + 1]];
-    //     return Tracer{x : self.x + vx * dt,
-    //                   y : self.y + vy * dt,
-    //                   id: self.id};
-    // }
+
+    pub fn update(&self, mesh: &crate::scheme::Mesh, index: crate::BlockIndex, vfield_x: &Array<f64, Ix2>, vfield_y: &Array<f64, Ix2>, dt: f64) -> Tracer
+    {
+        let (ix, iy) = mesh.get_cell_index(index, self.x, self.y);
+        let dx = mesh.cell_spacing_x();
+        let dy = mesh.cell_spacing_y();
+        let wx = (self.x - mesh.face_center(index, ix + 1, ix, Direction::X).0) / dx;
+        let wy = (self.y - mesh.face_center(index, ix, iy + 1, Direction::Y).1) / dy;
+        let vx = (1.0 - wx) * vfield_x[[ix, iy]] + wx * vfield_x[[ix + 1, iy]];
+        let vy = (1.0 - wy) * vfield_y[[ix, iy]] + wy * vfield_y[[ix, iy + 1]];
+
+        return Tracer{
+            x : self.x + vx * dt,
+            y : self.y + vy * dt,
+            id: self.id,
+        };
+    }
 }
 
 

@@ -191,7 +191,7 @@ fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Cons
 
 fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize) -> Vec<tracers::Tracer>
 {
-    let get_id = |i| linear_index(block_index, mesh) * ntracers + i;
+    let get_id = |i| linear_index(block_index, mesh.num_blocks) * ntracers + i;
     let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.domain_radius, get_id(n));
     return (0..ntracers).map(init).collect();
 }
@@ -220,9 +220,9 @@ fn initial_tasks() -> Tasks
     }
 }
 
-fn linear_index(block_index: BlockIndex, mesh: &scheme::Mesh) -> usize
+fn linear_index(block_index: BlockIndex, num_blocks: usize) -> usize
 {
-    return block_index.0 * mesh.num_blocks + block_index.1;
+    return block_index.0 * num_blocks + block_index.1;
 }
 
 fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
