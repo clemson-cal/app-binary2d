@@ -275,7 +275,7 @@ impl Mesh
         ]
     }
 
-    //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     pub fn get_cell_index(&self, index: BlockIndex, x: f64, y: f64) -> (usize, usize)
     {
         let (x0, y0) = self.block_start(index);
@@ -309,6 +309,7 @@ impl Mesh
             Direction::Y => (x0 + (i as f64 + 0.5) * dx, y0 + (j as f64) * dy),
         }
     }
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 }
 
 
@@ -463,8 +464,8 @@ fn advance_internal(
         yf]
     .apply_collect(|l, r, f| star_state(l, r, f, Y));
     
-    let vstar_x = ustar_x.mapv(|u| u.density() / u.momentum_x()); 
-    let vstar_y = ustar_y.mapv(|u| u.density() / u.momentum_y());
+    let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
+    let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
     let next_tracers = tracers.into_iter()
                               .map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt))
                               .collect();
