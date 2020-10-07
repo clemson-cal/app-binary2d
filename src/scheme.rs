@@ -507,7 +507,7 @@ fn advance_internal(
 // ============================================================================
 fn advance_internal_rk(
     conserved:  &mut Array<Conserved, Ix2>,
-    tracers:    &Vec<crate::tracers::Tracer>,
+    tracers:    &mut Vec<crate::tracers::Tracer>,
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
@@ -539,6 +539,7 @@ fn advance_internal_rk(
         state = rk_order.advance(state, update);
     }
     *conserved = state.solution.conserved;
+    *tracers   = state.tracers
 }
 
 
@@ -556,7 +557,7 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         let mut senders         = Vec::new();
         let mut block_primitive = HashMap::new();
 
-        for (i, u) in state.conserved.iter_mut().enumerate()
+        for (i, (u, t)) in state.conserved.iter_mut().zip(state.tracers.iter_mut()).enumerate()
         {
             let (their_s, my_r) = crossbeam::channel::unbounded();
             let (my_s, their_r) = crossbeam::channel::unbounded();
@@ -565,7 +566,6 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             receivers.push(my_r);
 
             let b = &block_data[i];
-            let t = &state.tracers[i];
             scope.spawn(move |_| advance_internal_rk(u, t, b, solver, mesh, &their_s, &their_r, time, dt, fold));
         }
 

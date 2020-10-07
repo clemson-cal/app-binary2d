@@ -1,3 +1,5 @@
 target
+data
 ndarray-ops/Cargo.lock
 *.h5
+*.py
