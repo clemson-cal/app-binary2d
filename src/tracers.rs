@@ -60,11 +60,11 @@ impl Tracer
         return Tracer{x: 0.0, y: 0.0, id: 0};
     }
 
-    pub fn randomize(start: (f64, f64), radius: f64, id: usize) -> Tracer
+    pub fn randomize(start: (f64, f64), length: f64, id: usize) -> Tracer
     {
         let mut rng = rand::thread_rng();
-        let rand_x = rng.gen_range(-radius, radius) + start.0;
-        let rand_y = rng.gen_range(-radius, radius) + start.1;
+        let rand_x = rng.gen_range(0.0, length) + start.0;
+        let rand_y = rng.gen_range(0.0, length) + start.1;
         return Tracer{x: rand_x, y: rand_y, id: id};
     }
 

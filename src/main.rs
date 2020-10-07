@@ -132,13 +132,14 @@ impl Tasks
     {
         let tracer_out_interval: f64 = model.get("toi").into();
         let outdir = app.output_directory();
-        let fname  = format!("{}/chkpt.{:04}.h5", outdir, self.tracershot_count);
+        let fname  = format!("{}/tracers.{:04}.h5", outdir, self.tracershot_count);
 
         std::fs::create_dir_all(outdir).unwrap();
 
         self.tracershot_count     += 1;
         self.tracershot_next_time += tracer_out_interval;
 
+        println!("   write tracers {}", fname);
         let ntracers = i64::from(model.get("num_tracers")) as usize;
         io::write_tracer_snapshot(&fname, &state, ntracers).expect("HDF5 tracer snapshot failed");
     }
@@ -192,7 +193,7 @@ fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Cons
 fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize) -> Vec<tracers::Tracer>
 {
     let get_id = |i| linear_index(block_index, mesh.num_blocks) * ntracers + i;
-    let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.domain_radius, get_id(n));
+    let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.block_length(), get_id(n));
     return (0..ntracers).map(init).collect();
 }
 

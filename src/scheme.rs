@@ -406,7 +406,7 @@ fn advance_internal(
     // ============================================================================
     sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
 
-    // ============================================================================
+
     let sources = azip![
         &solution.conserved,
         &block_data.initial_conserved,
