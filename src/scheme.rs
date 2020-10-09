@@ -6,12 +6,17 @@ use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::solution_states;
 use godunov_core::runge_kutta;
 
+use crate::tracers::Tracer;
 use std::ops::{Add, Mul};
+use std::sync::Arc;
 
 // ============================================================================
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
+pub type NeighborTracerVecs = [[Arc<Vec<Tracer>>; 3]; 3];
+// type NeighborBlockData      = [[(ArcArray<Primitive, Ix2>, Arc<Vec<Tracer>>); 3]; 3]
+
 type SolutionState = solution_states::SolutionStateArray<Conserved, Ix2>;
-type TracerList = Vec<Vec<crate::tracers::Tracer>>;
+type TracerList = Vec<Vec<Tracer>>;
 pub type BlockIndex = (usize, usize);
 
 
@@ -47,7 +52,7 @@ pub struct State
 pub struct BlockState
 {
     pub solution: SolutionState,
-    pub tracers : Vec<crate::tracers::Tracer>,
+    pub tracers : Vec<Tracer>,
 }
 
 impl Add for BlockState
@@ -372,8 +377,8 @@ fn advance_internal(
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    sender:     &crossbeam::Sender<(Array<Primitive, Ix2>, Vec<Tracer>)>,
+    receiver:   &crossbeam::Receiver<(NeighborPrimitiveBlock, NeighborTracerVecs)>,
     dt:         f64) -> BlockState
 {
     // ============================================================================
@@ -401,11 +406,18 @@ fn advance_internal(
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
     };
 
-    let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    let (my_tracers, their_tracers) = filter_block_tracers(tracers, &mesh, block_data.index);
+
+    // Each block sends its prims and the tracers it is NO LONGER responsible for
+    // ============================================================================
+    sender.send((solution.conserved.mapv(Conserved::to_primitive), their_tracers)).unwrap();
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
 
     // ============================================================================
-    sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
-
+    let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
     let sources = azip![
         &solution.conserved,
@@ -413,7 +425,12 @@ fn advance_internal(
         &block_data.cell_centers]
     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
-    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
+
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    let (neigh_blocks, neigh_tracers) = receiver.recv().unwrap();
+    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&neigh_blocks, 2, 2, 2, 2);
     let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let xf = &block_data.face_centers_x;
@@ -466,13 +483,11 @@ fn advance_internal(
     
     let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
-    let next_tracers = tracers.into_iter()
-                              .map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt))
-                              .collect();
 
-    // TRACERS : Add sending of tracers between blocks 
-    //              -> send away tracers that have left this block
-    //              -> collect tracers that have moved into this block
+    let my_full_tracers = push_new_tracers(my_tracers, neigh_tracers, &mesh, block_data.index);
+    let next_tracers    = my_full_tracers.into_iter()
+                                         .map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt))
+                                         .collect();
     //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
@@ -507,12 +522,12 @@ fn advance_internal(
 // ============================================================================
 fn advance_internal_rk(
     conserved:  &mut Array<Conserved, Ix2>,
-    tracers:    &mut Vec<crate::tracers::Tracer>,
+    tracers:    &mut Vec<Tracer>,
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    sender:     &crossbeam::Sender<(Array<Primitive, Ix2>, Vec<Tracer>)>,
+    receiver:   &crossbeam::Receiver<(NeighborPrimitiveBlock, NeighborTracerVecs)>,
     time:       f64,
     dt:         f64,
     fold:       usize)
@@ -555,7 +570,7 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         let time = state.time;
         let mut receivers       = Vec::new();
         let mut senders         = Vec::new();
-        let mut block_primitive = HashMap::new();
+        let mut block_state_map: HashMap<BlockIndex, (ArcArray<Primitive, Ix2>, Arc<Vec<Tracer>>)> = HashMap::new();
 
         for (i, (u, t)) in state.conserved.iter_mut().zip(state.tracers.iter_mut()).enumerate()
         {
@@ -575,16 +590,29 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             {
                 for (block_data, r) in block_data.iter().zip(receivers.iter())
                 {
-                    block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                    let (b, t) = r.recv().unwrap();
+                    block_state_map.insert(block_data.index, (b.to_shared(), Arc::new(t)));
+                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+                    // block_state_map.insert(block_data.index, r.recv().unwrap().to_shared());
                 }
 
                 for (block_data, s) in block_data.iter().zip(senders.iter())
                 {
-                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
-                        .get(i)
-                        .unwrap()
-                        .clone()))
-                    .unwrap();
+                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                    let neighbors = (mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().0),
+                                     mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().1));
+                    s.send(neighbors).unwrap();
+                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+                    // s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map
+                    //     .get(i)
+                    //     .unwrap()
+                    //     .clone()))
+                    // .unwrap();
                 }
             }
 
@@ -611,4 +639,57 @@ pub fn hlle_state(pl: Primitive, pr: Primitive, direction: Direction, sound_spee
     let am = alm.min(arm).min(0.0);
 
     (ur * ap - ul * am + fl - fr) / (ap - am)
+}
+
+
+
+
+// ============================================================================
+pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracerVecs, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
+{
+    let d = mesh.block_length();
+    let (x0, y0) = mesh.block_start(index);
+    let mut tracers = Vec::new();
+
+    for (i, block_tracers) in neigh_tracers.iter().flat_map(|r| r.iter()).enumerate()
+    {
+        // algorithmically unneccesary?
+        if i == 5 // This is my block 
+        {
+            continue;
+        }
+
+        for t in block_tracers.iter()
+        {
+            if (t.x < x0) & (t.x > x0 + d) & (t.y < y0) & (t.y > y0 + d) 
+            {
+                tracers.push(t.clone());
+            }
+        }
+    }
+
+    tracers.extend(init_tracers); //this consumes 'init_tracers'
+    return tracers;
+}
+
+pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
+{
+    let d = mesh.block_length();
+    let (x0, y0) = mesh.block_start(index);
+    let mut mine = Vec::new();    
+    let mut duds = Vec::new();    
+
+    for t in tracers.into_iter()
+    {
+        if (t.x < x0) | (t.x > x0 + d) | (t.y < y0) | (t.y > y0 + d)
+        {
+            duds.push(t);
+        }
+        else
+        {
+            mine.push(t);
+        }
+    }
+
+    return (mine, duds);
 }
