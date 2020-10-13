@@ -101,17 +101,22 @@ pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value
 
 
 // ===========================================================================
-fn write_tracers(file: &hdf5::Group, state: &crate::State, ntracers: usize) -> Result<(), hdf5::Error>
+fn write_tracers(file: &hdf5::Group, state: &crate::State, block_data: &Vec<crate::BlockData>) -> Result<(), hdf5::Error>
 {
-    let tracers = &state.tracers;
+    // let tracers = &state.tracers;
+    // let ntr: usize = tracers.into_iter().map(|vec| vec.len()).sum();
+    // println!(" [{}]", ntr);
 
-    file.new_dataset::<f64>().create("t", ())?.write_scalar(&state.time)?;
-    let tracer_data = file.new_dataset::<crate::tracers::Tracer>().create("tracers", ntracers)?;
+    let tracer_data = file.create_group("tracers")?;
 
-    for block_tracers in tracers
+    for (b, t) in block_data.iter().zip(&state.tracers)
     {
-        tracer_data.write(&block_tracers)?;
+        let gname = format!("0:{:03}-{:03}", b.index.0, b.index.1);
+        tracer_data.new_dataset::<crate::tracers::Tracer>().create(&gname, t.len())?.write(t)?;
     }
+    file.new_dataset::<i64>().create("iteration", ())?.write_scalar(&state.iteration.to_integer())?;
+    file.new_dataset::<f64>().create("t",         ())?.write_scalar(&state.time)?;
+    
     Ok(())
 }
 
@@ -132,9 +137,9 @@ pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<c
     Ok(())
 }
 
-pub fn write_tracer_snapshot(filename: &str, state: &crate::State, ntracers: usize) -> Result<(), hdf5::Error>
+pub fn write_tracer_snapshot(filename: &str, state: &crate::State, block_data: &Vec<crate::BlockData>) -> Result<(), hdf5::Error>
 {
     let file = File::create(filename)?;
-    write_tracers(&file, &state, ntracers)?;
+    write_tracers(&file, &state, block_data)?;
     Ok(())
 }

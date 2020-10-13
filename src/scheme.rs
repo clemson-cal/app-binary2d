@@ -9,6 +9,8 @@ use godunov_core::runge_kutta;
 use crate::tracers::Tracer;
 use std::ops::{Add, Mul};
 use std::sync::Arc;
+use rand::Rng;
+
 
 // ============================================================================
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
@@ -16,7 +18,6 @@ pub type NeighborTracerVecs = [[Arc<Vec<Tracer>>; 3]; 3];
 // type NeighborBlockData      = [[(ArcArray<Primitive, Ix2>, Arc<Vec<Tracer>>); 3]; 3]
 
 type SolutionState = solution_states::SolutionStateArray<Conserved, Ix2>;
-type TracerList = Vec<Vec<Tracer>>;
 pub type BlockIndex = (usize, usize);
 
 
@@ -41,7 +42,7 @@ pub struct State
     pub time: f64,
     pub iteration: Rational64,
     pub conserved: Vec<Array<Conserved, Ix2>>,
-    pub tracers  : TracerList,
+    pub tracers  : Vec<Vec<Tracer>>,
 }
 
 
@@ -188,7 +189,7 @@ pub struct Mesh
     pub num_blocks: usize,
     pub block_size: usize,
     pub domain_radius: f64,
-    pub ntracers: usize,
+    pub tracers_per_block: usize,
 }
 
 impl Mesh
@@ -409,7 +410,7 @@ fn advance_internal(
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // let apply_boundaries = |t| crate::tracers::apply_boundary_conditions(&t, mesh.domain_radius);
-    let (my_tracers, their_tracers, _left_domain) = filter_block_tracers(tracers, &mesh, block_data.index);
+    let (my_tracers, their_tracers) = filter_block_tracers(tracers, &mesh, block_data.index);
 
     // Each block sends its prims and the tracers it is NO LONGER responsible for
     // ============================================================================
@@ -513,7 +514,7 @@ fn advance_internal(
     // ============================================================================
     return BlockState{
         solution: next_solution,
-        tracers : next_tracers,
+        tracers : apply_tracer_target(next_tracers, &mesh, block_data.index),
     };
 }
 
@@ -673,22 +674,23 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
     return tracers;
 }
 
-pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>, Vec<Tracer>)
+pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
 {
-    let d = mesh.domain_radius;
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
     let mut mine = Vec::new();    
     let mut duds = Vec::new();    
-    let mut left = Vec::new();
+    
+    // let d = mesh.domain_radius;
+    // let mut left = Vec::new();
 
     for t in tracers.into_iter()
     {
-        if (t.x < -d) | (t.x >= d) | (t.y < -d) | (t.y >= d) // if left domain
-        {
-            left.push(t)
-        }   
-        else if (t.x < x0) | (t.x >= x0 + r) | (t.y < y0) | (t.y >= y0 + r) // if left my block
+        // if (t.x < -d) | (t.x >= d) | (t.y < -d) | (t.y >= d) // if left domain
+        // {
+        //     left.push(t)
+        // }   
+        if (t.x < x0) | (t.x >= x0 + r) | (t.y < y0) | (t.y >= y0 + r) // if left my block
         {
             duds.push(t);
         }
@@ -699,6 +701,25 @@ pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex
     }
 
 
-    return (mine, duds, left);
+    return (mine, duds);
 }
 
+pub fn apply_tracer_target(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
+{
+    let tracer_deficit = mesh.tracers_per_block - tracers.len();
+    let mut rng = rand::thread_rng();
+    let id0 = mesh.tracers_per_block * mesh.num_blocks * mesh.num_blocks;
+    let init = |_| Tracer::randomize(mesh.block_start(index), mesh.block_length(), rng.gen::<usize>() + id0);
+
+    if tracer_deficit > 0
+    {
+        let mut new = (0..tracer_deficit).map(init).collect::<Vec<Tracer>>();
+        new.extend(tracers);
+        return new;
+    }
+    return tracers;
+}
+
+
+
+//

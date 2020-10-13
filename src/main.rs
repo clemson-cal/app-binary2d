@@ -128,7 +128,7 @@ impl Tasks
         io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
     }
 
-    fn write_tracer_snapshot(&mut self, state: &State, model: &kind_config::Form, app: &App)
+    fn write_tracer_snapshot(&mut self, state: &State, block_data: &Vec<crate::BlockData>, model: &kind_config::Form, app: &App)
     {
         let tracer_out_interval: f64 = model.get("toi").into();
         let outdir = app.output_directory();
@@ -140,8 +140,7 @@ impl Tasks
         self.tracershot_next_time += tracer_out_interval;
 
         println!("   write tracers {}", fname);
-        let ntracers = i64::from(model.get("num_tracers")) as usize;
-        io::write_tracer_snapshot(&fname, &state, ntracers).expect("HDF5 tracer snapshot failed");
+        io::write_tracer_snapshot(&fname, &state, &block_data).expect("HDF5 tracer snapshot failed");
     }
 
     fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
@@ -161,7 +160,7 @@ impl Tasks
         }
         if state.time / ORBITAL_PERIOD >= self.tracershot_next_time
         {
-            self.write_tracer_snapshot(state, model, app);
+            self.write_tracer_snapshot(state, block_data, model, app);
         }
 
         self.call_count_this_run += 1;
@@ -199,12 +198,11 @@ fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize
 
 fn initial_state(mesh: &scheme::Mesh) -> State
 {
-    let tracers_per_block = mesh.ntracers / mesh.num_blocks;
     State{
         time: 0.0,
         iteration: Rational64::new(0, 1),
         conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect(),
-        tracers  : mesh.block_indexes().iter().map(|&i| initial_tracers(i, mesh, tracers_per_block)).collect(),
+        tracers  : mesh.block_indexes().iter().map(|&i| initial_tracers(i, mesh, mesh.tracers_per_block)).collect(),
     } 
 }
 
@@ -263,7 +261,7 @@ fn create_mesh(model: &kind_config::Form) -> scheme::Mesh
         num_blocks: i64::from(model.get("num_blocks")) as usize,
         block_size: i64::from(model.get("block_size")) as usize,
         domain_radius: model.get("domain_radius").into(),
-        ntracers  : i64::from(model.get("num_tracers")) as usize,
+        tracers_per_block : i64::from(model.get("num_tracers")) as usize,
     }
 }
 
@@ -280,7 +278,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
 {
     let model = kind_config::Form::new()
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
-        .item("num_tracers"     , 0      , "Total number of tracers")
+        .item("num_tracers"     , 0      , "Target number of tracers per block")
         .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region")

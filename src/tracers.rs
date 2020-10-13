@@ -63,8 +63,8 @@ impl Tracer
     pub fn randomize(start: (f64, f64), length: f64, id: usize) -> Tracer
     {
         let mut rng = rand::thread_rng();
-        let rand_x = rng.gen_range(0.0, length) + start.0;
-        let rand_y = rng.gen_range(0.0, length) + start.1;
+        let rand_x = rng.gen_range(0.0, length / 4.0) + start.0;
+        let rand_y = rng.gen_range(0.0, length / 4.0) + start.1;
         return Tracer{x: rand_x, y: rand_y, id: id};
     }
 
@@ -93,27 +93,15 @@ impl Tracer
 // ============================================================================
 // pub fn apply_boundary_condition(tracer: &Tracer, domain_radius: f64) -> Tracer
 // {
-//     let mut x = tracer.x;
-//     let mut y = tracer.y;
-
-//     if x >= domain_radius {
-//         x -= 2.0 * domain_radius;
-//     }
-//     if x < -domain_radius {
-//         x += 2.0 * domain_radius;
-//     }
-//     if y >= domain_radius {
-//         y -= 2.0 * domain_radius;
-//     }
-//     if y < -domain_radius {
-//         y += 2.0 * domain_radius;
+//     let has_left_x: bool = (tracer.x >= domain_radius | tracer.x < -domain_radius);
+//     let has_left_y: bool = (tracer.y >= domain_radius | tracer.y < -domain_radius);
+    
+//     if has_left_x | has_left_y
+//     {
+//         return tracer.randomize((-domain_radius, -domain_radius), 2.0 * domain_radius, 2.0 * tracer.id);
 //     }
 
-//     Tracer{
-//         x: x,
-//         y: y,
-//         id: tracer.id,
-//     }
+//     return tracer;
 // }
 
 
