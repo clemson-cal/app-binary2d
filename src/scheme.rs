@@ -410,7 +410,8 @@ fn advance_internal(
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // let apply_boundaries = |t| crate::tracers::apply_boundary_conditions(&t, mesh.domain_radius);
-    let (my_tracers, their_tracers) = filter_block_tracers(tracers, &mesh, block_data.index);
+    let (my_tracers_0, their_tracers) = filter_block_tracers(tracers, &mesh, block_data.index);
+    let  my_tracers = apply_tracer_target(my_tracers_0, &mesh, block_data.index);
 
     // Each block sends its prims and the tracers it is NO LONGER responsible for
     // ============================================================================
@@ -514,7 +515,8 @@ fn advance_internal(
     // ============================================================================
     return BlockState{
         solution: next_solution,
-        tracers : apply_tracer_target(next_tracers, &mesh, block_data.index),
+        tracers : next_tracers,
+        // tracers : apply_tracer_target(next_tracers, &mesh, block_data.index),
     };
 }
 
@@ -706,15 +708,16 @@ pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex
 
 pub fn apply_tracer_target(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
-    let tracer_deficit = mesh.tracers_per_block - tracers.len();
-    let mut rng = rand::thread_rng();
-    let id0 = mesh.tracers_per_block * mesh.num_blocks * mesh.num_blocks;
-    let init = |_| Tracer::randomize(mesh.block_start(index), mesh.block_length(), rng.gen::<usize>() + id0);
-
-    if tracer_deficit > 0
-    {
-        let mut new = (0..tracer_deficit).map(init).collect::<Vec<Tracer>>();
+    if tracers.len() < mesh.tracers_per_block
+    {    
+        let mut rng = rand::thread_rng();
+        let id0     = mesh.tracers_per_block * mesh.num_blocks * mesh.num_blocks;
+        let init    = |_| Tracer::randomize(mesh.block_start(index), mesh.block_length(), rng.gen::<usize>() + id0);
+        
+        let tracer_deficit = mesh.tracers_per_block - tracers.len();
+        let mut new        = (0..tracer_deficit).map(init).collect::<Vec<Tracer>>();
         new.extend(tracers);
+        
         return new;
     }
     return tracers;
