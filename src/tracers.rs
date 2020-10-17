@@ -63,8 +63,8 @@ impl Tracer
     pub fn randomize(start: (f64, f64), length: f64, id: usize) -> Tracer
     {
         let mut rng = rand::thread_rng();
-        let rand_x = rng.gen_range(0.0, length / 4.0) + start.0;
-        let rand_y = rng.gen_range(0.0, length / 4.0) + start.1;
+        let rand_x = rng.gen_range(0.0, length) + start.0;
+        let rand_y = rng.gen_range(0.0, length) + start.1;
         return Tracer{x: rand_x, y: rand_y, id: id};
     }
 

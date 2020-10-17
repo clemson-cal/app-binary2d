@@ -378,8 +378,8 @@ fn advance_internal(
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     &crossbeam::Sender<(Array<Primitive, Ix2>, Vec<Tracer>)>,
-    receiver:   &crossbeam::Receiver<(NeighborPrimitiveBlock, NeighborTracerVecs)>,
+    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
     dt:         f64) -> BlockState
 {
     // ============================================================================
@@ -407,15 +407,13 @@ fn advance_internal(
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
     };
 
+    sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
+    
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    // let apply_boundaries = |t| crate::tracers::apply_boundary_conditions(&t, mesh.domain_radius);
-    let (my_tracers_0, their_tracers) = filter_block_tracers(tracers, &mesh, block_data.index);
-    let  my_tracers = apply_tracer_target(my_tracers_0, &mesh, block_data.index);
-
-    // Each block sends its prims and the tracers it is NO LONGER responsible for
-    // ============================================================================
-    sender.send((solution.conserved.mapv(Conserved::to_primitive), their_tracers)).unwrap();
+    // let (my_tracers_0, their_tracers) = filter_block_tracers(tracers, &mesh, block_data.index);
+    // let  my_tracers = apply_tracer_target(my_tracers_0, &mesh, block_data.index);
+    // sender.send((solution.conserved.mapv(Conserved::to_primitive), their_tracers)).unwrap();
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
@@ -430,10 +428,10 @@ fn advance_internal(
 
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    let (neigh_blocks, neigh_tracers) = receiver.recv().unwrap();
+    // let (neigh_blocks, neigh_tracers) = receiver.recv().unwrap();
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&neigh_blocks, 2, 2, 2, 2);
+    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let xf = &block_data.face_centers_x;
@@ -487,13 +485,11 @@ fn advance_internal(
     let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
 
-    let my_full_tracers = push_new_tracers(my_tracers, neigh_tracers, &mesh, block_data.index);
-    let next_tracers    = my_full_tracers.into_iter()
-                                         .map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt))
-                                         .collect();
+    // let my_full_tracers = push_new_tracers(my_tracers, neigh_tracers, &mesh, block_data.index);
+    let next_tracers = tracers.into_iter()
+                              .map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt))
+                              .collect();
     //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-
 
 
 
@@ -516,7 +512,6 @@ fn advance_internal(
     return BlockState{
         solution: next_solution,
         tracers : next_tracers,
-        // tracers : apply_tracer_target(next_tracers, &mesh, block_data.index),
     };
 }
 
@@ -530,15 +525,17 @@ fn advance_internal_rk(
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     &crossbeam::Sender<(Array<Primitive, Ix2>, Vec<Tracer>)>,
-    receiver:   &crossbeam::Receiver<(NeighborPrimitiveBlock, NeighborTracerVecs)>,
+    // sender:     &crossbeam::Sender<(Array<Primitive, Ix2>, Vec<Tracer>)>,
+    // receiver:   &crossbeam::Receiver<(NeighborPrimitiveBlock, NeighborTracerVecs)>,
+    senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>, crossbeam::Sender<Vec<Tracer>>),
+    receivers:  &(crossbeam::Receiver<NeighborPrimitiveBlock>, crossbeam::Receiver<NeighborTracerVecs>),
     time:       f64,
     dt:         f64,
     fold:       usize)
 {
     use std::convert::TryFrom;
 
-    let update = |state| advance_internal(state, block_data, solver, mesh, sender, receiver, dt);
+    let update = |state| advance_internal(state, block_data, solver, mesh, &senders.0, &receivers.0, dt);
 
     let solution = SolutionState {
         time: time,
@@ -553,12 +550,17 @@ fn advance_internal_rk(
 
     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
 
+    // split tracers and send/recv + spawn new tracers
+    // create new state with tracers to update
+
     for _ in 0..fold
     {
+        state = rebin_tracers(state, &mesh, &senders.1, &receivers.1, block_data.index);
         state = rk_order.advance(state, update);
     }
+
     *conserved = state.solution.conserved;
-    *tracers   = state.tracers
+    *tracers   = state.tracers;
 }
 
 
@@ -572,51 +574,77 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         use std::collections::HashMap;
 
         let time = state.time;
-        let mut receivers       = Vec::new();
-        let mut senders         = Vec::new();
-        let mut block_state_map: HashMap<BlockIndex, (ArcArray<Primitive, Ix2>, Arc<Vec<Tracer>>)> = HashMap::new();
+        let mut prim_recvs = Vec::new();
+        let mut prim_sends = Vec::new();
+        let mut block_primitive = HashMap::new();
+        // let mut block_state_map: HashMap<BlockIndex, (ArcArray<Primitive, Ix2>, Arc<Vec<Tracer>>)> = HashMap::new();
+        
+        let mut tracer_recvs = Vec::new();
+        let mut tracer_sends = Vec::new();
+        let mut block_tracers = HashMap::new();
 
         for (i, (u, t)) in state.conserved.iter_mut().zip(state.tracers.iter_mut()).enumerate()
         {
-            let (their_s, my_r) = crossbeam::channel::unbounded();
-            let (my_s, their_r) = crossbeam::channel::unbounded();
+            // ================================================================
+            let (their_prim_s, my_prim_r) = crossbeam::channel::unbounded();
+            let (my_prim_s, their_prim_r) = crossbeam::channel::unbounded();
+            prim_sends.push(my_prim_s);
+            prim_recvs.push(my_prim_r);
 
-            senders.push(my_s);
-            receivers.push(my_r);
+            // ================================================================
+            let (their_tr_s, my_tr_r) = crossbeam::channel::unbounded();
+            let (my_tr_s, their_tr_r) = crossbeam::channel::unbounded();            
+            tracer_sends.push(my_tr_s);
+            tracer_recvs.push(my_tr_r);
 
+            // ================================================================
+            let their_sends = (their_prim_s, their_tr_s);
+            let their_recvs = (their_prim_r, their_tr_r);
+
+            // ================================================================
             let b = &block_data[i];
-            scope.spawn(move |_| advance_internal_rk(u, t, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+            scope.spawn(move |_| advance_internal_rk(u, t, b, solver, mesh, &their_sends, &their_recvs, time, dt, fold));
         }
 
         for _ in 0..fold
         {
             for _ in 0..solver.rk_order
             {
-                for (block_data, r) in block_data.iter().zip(receivers.iter())
+                // ============================================================
+                for (block_data, r) in block_data.iter().zip(prim_recvs.iter())
                 {
-                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                    let (b, t) = r.recv().unwrap();
-                    block_state_map.insert(block_data.index, (b.to_shared(), Arc::new(t)));
-                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-
-                    // block_state_map.insert(block_data.index, r.recv().unwrap().to_shared());
+                    block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
                 }
 
-                for (block_data, s) in block_data.iter().zip(senders.iter())
+                for (block_data, s) in block_data.iter().zip(prim_sends.iter())
                 {
-                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                    let neighbors = (mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().0),
-                                     mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().1));
-                    s.send(neighbors).unwrap();
-                    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
+                        .get(i)
+                        .unwrap()
+                        .clone()))
+                    .unwrap();                    
+                }
 
+                // ============================================================
+                for (block_data, r) in block_data.iter().zip(tracer_recvs.iter())
+                {
+                    block_tracers.insert(block_data.index, Arc::new(r.recv().unwrap()));
 
-                    // s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map
-                    //     .get(i)
-                    //     .unwrap()
-                    //     .clone()))
-                    // .unwrap();
+                    // let (b, t) = r.recv().unwrap();
+                    // block_state_map.insert(block_data.index, (b.to_shared(), Arc::new(t)));
+                }
+
+                for (block_data, s) in block_data.iter().zip(tracer_sends.iter())
+                {
+                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_tracers
+                        .get(i)
+                        .unwrap()
+                        .clone()))
+                    .unwrap();
+
+                    // let neighbors = (mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().0),
+                                     // mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().1));
+                    // s.send(neighbors).unwrap();
                 }
             }
 
@@ -649,6 +677,26 @@ pub fn hlle_state(pl: Primitive, pr: Primitive, direction: Direction, sound_spee
 
 
 // ============================================================================
+pub fn rebin_tracers(
+    state   : BlockState, 
+    mesh    : &Mesh, 
+    sender  : &crossbeam::Sender<Vec<Tracer>>, 
+    receiver: &crossbeam::Receiver<NeighborTracerVecs>,
+    block_index: BlockIndex) -> BlockState
+{
+    // Only send tracers I'm not responsible for to the hashmap
+    let (my_tracers_0, their_tracers) = filter_block_tracers(state.tracers, &mesh, block_index);
+    sender.send(their_tracers).unwrap();   
+
+    let my_tracers    = apply_tracer_target(my_tracers_0, &mesh, block_index);
+    let neigh_tracers = receiver.recv().unwrap();
+
+    return BlockState{
+        solution: state.solution,
+        tracers : push_new_tracers(my_tracers, neigh_tracers, &mesh, block_index),
+    };
+}
+
 pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracerVecs, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
     let r = mesh.block_length();
@@ -662,7 +710,6 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
         {
             continue;
         }
-
         for t in block_tracers.iter()
         {
             if (t.x >= x0) & (t.x < x0 + r) & (t.y >= y0) & (t.y < y0 + r) 
@@ -671,8 +718,7 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
             }
         }
     }
-
-    tracers.extend(init_tracers); //this consumes 'init_tracers'
+    tracers.extend(init_tracers); // consumes 'init_tracers'
     return tracers;
 }
 
@@ -680,30 +726,21 @@ pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
-    let mut mine = Vec::new();    
-    let mut duds = Vec::new();    
-    
-    // let d = mesh.domain_radius;
-    // let mut left = Vec::new();
+    let mut mine   = Vec::new();    
+    let mut others = Vec::new();    
 
     for t in tracers.into_iter()
-    {
-        // if (t.x < -d) | (t.x >= d) | (t.y < -d) | (t.y >= d) // if left domain
-        // {
-        //     left.push(t)
-        // }   
+    {   
         if (t.x < x0) | (t.x >= x0 + r) | (t.y < y0) | (t.y >= y0 + r) // if left my block
         {
-            duds.push(t);
+            others.push(t);
         }
         else // never left
         {
             mine.push(t);
         }
     }
-
-
-    return (mine, duds);
+    return (mine, others);
 }
 
 pub fn apply_tracer_target(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
@@ -715,9 +752,9 @@ pub fn apply_tracer_target(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex)
         let init    = |_| Tracer::randomize(mesh.block_start(index), mesh.block_length(), rng.gen::<usize>() + id0);
         
         let tracer_deficit = mesh.tracers_per_block - tracers.len();
-        let mut new        = (0..tracer_deficit).map(init).collect::<Vec<Tracer>>();
-        new.extend(tracers);
+        let mut new = (0..tracer_deficit).map(init).collect::<Vec<Tracer>>();
         
+        new.extend(tracers);
         return new;
     }
     return tracers;
