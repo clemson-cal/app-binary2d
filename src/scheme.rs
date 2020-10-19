@@ -608,9 +608,31 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
 
         for _ in 0..fold
         {
+            // ============================================================
+            for (block_data, r) in block_data.iter().zip(tracer_recvs.iter())
+            {
+                block_tracers.insert(block_data.index, Arc::new(r.recv().unwrap()));
+
+                // let (b, t) = r.recv().unwrap();
+                // block_state_map.insert(block_data.index, (b.to_shared(), Arc::new(t)));
+            }
+
+            for (block_data, s) in block_data.iter().zip(tracer_sends.iter())
+            {
+                s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_tracers
+                    .get(i)
+                    .unwrap()
+                    .clone()))
+                .unwrap();
+
+                // let neighbors = (mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().0),
+                                 // mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().1));
+                // s.send(neighbors).unwrap();
+            }
+
+            // ============================================================
             for _ in 0..solver.rk_order
             {
-                // ============================================================
                 for (block_data, r) in block_data.iter().zip(prim_recvs.iter())
                 {
                     block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
@@ -623,28 +645,6 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
                         .unwrap()
                         .clone()))
                     .unwrap();                    
-                }
-
-                // ============================================================
-                for (block_data, r) in block_data.iter().zip(tracer_recvs.iter())
-                {
-                    block_tracers.insert(block_data.index, Arc::new(r.recv().unwrap()));
-
-                    // let (b, t) = r.recv().unwrap();
-                    // block_state_map.insert(block_data.index, (b.to_shared(), Arc::new(t)));
-                }
-
-                for (block_data, s) in block_data.iter().zip(tracer_sends.iter())
-                {
-                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_tracers
-                        .get(i)
-                        .unwrap()
-                        .clone()))
-                    .unwrap();
-
-                    // let neighbors = (mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().0),
-                                     // mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().1));
-                    // s.send(neighbors).unwrap();
                 }
             }
 
