@@ -293,14 +293,16 @@ impl Mesh
         let i = (float_i * n) as usize;
         let j = (float_j * n) as usize;
 
-        if x > x0 + length
-        {
-            println!("Beyond x-boudnary!: {}", i);
-        }
-        if y > y0 + length
-        {
-            println!("Beyond y-boudnary!: {}", j);
-        }
+        // if x > x0 + length
+        // {
+        //     println!("Beyond x-boudnary!: {}", i);
+        //     i = i-1;
+        // }
+        // if y > y0 + length
+        // {
+        //     println!("Beyond y-boudnary!: {}", j);
+        //     j = j-1;
+        // }
         return (i, j);
     }
 
