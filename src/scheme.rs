@@ -6,19 +6,19 @@ use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::solution_states;
 use godunov_core::runge_kutta;
 
-use crate::tracers::Tracer;
+use crate::tracers::*;
 use std::ops::{Add, Mul};
 use std::sync::Arc;
-use rand::Rng;
+
+
 
 
 // ============================================================================
+type SolutionState          = solution_states::SolutionStateArray<Conserved, Ix2>;
+pub type BlockIndex         = (usize, usize);
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
 pub type NeighborTracerVecs = [[Arc<Vec<Tracer>>; 3]; 3];
-// type NeighborBlockData      = [[(ArcArray<Primitive, Ix2>, Arc<Vec<Tracer>>); 3]; 3]
 
-type SolutionState = solution_states::SolutionStateArray<Conserved, Ix2>;
-pub type BlockIndex = (usize, usize);
 
 
 
@@ -48,7 +48,7 @@ pub struct State
 
 
 
-//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+// ============================================================================
 #[derive(Clone)]
 pub struct BlockState
 {
@@ -81,7 +81,6 @@ impl Mul<Rational64> for BlockState
         }
     }
 }
-//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
 
@@ -281,9 +280,14 @@ impl Mesh
         ]
     }
 
-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    //  For Tracers
+    // ========================================================================
     pub fn get_cell_index(&self, index: BlockIndex, x: f64, y: f64) -> (usize, usize)
     {
+        // Should this function warn the user if it's returning an invalid index?
+        //    --> for tracers this will be common if/when they move into ghost zones
+        //        in RK sub-steps (so I removed warning b/c annoying)
+        //        
         let (x0, y0) = self.block_start(index);
         let length   = self.block_length();
         let float_i  = (x - x0) / length;
@@ -293,20 +297,10 @@ impl Mesh
         let i = (float_i * n) as usize;
         let j = (float_j * n) as usize;
 
-        // if x > x0 + length
-        // {
-        //     println!("Beyond x-boudnary!: {}", i);
-        //     i = i-1;
-        // }
-        // if y > y0 + length
-        // {
-        //     println!("Beyond y-boudnary!: {}", j);
-        //     j = j-1;
-        // }
         return (i, j);
     }
 
-    pub fn face_center(&self, index: BlockIndex, i: usize, j: usize, direction: Direction) -> (f64, f64)
+    pub fn face_center_at(&self, index: BlockIndex, i: usize, j: usize, direction: Direction) -> (f64, f64)
     {
         let (x0, y0) = self.block_start(index);
         let dx = self.cell_spacing_x();
@@ -317,7 +311,6 @@ impl Mesh
             Direction::Y => (x0 + (i as f64 + 0.5) * dx, y0 + (j as f64) * dy),
         }
     }
-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 }
 
 
@@ -375,7 +368,6 @@ impl<'a> CellData<'_>
 
 // ============================================================================
 fn advance_internal(
-    //TRACERS : BlockState is now struct that holds old BlockState as SolutionState and vec of tracers
     state:      BlockState,
     block_data: &crate::BlockData,
     solver:     &Solver,
@@ -409,17 +401,8 @@ fn advance_internal(
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
     };
 
-    sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
-    
-
-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    // let (my_tracers_0, their_tracers) = filter_block_tracers(tracers, &mesh, block_data.index);
-    // let  my_tracers = apply_tracer_target(my_tracers_0, &mesh, block_data.index);
-    // sender.send((solution.conserved.mapv(Conserved::to_primitive), their_tracers)).unwrap();
-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-
     // ============================================================================
+    sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
     let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
     let sources = azip![
@@ -428,11 +411,7 @@ fn advance_internal(
         &block_data.cell_centers]
     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
-
-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    // let (neigh_blocks, neigh_tracers) = receiver.recv().unwrap();
-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
+    // ============================================================================
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
@@ -460,10 +439,9 @@ fn advance_internal(
         yf]
     .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
 
-    
-
-
-    //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    //  For Tracers 
+    //   --> eventually write riemann solver that returns F_hll and U_hll
+    // ========================================================================
     let star_state = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
     {
         let cs2 = solver.sound_speed_squared(f, &two_body_state);
@@ -486,14 +464,7 @@ fn advance_internal(
     
     let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
-
-    // let my_full_tracers = push_new_tracers(my_tracers, neigh_tracers, &mesh, block_data.index);
-    let next_tracers = tracers.into_iter()
-                              .map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt))
-                              .collect();
-    //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-
+    let next_tracers = tracers.into_iter().map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt)).collect();
 
     // ============================================================================
     let du = azip![
@@ -527,8 +498,6 @@ fn advance_internal_rk(
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    // sender:     &crossbeam::Sender<(Array<Primitive, Ix2>, Vec<Tracer>)>,
-    // receiver:   &crossbeam::Receiver<(NeighborPrimitiveBlock, NeighborTracerVecs)>,
     senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>, crossbeam::Sender<Vec<Tracer>>),
     receivers:  &(crossbeam::Receiver<NeighborPrimitiveBlock>, crossbeam::Receiver<NeighborTracerVecs>),
     time:       f64,
@@ -552,9 +521,6 @@ fn advance_internal_rk(
 
     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
 
-    // split tracers and send/recv + spawn new tracers
-    // create new state with tracers to update
-
     for _ in 0..fold
     {
         state = rebin_tracers(state, &mesh, &senders.1, &receivers.1, block_data.index);
@@ -576,13 +542,13 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         use std::collections::HashMap;
 
         let time = state.time;
-        let mut prim_recvs = Vec::new();
+
         let mut prim_sends = Vec::new();
+        let mut prim_recvs = Vec::new();
         let mut block_primitive = HashMap::new();
-        // let mut block_state_map: HashMap<BlockIndex, (ArcArray<Primitive, Ix2>, Arc<Vec<Tracer>>)> = HashMap::new();
         
-        let mut tracer_recvs = Vec::new();
         let mut tracer_sends = Vec::new();
+        let mut tracer_recvs = Vec::new();
         let mut block_tracers = HashMap::new();
 
         for (i, (u, t)) in state.conserved.iter_mut().zip(state.tracers.iter_mut()).enumerate()
@@ -614,9 +580,6 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             for (block_data, r) in block_data.iter().zip(tracer_recvs.iter())
             {
                 block_tracers.insert(block_data.index, Arc::new(r.recv().unwrap()));
-
-                // let (b, t) = r.recv().unwrap();
-                // block_state_map.insert(block_data.index, (b.to_shared(), Arc::new(t)));
             }
 
             for (block_data, s) in block_data.iter().zip(tracer_sends.iter())
@@ -626,10 +589,6 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
                     .unwrap()
                     .clone()))
                 .unwrap();
-
-                // let neighbors = (mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().0),
-                                 // mesh.neighbor_block_indexes(block_data.index).map(|i| block_state_map.get(i).unwrap().clone().1));
-                // s.send(neighbors).unwrap();
             }
 
             // ============================================================
@@ -699,69 +658,5 @@ pub fn rebin_tracers(
     };
 }
 
-pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracerVecs, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
-{
-    let r = mesh.block_length();
-    let (x0, y0) = mesh.block_start(index);
-    let mut tracers = Vec::new();
-
-    for (i, block_tracers) in neigh_tracers.iter().flat_map(|r| r.iter()).enumerate()
-    {
-        // algorithmically unneccesary?
-        if i == 5 // This is my block 
-        {
-            continue;
-        }
-        for t in block_tracers.iter()
-        {
-            if (t.x >= x0) & (t.x < x0 + r) & (t.y >= y0) & (t.y < y0 + r) 
-            {
-                tracers.push(t.clone());
-            }
-        }
-    }
-    tracers.extend(init_tracers); // consumes 'init_tracers'
-    return tracers;
-}
-
-pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
-{
-    let r = mesh.block_length();
-    let (x0, y0) = mesh.block_start(index);
-    let mut mine   = Vec::new();    
-    let mut others = Vec::new();    
-
-    for t in tracers.into_iter()
-    {   
-        if (t.x < x0) | (t.x >= x0 + r) | (t.y < y0) | (t.y >= y0 + r) // if left my block
-        {
-            others.push(t);
-        }
-        else // never left
-        {
-            mine.push(t);
-        }
-    }
-    return (mine, others);
-}
-
-pub fn apply_tracer_target(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
-{
-    if tracers.len() < mesh.tracers_per_block
-    {    
-        let mut rng = rand::thread_rng();
-        let id0     = mesh.tracers_per_block * mesh.num_blocks * mesh.num_blocks;
-        let init    = |_| Tracer::randomize(mesh.block_start(index), mesh.block_length(), rng.gen::<usize>() + id0);
-        
-        let tracer_deficit = mesh.tracers_per_block - tracers.len();
-        let mut new = (0..tracer_deficit).map(init).collect::<Vec<Tracer>>();
-        
-        new.extend(tracers);
-        return new;
-    }
-    return tracers;
-}
 
 
-
-//
