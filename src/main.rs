@@ -191,9 +191,25 @@ fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Cons
 
 fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize) -> Vec<tracers::Tracer>
 {
+    let x0 = mesh.block_start(block_index);
+    let tracers_per_row = f64::sqrt(ntracers as f64).ceil();
+    let tracer_spacing  = mesh.block_length() / tracers_per_row;
     let get_id = |i| linear_index(block_index, mesh.num_blocks) * ntracers + i;
-    let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.block_length(), get_id(n));
-    return (0..ntracers).map(init).collect();
+
+    let make_grid = |n|
+    {
+        let m = tracers_per_row as usize;
+        let x = (n % m) as f64 * tracer_spacing + x0.0;
+        let y = (n / m) as f64 * tracer_spacing + x0.1;
+        ((x, y), n)
+    };
+    (0..ntracers).map(make_grid)
+                 .map(|xy_n| tracers::Tracer::new(xy_n.0, get_id(xy_n.1)))
+                 .collect()
+
+    // let get_id = |i| linear_index(block_index, mesh.num_blocks) * ntracers + i;
+    // let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.block_length(), get_id(n));
+    // return (0..ntracers).map(init).collect();
 }
 
 fn initial_state(mesh: &scheme::Mesh) -> State

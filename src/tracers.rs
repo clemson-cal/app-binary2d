@@ -62,6 +62,11 @@ impl Tracer
         return Tracer{x: 0.0, y: 0.0, id: 0};
     }
 
+    pub fn new(xy: (f64, f64), id: usize) -> Tracer
+    {
+        return Tracer{x: xy.0, y: xy.1, id: id}
+    }
+
     pub fn randomize(start: (f64, f64), length: f64, id: usize) -> Tracer
     {
         let mut rng = rand::thread_rng();
