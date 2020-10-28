@@ -17,6 +17,7 @@ use std::sync::Arc;
 type SolutionState          = solution_states::SolutionStateArray<Conserved, Ix2>;
 pub type BlockIndex         = (usize, usize);
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
+type NeighborFluxes         = ([[ArcArray<Conserved, Ix2>; 3]; 3], [[ArcArray<Conserved, Ix2>; 3]; 3]);
 pub type NeighborTracerVecs = [[Arc<Vec<Tracer>>; 3]; 3];
 
 
@@ -372,8 +373,10 @@ fn advance_internal(
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    sender:     (&crossbeam::Sender<Array<Primitive, Ix2>>, 
+                 &crossbeam::Sender<(Array<Conserved, Ix2>, Array<Conserved, Ix2>)>),
+    receiver:   (&crossbeam::Receiver<NeighborPrimitiveBlock>, 
+                 &crossbeam::Receiver<NeighborFluxes>),
     dt:         f64) -> BlockState
 {
     // ============================================================================
@@ -381,6 +384,10 @@ fn advance_internal(
     use ndarray_ops::{map_stencil3};
     use godunov_core::piecewise_linear::plm_gradient3;
     use Direction::{X, Y};
+
+    // ============================================================================
+    let (prim_sender  , flux_sender)   = sender;
+    let (prim_receiver, flux_receiver) = receiver;
 
     // ============================================================================
     let solution = state.solution;
@@ -402,7 +409,7 @@ fn advance_internal(
     };
 
     // ============================================================================
-    sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
+    prim_sender.send(solution.conserved.mapv(Conserved::to_primitive)).unwrap();
     let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
     let sources = azip![
@@ -412,7 +419,7 @@ fn advance_internal(
     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
     // ============================================================================
-    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
+    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&prim_receiver.recv().unwrap(), 2, 2, 2, 2);
     let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
     let xf = &block_data.face_centers_x;
@@ -438,6 +445,12 @@ fn advance_internal(
         cell_data.slice(s![1..-1, 1..]),
         yf]
     .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+
+    flux_sender.send((fx, fy)).unwrap();
+    let (fx_neighbors, fy_neighbors) = flux_receiver.recv().unwrap();
+    let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_neighbors, 1, 1, 1, 1);
+    let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_neighbors, 1, 1, 1, 1);
+
 
     //  For Tracers 
     //   --> eventually write riemann solver that returns F_hll and U_hll
@@ -466,13 +479,21 @@ fn advance_internal(
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
     let next_tracers = tracers.into_iter().map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt)).collect();
 
+    // Use extended fluxes because of send(fx, fy) moves ownership
     // ============================================================================
     let du = azip![
-        fx.slice(s![..-1,..]),
-        fx.slice(s![ 1..,..]),
-        fy.slice(s![..,..-1]),
-        fy.slice(s![.., 1..])]
+        fx_e.slice(s![1..-2,1..-1]),
+        fx_e.slice(s![2..-1,1..-1]),
+        fy_e.slice(s![1..-1,1..-2]),
+        fy_e.slice(s![1..-1,2..-1])]
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+    // let du = azip![
+    //     fx.slice(s![..-1,..]),
+    //     fx.slice(s![ 1..,..]),
+    //     fy.slice(s![..,..-1]),
+    //     fy.slice(s![.., 1..])]
+    // .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+    
 
     // ============================================================================
     let next_solution = SolutionState{
@@ -498,15 +519,21 @@ fn advance_internal_rk(
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>, crossbeam::Sender<Vec<Tracer>>),
-    receivers:  &(crossbeam::Receiver<NeighborPrimitiveBlock>, crossbeam::Receiver<NeighborTracerVecs>),
+    senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>, 
+                  crossbeam::Sender<(Array<Conserved, Ix2>, Array<Conserved, Ix2>)>,
+                  crossbeam::Sender<Vec<Tracer>>),
+    receivers:  &(crossbeam::Receiver<NeighborPrimitiveBlock>, 
+                  crossbeam::Receiver<NeighborFluxes>,
+                  crossbeam::Receiver<NeighborTracerVecs>),
     time:       f64,
     dt:         f64,
     fold:       usize)
 {
     use std::convert::TryFrom;
 
-    let update = |state| advance_internal(state, block_data, solver, mesh, &senders.0, &receivers.0, dt);
+    let rk_sends = (  &senders.0,   &senders.1); // (prim_sender, flux_sender)
+    let rk_recvs = (&receivers.0, &receivers.1); // ...
+    let update = |state| advance_internal(state, block_data, solver, mesh, rk_sends, rk_recvs, dt);
 
     let solution = SolutionState {
         time: time,
@@ -523,7 +550,7 @@ fn advance_internal_rk(
 
     for _ in 0..fold
     {
-        state = rebin_tracers(state, &mesh, &senders.1, &receivers.1, block_data.index);
+        state = rebin_tracers(state, &mesh, &senders.2, &receivers.2, block_data.index);
         state = rk_order.advance(state, update);
     }
 
@@ -546,6 +573,10 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         let mut prim_sends = Vec::new();
         let mut prim_recvs = Vec::new();
         let mut block_primitive = HashMap::new();
+
+        let mut flux_sends = Vec::new();
+        let mut flux_recvs = Vec::new();
+        let mut block_fluxes = HashMap::new();
         
         let mut tracer_sends = Vec::new();
         let mut tracer_recvs = Vec::new();
@@ -559,6 +590,13 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             prim_sends.push(my_prim_s);
             prim_recvs.push(my_prim_r);
 
+            // Fluxes
+            // ================================================================
+            let (their_flux_s, my_flux_r) = crossbeam::channel::unbounded();
+            let (my_flux_s, their_flux_r) = crossbeam::channel::unbounded();
+            flux_sends.push(my_flux_s);
+            flux_recvs.push(my_flux_r);
+
             // ================================================================
             let (their_tr_s, my_tr_r) = crossbeam::channel::unbounded();
             let (my_tr_s, their_tr_r) = crossbeam::channel::unbounded();            
@@ -566,8 +604,8 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             tracer_recvs.push(my_tr_r);
 
             // ================================================================
-            let their_sends = (their_prim_s, their_tr_s);
-            let their_recvs = (their_prim_r, their_tr_r);
+            let their_sends = (their_prim_s, their_flux_s, their_tr_s);
+            let their_recvs = (their_prim_r, their_flux_r, their_tr_r);
 
             // ================================================================
             let b = &block_data[i];
@@ -606,6 +644,20 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
                         .unwrap()
                         .clone()))
                     .unwrap();                    
+                }
+
+                // Fluxes
+                for (block_data, r) in block_data.iter().zip(flux_recvs.iter())
+                {
+                    let (fx, fy) = r.recv().unwrap();
+                    block_fluxes.insert(block_data.index, (fx.to_shared(), fy.to_shared()));
+                }
+
+                for (block_data, s) in block_data.iter().zip(flux_sends.iter())
+                {
+                    let flux_neighbors = (mesh.neighbor_block_indexes(block_data.index).map(|i| block_fluxes.get(i).unwrap().clone().0),
+                                          mesh.neighbor_block_indexes(block_data.index).map(|i| block_fluxes.get(i).unwrap().clone().1));
+                    s.send(flux_neighbors).unwrap();
                 }
             }
 
