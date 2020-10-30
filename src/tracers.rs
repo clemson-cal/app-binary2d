@@ -121,13 +121,8 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
     let (x0, y0) = mesh.block_start(index);
     let mut tracers = Vec::new();
 
-    for (i, block_tracers) in neigh_tracers.iter().flat_map(|r| r.iter()).enumerate()
+    for block_tracers in neigh_tracers.iter().flat_map(|r| r.iter())
     {
-        // algorithmically unneccesary?
-        if i == 4 // This is my block 
-        {
-            continue;
-        }
         for t in block_tracers.iter()
         {
             if (t.x >= x0) & (t.x < x0 + r) & (t.y >= y0) & (t.y < y0 + r) 
@@ -136,7 +131,7 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
             }
         }
     }
-    tracers.extend(init_tracers); // consumes 'init_tracers'
+    tracers.extend(init_tracers);
     return tracers;
 }
 
