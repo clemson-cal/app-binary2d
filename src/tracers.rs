@@ -77,8 +77,7 @@ impl Tracer
 
     pub fn update(&self, mesh: &Mesh, index: crate::BlockIndex, vfield_x: &Array<f64, Ix2>, vfield_y: &Array<f64, Ix2>, dt: f64) -> Tracer
     {
-        // let (ix, iy) = mesh.get_cell_index(index, self.x, self.y);
-        let (ix, iy) = calc_my_cell_index(self.x, self.y, index, &mesh);
+        let (ix, iy) = verify_indexes(mesh.get_cell_index(index, self.x, self.y), mesh.block_size);
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
         let wx = (mesh.face_center_at(index, ix + 1, iy, Direction::X).0 - self.x) / dx; // Triple check sign...
@@ -98,21 +97,18 @@ impl Tracer
 
 
 // ============================================================================
-pub fn calc_my_cell_index(x: f64, y: f64, bindex: crate::BlockIndex, mesh: &Mesh) -> (usize, usize)
+fn verify_indexes(ij: (usize, usize), block_size: usize) -> (usize, usize)
 {
-    let (mut ix, mut iy) = mesh.get_cell_index(bindex, x, y);
-
-    if ix >= mesh.block_size
+    let (ix, iy) = ij;
+    if ix > block_size
     {
-        ix -= 1;
+        println!("tracers::verify_cell_index : tracer moved beyond ghost zones (X). Crashing....");
     }
-
-    if iy >= mesh.block_size
+    if iy > block_size
     {
-        iy -= 1;
+        println!("tracers::verify_cell_index : tracer moved beyond ghost zones (Y). Crashing....");
     }
-
-    return (ix, iy);
+    (ix, iy)
 }
 
 
