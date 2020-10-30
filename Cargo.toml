@@ -17,7 +17,8 @@ rand            = "0.7.3"
 
 kind-config     = { git = "https://github.com/clemson-cal/kind-config", features = ["hdf5"] }
 kepler-two-body = { git = "https://github.com/clemson-cal/kepler-two-body" }
-hydro-iso2d     = { git = "https://github.com/clemson-cal/hydro-iso2d" }
+# hydro-iso2d     = { git = "https://github.com/clemson-cal/hydro-iso2d" }
+hydro-iso2d     = { path = "../hydro-iso2d"}
 godunov-core    = { git = "https://github.com/clemson-cal/godunov-core" }
 ndarray-ops     = { git = "https://github.com/clemson-cal/ndarray-ops" }
 

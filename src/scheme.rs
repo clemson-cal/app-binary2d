@@ -397,7 +397,7 @@ fn advance_internal(
     let two_body_state = solver.orbital_elements.orbital_state_from_time(solution.time);
 
     // ============================================================================
-    let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
+    let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> (Conserved, Conserved)
     {
         let cs2 = solver.sound_speed_squared(f, &two_body_state);
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
@@ -405,7 +405,9 @@ fn advance_internal(
         let nu = solver.nu;
         let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
         let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
-        riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
+        let  vflux = Conserved(0.0, -tau_x, -tau_y);
+        let (uflux, ustar)  = riemann_hlle_plus_state(pl, pr, axis, cs2);
+        (uflux + vflux, ustar)
     };
 
     // ============================================================================
@@ -433,19 +435,26 @@ fn advance_internal(
     .apply_collect(CellData::new);
 
     // ============================================================================
-    let fx = azip![
+    let fu_x = azip![
         cell_data.slice(s![..-1,1..-1]),
         cell_data.slice(s![ 1..,1..-1]),
         xf]
     .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
 
     // ============================================================================
-    let fy = azip![
+    let fu_y = azip![
         cell_data.slice(s![1..-1,..-1]),
         cell_data.slice(s![1..-1, 1..]),
         yf]
     .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
 
+    // ============================================================================
+    let fx = fu_x.mapv(|a| a.0);
+    let fy = fu_y.mapv(|a| a.0);
+    let ustar_x = fu_x.mapv(|a| a.1);
+    let ustar_y = fu_y.mapv(|a| a.1);
+
+    // ============================================================================
     flux_sender.send((fx, fy)).unwrap();
     let (fx_neighbors, fy_neighbors) = flux_receiver.recv().unwrap();
     let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_neighbors, 1, 1, 1, 1);
@@ -455,25 +464,25 @@ fn advance_internal(
     //  For Tracers 
     //   --> eventually write riemann solver that returns F_hll and U_hll
     // ========================================================================
-    let star_state = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
-    {
-        let cs2 = solver.sound_speed_squared(f, &two_body_state);
-        let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-        let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-        hlle_state(pl, pr, axis, cs2)
-    };
+    // let star_state = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
+    // {
+    //     let cs2 = solver.sound_speed_squared(f, &two_body_state);
+    //     let pl = *l.pc + *l.gradient_field(axis) * 0.5;
+    //     let pr = *r.pc - *r.gradient_field(axis) * 0.5;
+    //     hlle_state(pl, pr, axis, cs2)
+    // };
 
-    let ustar_x = azip![
-        cell_data.slice(s![..-1,1..-1]),
-        cell_data.slice(s![ 1..,1..-1]),
-        xf]
-    .apply_collect(|l, r, f| star_state(l, r, f, X));
+    // let ustar_x = azip![
+    //     cell_data.slice(s![..-1,1..-1]),
+    //     cell_data.slice(s![ 1..,1..-1]),
+    //     xf]
+    // .apply_collect(|l, r, f| star_state(l, r, f, X));
 
-    let ustar_y = azip![
-        cell_data.slice(s![1..-1,..-1]),
-        cell_data.slice(s![1..-1, 1..]),
-        yf]
-    .apply_collect(|l, r, f| star_state(l, r, f, Y));
+    // let ustar_y = azip![
+    //     cell_data.slice(s![1..-1,..-1]),
+    //     cell_data.slice(s![1..-1, 1..]),
+    //     yf]
+    // .apply_collect(|l, r, f| star_state(l, r, f, Y));
     
     let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
@@ -671,25 +680,6 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
 
 
 // ============================================================================
-pub fn hlle_state(pl: Primitive, pr: Primitive, direction: Direction, sound_speed_squared: f64) -> Conserved
-{
-    let ul = pl.to_conserved();
-    let ur = pr.to_conserved();
-    let fl = pl.flux_vector(direction, sound_speed_squared);
-    let fr = pr.flux_vector(direction, sound_speed_squared);
-
-    let (alm, alp) = pl.outer_wavespeeds(direction, sound_speed_squared);
-    let (arm, arp) = pr.outer_wavespeeds(direction, sound_speed_squared);
-    let ap = alp.max(arp).max(0.0);
-    let am = alm.min(arm).min(0.0);
-
-    (ur * ap - ul * am + fl - fr) / (ap - am)
-}
-
-
-
-
-// ============================================================================
 pub fn rebin_tracers(
     state   : BlockState, 
     mesh    : &Mesh, 
@@ -709,6 +699,25 @@ pub fn rebin_tracers(
         tracers : push_new_tracers(my_tracers, neigh_tracers, &mesh, block_index),
     };
 }
+
+
+
+
+// ============================================================================
+// pub fn hlle_state(pl: Primitive, pr: Primitive, direction: Direction, sound_speed_squared: f64) -> Conserved
+// {
+//     let ul = pl.to_conserved();
+//     let ur = pr.to_conserved();
+//     let fl = pl.flux_vector(direction, sound_speed_squared);
+//     let fr = pr.flux_vector(direction, sound_speed_squared);
+
+//     let (alm, alp) = pl.outer_wavespeeds(direction, sound_speed_squared);
+//     let (arm, arp) = pr.outer_wavespeeds(direction, sound_speed_squared);
+//     let ap = alp.max(arp).max(0.0);
+//     let am = alm.min(arm).min(0.0);
+
+//     (ur * ap - ul * am + fl - fr) / (ap - am)
+// }
 
 
 
