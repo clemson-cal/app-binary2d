@@ -656,10 +656,8 @@ pub fn rebin_tracers(
     block_index: BlockIndex) -> BlockState
 {
     // Only send tracers I'm not responsible for to the hashmap
-    let (my_tracers_0, their_tracers) = filter_block_tracers(state.tracers, &mesh, block_index);
+    let (my_tracers, their_tracers) = filter_block_tracers(state.tracers, &mesh, block_index);
     sender.send(their_tracers).unwrap();   
-
-    let my_tracers    = apply_tracer_target(my_tracers_0, &mesh, block_index);
     let neigh_tracers = receiver.recv().unwrap();
 
     return BlockState{

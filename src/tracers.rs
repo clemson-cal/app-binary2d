@@ -142,22 +142,5 @@ pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex
     return tracers.into_iter().partition(|t| t.x >= x0 && t.x < x0 + r && t.y >= y0 && t.y < y0 + r);
 }
 
-pub fn apply_tracer_target(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
-{
-    if tracers.len() < mesh.tracers_per_block
-    {    
-        let mut rng = rand::thread_rng();
-        let id0     = mesh.tracers_per_block * mesh.num_blocks * mesh.num_blocks;
-        let init    = |_| Tracer::randomize(mesh.block_start(index), mesh.block_length(), rng.gen::<usize>() + id0);
-        
-        let tracer_deficit = mesh.tracers_per_block - tracers.len();
-        let mut new = (0..tracer_deficit).map(init).collect::<Vec<Tracer>>();
-        
-        new.extend(tracers);
-        return new;
-    }
-    return tracers;
-}
-
 
 
