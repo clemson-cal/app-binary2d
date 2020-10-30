@@ -80,8 +80,8 @@ impl Tracer
         let (ix, iy) = verify_indexes(mesh.get_cell_index(index, self.x, self.y), mesh.block_size);
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
-        let wx = (mesh.face_center_at(index, ix + 1, iy, Direction::X).0 - self.x) / dx; // Triple check sign...
-        let wy = (mesh.face_center_at(index, ix, iy + 1, Direction::Y).1 - self.y) / dy;
+        let wx = (self.x - mesh.face_center_at(index, ix, iy, Direction::X).0) / dx; 
+        let wy = (self.y - mesh.face_center_at(index, ix, iy, Direction::Y).1) / dy;
         let vx = (1.0 - wx) * vfield_x[[ix, iy]] + wx * vfield_x[[ix + 1, iy]];
         let vy = (1.0 - wy) * vfield_y[[ix, iy]] + wy * vfield_y[[ix, iy + 1]];
 
