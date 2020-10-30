@@ -17,7 +17,7 @@ use std::sync::Arc;
 type SolutionState          = solution_states::SolutionStateArray<Conserved, Ix2>;
 pub type BlockIndex         = (usize, usize);
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-type NeighborFluxes         = ([[ArcArray<Conserved, Ix2>; 3]; 3], [[ArcArray<Conserved, Ix2>; 3]; 3]);
+type NeighborFluxStatePairs = ([[ArcArray<(Conserved, Conserved), Ix2>; 3]; 3], [[ArcArray<(Conserved, Conserved), Ix2>; 3]; 3]);
 pub type NeighborTracerVecs = [[Arc<Vec<Tracer>>; 3]; 3];
 
 
@@ -374,9 +374,9 @@ fn advance_internal(
     solver:     &Solver,
     mesh:       &Mesh,
     sender:     (&crossbeam::Sender<Array<Primitive, Ix2>>, 
-                 &crossbeam::Sender<(Array<Conserved, Ix2>, Array<Conserved, Ix2>)>),
+                 &crossbeam::Sender<(Array<(Conserved, Conserved), Ix2>, Array<(Conserved, Conserved), Ix2>)>),
     receiver:   (&crossbeam::Receiver<NeighborPrimitiveBlock>, 
-                 &crossbeam::Receiver<NeighborFluxes>),
+                 &crossbeam::Receiver<NeighborFluxStatePairs>),
     dt:         f64) -> BlockState
 {
     // ============================================================================
@@ -397,7 +397,7 @@ fn advance_internal(
     let two_body_state = solver.orbital_elements.orbital_state_from_time(solution.time);
 
     // ============================================================================
-    let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> (Conserved, Conserved)
+    let intercell_flux_state = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> (Conserved, Conserved)
     {
         let cs2 = solver.sound_speed_squared(f, &two_body_state);
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
@@ -439,70 +439,38 @@ fn advance_internal(
         cell_data.slice(s![..-1,1..-1]),
         cell_data.slice(s![ 1..,1..-1]),
         xf]
-    .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
+    .apply_collect(|l, r, f| intercell_flux_state(l, r, f, X));
 
     // ============================================================================
     let fu_y = azip![
         cell_data.slice(s![1..-1,..-1]),
         cell_data.slice(s![1..-1, 1..]),
         yf]
-    .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+    .apply_collect(|l, r, f| intercell_flux_state(l, r, f, Y));
 
-    // ============================================================================
-    let fx = fu_x.mapv(|a| a.0);
-    let fy = fu_y.mapv(|a| a.0);
-    let ustar_x = fu_x.mapv(|a| a.1);
-    let ustar_y = fu_y.mapv(|a| a.1);
-
-    // ============================================================================
-    flux_sender.send((fx, fy)).unwrap();
-    let (fx_neighbors, fy_neighbors) = flux_receiver.recv().unwrap();
-    let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_neighbors, 1, 1, 1, 1);
-    let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_neighbors, 1, 1, 1, 1);
-
-
-    //  For Tracers 
-    //   --> eventually write riemann solver that returns F_hll and U_hll
     // ========================================================================
-    // let star_state = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
-    // {
-    //     let cs2 = solver.sound_speed_squared(f, &two_body_state);
-    //     let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-    //     let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-    //     hlle_state(pl, pr, axis, cs2)
-    // };
+    flux_sender.send((fu_x, fu_y)).unwrap();
+    let (fu_neigh_x, fu_neigh_y) = flux_receiver.recv().unwrap();
+    let fu_x_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_x, 1, 1, 1, 1);
+    let fu_y_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_y, 1, 1, 1, 1);
 
-    // let ustar_x = azip![
-    //     cell_data.slice(s![..-1,1..-1]),
-    //     cell_data.slice(s![ 1..,1..-1]),
-    //     xf]
-    // .apply_collect(|l, r, f| star_state(l, r, f, X));
-
-    // let ustar_y = azip![
-    //     cell_data.slice(s![1..-1,..-1]),
-    //     cell_data.slice(s![1..-1, 1..]),
-    //     yf]
-    // .apply_collect(|l, r, f| star_state(l, r, f, Y));
+    // ========================================================================
+    let fx_e    = fu_x_e.mapv(|fu| fu.0);
+    let fy_e    = fu_y_e.mapv(|fu| fu.0);
+    let ustar_x = fu_x_e.mapv(|fu| fu.1);
+    let ustar_y = fu_y_e.mapv(|fu| fu.1);    
     
     let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
     let next_tracers = tracers.into_iter().map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt)).collect();
 
-    // Use extended fluxes because of send(fx, fy) moves ownership
     // ============================================================================
     let du = azip![
         fx_e.slice(s![1..-2,1..-1]),
         fx_e.slice(s![2..-1,1..-1]),
         fy_e.slice(s![1..-1,1..-2]),
         fy_e.slice(s![1..-1,2..-1])]
-    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-    // let du = azip![
-    //     fx.slice(s![..-1,..]),
-    //     fx.slice(s![ 1..,..]),
-    //     fy.slice(s![..,..-1]),
-    //     fy.slice(s![.., 1..])]
-    // .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-    
+    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);    
 
     // ============================================================================
     let next_solution = SolutionState{
@@ -529,10 +497,10 @@ fn advance_internal_rk(
     solver:     &Solver,
     mesh:       &Mesh,
     senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>, 
-                  crossbeam::Sender<(Array<Conserved, Ix2>, Array<Conserved, Ix2>)>,
+                  crossbeam::Sender<(Array<(Conserved, Conserved), Ix2>, Array<(Conserved, Conserved), Ix2>)>,
                   crossbeam::Sender<Vec<Tracer>>),
     receivers:  &(crossbeam::Receiver<NeighborPrimitiveBlock>, 
-                  crossbeam::Receiver<NeighborFluxes>,
+                  crossbeam::Receiver<NeighborFluxStatePairs>,
                   crossbeam::Receiver<NeighborTracerVecs>),
     time:       f64,
     dt:         f64,
@@ -658,8 +626,8 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
                 // Fluxes
                 for (block_data, r) in block_data.iter().zip(flux_recvs.iter())
                 {
-                    let (fx, fy) = r.recv().unwrap();
-                    block_fluxes.insert(block_data.index, (fx.to_shared(), fy.to_shared()));
+                    let (fu_x, fu_y) = r.recv().unwrap();
+                    block_fluxes.insert(block_data.index, (fu_x.to_shared(), fu_y.to_shared()));
                 }
 
                 for (block_data, s) in block_data.iter().zip(flux_sends.iter())
@@ -699,25 +667,6 @@ pub fn rebin_tracers(
         tracers : push_new_tracers(my_tracers, neigh_tracers, &mesh, block_index),
     };
 }
-
-
-
-
-// ============================================================================
-// pub fn hlle_state(pl: Primitive, pr: Primitive, direction: Direction, sound_speed_squared: f64) -> Conserved
-// {
-//     let ul = pl.to_conserved();
-//     let ur = pr.to_conserved();
-//     let fl = pl.flux_vector(direction, sound_speed_squared);
-//     let fr = pr.flux_vector(direction, sound_speed_squared);
-
-//     let (alm, alp) = pl.outer_wavespeeds(direction, sound_speed_squared);
-//     let (arm, arp) = pr.outer_wavespeeds(direction, sound_speed_squared);
-//     let ap = alp.max(arp).max(0.0);
-//     let am = alm.min(arm).min(0.0);
-
-//     (ur * ap - ul * am + fl - fr) / (ap - am)
-// }
 
 
 
