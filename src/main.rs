@@ -199,15 +199,14 @@ fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize
     let make_grid = |n|
     {
         let m = tracers_per_row as usize;
-        let x = (n % m) as f64 * tracer_spacing + x0.0;
-        let y = (n / m) as f64 * tracer_spacing + x0.1;
+        let x = ((n % m) as f64 + 0.5) * tracer_spacing + x0.0;
+        let y = ((n / m) as f64 + 0.5) * tracer_spacing + x0.1;
         ((x, y), n)
     };
-    (0..ntracers).map(make_grid)
-                 .map(|xy_n| tracers::Tracer::new(xy_n.0, get_id(xy_n.1)))
-                 .collect()
+    (0..tracer_per_row * tracers_per_row).map(make_grid)
+                                         .map(|(xy, n)| tracers::Tracer::new(xy, get_id(n)))
+                                         .collect()
 
-    // let get_id = |i| linear_index(block_index, mesh.num_blocks) * ntracers + i;
     // let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.block_length(), get_id(n));
     // return (0..ntracers).map(init).collect();
 }
