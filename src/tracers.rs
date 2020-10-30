@@ -102,11 +102,11 @@ fn verify_indexes(ij: (usize, usize), block_size: usize) -> (usize, usize)
     let (ix, iy) = ij;
     if ix > block_size
     {
-        println!("tracers::verify_cell_index : tracer moved beyond ghost zones (X). Crashing....");
+        panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (X). Check cfl. Crashing....");
     }
     if iy > block_size
     {
-        println!("tracers::verify_cell_index : tracer moved beyond ghost zones (Y). Crashing....");
+        panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (Y). Check cfl. Crashing....");
     }
     (ix, iy)
 }
