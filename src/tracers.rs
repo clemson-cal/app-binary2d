@@ -124,7 +124,7 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
     for (i, block_tracers) in neigh_tracers.iter().flat_map(|r| r.iter()).enumerate()
     {
         // algorithmically unneccesary?
-        if i == 5 // This is my block 
+        if i == 4 // This is my block 
         {
             continue;
         }
