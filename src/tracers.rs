@@ -125,7 +125,7 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
     {
         for t in block_tracers.iter()
         {
-            if (t.x >= x0) & (t.x < x0 + r) & (t.y >= y0) & (t.y < y0 + r) 
+            if (t.x >= x0) && (t.x < x0 + r) && (t.y >= y0) && (t.y < y0 + r) 
             {
                 tracers.push(t.clone());
             }
@@ -139,21 +139,7 @@ pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
-    let mut mine   = Vec::new();    
-    let mut others = Vec::new();    
-
-    for t in tracers.into_iter()
-    {   
-        if (t.x < x0) | (t.x >= x0 + r) | (t.y < y0) | (t.y >= y0 + r) // if left my block
-        {
-            others.push(t);
-        }
-        else // never left
-        {
-            mine.push(t);
-        }
-    }
-    return (mine, others);
+    return tracers.into_iter().partition(|t| t.x >= x0 && t.x < x0 + r && t.y >= y0 && t.y < y0 + r);
 }
 
 pub fn apply_tracer_target(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
