@@ -194,6 +194,7 @@ fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize
     let x0 = mesh.block_start(block_index);
     let tracers_per_row = f64::sqrt(ntracers as f64).ceil();
     let tracer_spacing  = mesh.block_length() / tracers_per_row;
+    let total_tracers   = (tracers_per_row * tracers_per_row) as usize;
     let get_id = |i| linear_index(block_index, mesh.num_blocks) * ntracers + i;
 
     let make_grid = |n|
@@ -203,9 +204,9 @@ fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize
         let y = ((n / m) as f64 + 0.5) * tracer_spacing + x0.1;
         ((x, y), n)
     };
-    (0..tracer_per_row * tracers_per_row).map(make_grid)
-                                         .map(|(xy, n)| tracers::Tracer::new(xy, get_id(n)))
-                                         .collect()
+    (0..total_tracers).map(make_grid)
+                      .map(|(xy, n)| tracers::Tracer::new(xy, get_id(n)))
+                      .collect()
 
     // let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.block_length(), get_id(n));
     // return (0..ntracers).map(init).collect();

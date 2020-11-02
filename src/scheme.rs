@@ -283,25 +283,24 @@ impl Mesh
 
     //  For Tracers
     // ========================================================================
-    pub fn get_cell_index(&self, index: BlockIndex, x: f64, y: f64) -> (usize, usize)
-    {
-        // Should this function warn the user if it's returning an invalid index?
-        //    --> for tracers this will be common if/when they move into ghost zones
-        //        in RK sub-steps (so I removed warning b/c annoying)
-        //        
+    pub fn get_cell_index(&self, index: BlockIndex, x: f64, y: f64) -> (i64, i64)
+    {    
+        // Gives cell index relative to mesh.block_start(block_index).
+        // Can be negative or beyond the bounds of the calling block.
+        
         let (x0, y0) = self.block_start(index);
         let length   = self.block_length();
         let float_i  = (x - x0) / length;
         let float_j  = (y - y0) / length;
 
         let n = self.block_size as f64;
-        let i = (float_i * n) as usize;
-        let j = (float_j * n) as usize;
+        let i = (float_i * n) as i64;
+        let j = (float_j * n) as i64;
 
         return (i, j);
     }
 
-    pub fn face_center_at(&self, index: BlockIndex, i: usize, j: usize, direction: Direction) -> (f64, f64)
+    pub fn face_center_at(&self, index: BlockIndex, i: i64, j: i64, direction: Direction) -> (f64, f64)
     {
         let (x0, y0) = self.block_start(index);
         let dx = self.cell_spacing_x();
@@ -462,7 +461,9 @@ fn advance_internal(
     
     let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
-    let next_tracers = tracers.into_iter().map(|t| t.update(&mesh, block_data.index, &vstar_x, &vstar_y, dt)).collect();
+    let next_tracers = tracers.into_iter()
+                              .map(|t| update_tracers(t, &mesh, block_data.index, &vstar_x, &vstar_y, 1, dt))
+                              .collect();
 
     // ============================================================================
     let du = azip![

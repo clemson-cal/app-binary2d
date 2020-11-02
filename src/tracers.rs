@@ -75,21 +75,13 @@ impl Tracer
         return Tracer{x: rand_x, y: rand_y, id: id};
     }
 
-    pub fn update(&self, mesh: &Mesh, index: crate::BlockIndex, vfield_x: &Array<f64, Ix2>, vfield_y: &Array<f64, Ix2>, dt: f64) -> Tracer
+    pub fn update(&self, v: (f64, f64), dt: f64) ->Tracer
     {
-        let (ix, iy) = verify_indexes(mesh.get_cell_index(index, self.x, self.y), mesh.block_size);
-        let dx = mesh.cell_spacing_x();
-        let dy = mesh.cell_spacing_y();
-        let wx = (self.x - mesh.face_center_at(index, ix, iy, Direction::X).0) / dx; 
-        let wy = (self.y - mesh.face_center_at(index, ix, iy, Direction::Y).1) / dy;
-        let vx = (1.0 - wx) * vfield_x[[ix, iy]] + wx * vfield_x[[ix + 1, iy]];
-        let vy = (1.0 - wy) * vfield_y[[ix, iy]] + wy * vfield_y[[ix, iy + 1]];
-
-        return Tracer{
-            x : self.x + vx * dt,
-            y : self.y + vy * dt,
+        Tracer{
+            x : self.x + v.0 * dt,
+            y : self.y + v.1 * dt,
             id: self.id,
-        };
+        }
     }
 }
 
@@ -97,24 +89,50 @@ impl Tracer
 
 
 // ============================================================================
-fn verify_indexes(ij: (usize, usize), block_size: usize) -> (usize, usize)
-{
-    let (ix, iy) = ij;
-    if ix > block_size
-    {
-        panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (X). Check cfl. Crashing....");
-    }
-    if iy > block_size
-    {
-        panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (Y). Check cfl. Crashing....");
-    }
-    (ix, iy)
-}
+// fn verify_indexes(ij: (usize, usize), block_size: usize) -> (usize, usize)
+// {
+//     let (ix, iy) = ij;
+//     if ix > block_size
+//     {
+//         panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (X). Check cfl. Crashing....");
+//     }
+//     if iy > block_size
+//     {
+//         panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (Y). Check cfl. Crashing....");
+//     }
+//     (ix, iy)
+// }
 
 
 
 
 // ============================================================================
+pub fn update_tracers(
+    tracer: Tracer, 
+    mesh: &Mesh,
+    index: crate::BlockIndex,
+    vfield_x: &Array<f64, Ix2>,
+    vfield_y: &Array<f64, Ix2>,
+    pad_size: usize,
+    dt: f64) -> Tracer
+{   
+    let (i, j) = mesh.get_cell_index(index, tracer.x, tracer.y); // --> telling nominal i,j's
+    let dx = mesh.cell_spacing_x();
+    let dy = mesh.cell_spacing_y();
+    let wx = (tracer.x - mesh.face_center_at(index, i, j, Direction::X).0) / dx; 
+    let wy = (tracer.y - mesh.face_center_at(index, i, j, Direction::Y).1) / dy;
+
+    // Need to get logical ix, iy, jx, jy appropriate for the padded array size
+    // vx.shape = [n + 1, n]
+    // vy.shape = [n, n + 1]
+    let m = (i + pad_size as i64) as usize;
+    let n = (j + pad_size as i64) as usize;
+    let vx = (1.0 - wx) * vfield_x[[m, n]] + wx * vfield_x[[m + 1, n]];
+    let vy = (1.0 - wy) * vfield_y[[m, n]] + wy * vfield_y[[m, n + 1]];
+
+    tracer.update((vx, vy), dt)
+}
+
 pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracerVecs, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
     let r = mesh.block_length();
