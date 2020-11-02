@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 
 // ============================================================================
-type SolutionState          = solution_states::SolutionStateArray<Conserved, Ix2>;
+type HydroState             = solution_states::SolutionStateArray<Conserved, Ix2>;
 pub type BlockIndex         = (usize, usize);
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
 type NeighborFluxStatePairs = ([[ArcArray<(Conserved, Conserved), Ix2>; 3]; 3], [[ArcArray<(Conserved, Conserved), Ix2>; 3]; 3]);
@@ -53,7 +53,7 @@ pub struct State
 #[derive(Clone)]
 pub struct BlockState
 {
-    pub solution: SolutionState,
+    pub solution: HydroState,
     pub tracers : Vec<Tracer>,
 }
 
@@ -473,7 +473,7 @@ fn advance_internal(
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);    
 
     // ============================================================================
-    let next_solution = SolutionState{
+    let next_solution = HydroState{
         time: solution.time + dt,
         iteration: solution.iteration + 1,
         conserved: solution.conserved + du + sources,
@@ -512,7 +512,7 @@ fn advance_internal_rk(
     let rk_recvs = (&receivers.0, &receivers.1); // ...
     let update = |state| advance_internal(state, block_data, solver, mesh, rk_sends, rk_recvs, dt);
 
-    let solution = SolutionState {
+    let solution = HydroState {
         time: time,
         iteration: Rational64::new(0, 1),
         conserved: conserved.clone(),
