@@ -236,7 +236,7 @@ fn create_block_data(mesh: &scheme::Mesh) -> Vec<BlockData>
 fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
 {
     let model = kind_config::Form::new()
-        .item("num_blocks"      , 2      , "Number of blocks per (per direction)")
+        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region")
@@ -247,11 +247,11 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
-        .item("rk_order"        , 3      , "Runge-Kutta time integration order")
+        .item("rk_order"        , 1      , "Runge-Kutta time integration order")
         .item("sink_radius"     , 0.05   , "Radius of the sink region")
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
         .item("softening_length", 0.05   , "Gravitational softening length")
-        .item("tfinal"          , 2.0    , "Time at which to stop the simulation [Orbits]")
+        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .merge_value_map(&app.restart_model_parameters())?
         .merge_string_args(&app.model_parameters)?;
 

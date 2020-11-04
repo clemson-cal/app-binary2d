@@ -1,0 +1,11 @@
+#PBS -N test_job
+#PBS -l select=1:phase=19b:ncpus=48:mem=64gb,walltime=04:00:00
+
+module load rust/1.44.0-gcc/8.3.1
+module load hdf5/1.10.6-gcc/8.3.1-cuda10_2-mpi
+
+export HDF5_DIR=/software/spackages/linux-centos8-x86_64/gcc-8.3.1/hdf5-1.10.6-p5zs3t6ae54z2csnomsus5gcgvi4rt6t
+
+cd /home/zhongth/rust_projects/binary2d
+
+cargo run --release domain_radius=5.0 num_blocks=10 block_size=1000 tfinal=5000.0 --fold=10000 --outdir=data_collection/test_beast_mode
