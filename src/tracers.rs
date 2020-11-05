@@ -83,18 +83,25 @@ pub fn update_tracers(
     vfield_y: &Array<f64, Ix2>,
     pad_size: usize,
     dt: f64) -> Tracer
-{   
-    let (i, j) = mesh.get_cell_index(index, tracer.x, tracer.y); // --> telling nominal i,j's
+{
+    /*
+     * (i, j) := the indexes into a non-extended array of zones, i.e. of shape
+     *           [N, N] where N is the block size.
+     * 
+     * vfield_x := array of x-velocities on the x-directed faces,
+     *             shape [N + 1 + 2 * pad_size, N + 2 * pad_size]
+     *
+     * vfield_y := array of y-velocities on the y-directed faces,
+     *             shape [N + 2 * pad_size, N + 1 + 2 * pad_size]
+     */
+
+    let (i, j) = mesh.get_cell_index(index, tracer.x, tracer.y);
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
     let wx = (tracer.x - mesh.face_center_at(index, i, j, Direction::X).0) / dx; 
     let wy = (tracer.y - mesh.face_center_at(index, i, j, Direction::Y).1) / dy;
-
-    // Need to get logical ix, iy, jx, jy appropriate for the padded array size
-    // vx.shape = [n + 1, n]
-    // vy.shape = [n, n + 1]
-    let m = (i + pad_size as i64) as usize;
-    let n = (j + pad_size as i64) as usize;
+    let m  = (i + pad_size as i64) as usize;
+    let n  = (j + pad_size as i64) as usize;
     let vx = (1.0 - wx) * vfield_x[[m, n]] + wx * vfield_x[[m + 1, n]];
     let vy = (1.0 - wy) * vfield_y[[m, n]] + wy * vfield_y[[m, n + 1]];
 
