@@ -57,22 +57,9 @@ impl Mul<Rational64> for Tracer
 // ============================================================================
 impl Tracer
 {
-    pub fn _default() -> Tracer
-    {
-        return Tracer{x: 0.0, y: 0.0, id: 0};
-    }
-
     pub fn new(xy: (f64, f64), id: usize) -> Tracer
     {
         return Tracer{x: xy.0, y: xy.1, id: id}
-    }
-
-    pub fn randomize(start: (f64, f64), length: f64, id: usize) -> Tracer
-    {
-        let mut rng = rand::thread_rng();
-        let rand_x = rng.gen_range(0.0, length) + start.0;
-        let rand_y = rng.gen_range(0.0, length) + start.1;
-        return Tracer{x: rand_x, y: rand_y, id: id};
     }
 
     pub fn update(&self, v: (f64, f64), dt: f64) ->Tracer
@@ -84,24 +71,6 @@ impl Tracer
         }
     }
 }
-
-
-
-
-// ============================================================================
-// fn verify_indexes(ij: (usize, usize), block_size: usize) -> (usize, usize)
-// {
-//     let (ix, iy) = ij;
-//     if ix > block_size
-//     {
-//         panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (X). Check cfl. Crashing....");
-//     }
-//     if iy > block_size
-//     {
-//         panic!("tracers::verify_cell_index : tracer moved beyond ghost zones (Y). Check cfl. Crashing....");
-//     }
-//     (ix, iy)
-// }
 
 
 
