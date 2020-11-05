@@ -1,4 +1,3 @@
-use rand::Rng;
 use std::ops::{Add, Mul};
 use ndarray::{Array, Ix2};
 use num::rational::Rational64;

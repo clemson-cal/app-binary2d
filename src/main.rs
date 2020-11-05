@@ -207,9 +207,6 @@ fn initial_tracers(block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize
     (0..total_tracers).map(make_grid)
                       .map(|(xy, n)| tracers::Tracer::new(xy, get_id(n)))
                       .collect()
-
-    // let init   = |n| tracers::Tracer::randomize(mesh.block_start(block_index), mesh.block_length(), get_id(n));
-    // return (0..ntracers).map(init).collect();
 }
 
 fn initial_state(mesh: &scheme::Mesh) -> State
