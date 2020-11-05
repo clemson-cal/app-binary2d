@@ -1,3 +1,5 @@
+use std::ops::{Add, Mul};
+use std::sync::Arc;
 use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
@@ -5,10 +7,7 @@ use hydro_iso2d::*;
 use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::solution_states;
 use godunov_core::runge_kutta;
-
 use crate::tracers::*;
-use std::ops::{Add, Mul};
-use std::sync::Arc;
 
 
 
@@ -224,6 +223,11 @@ impl Mesh
         return cartesian_product2(xc, yc);
     }
 
+    /**
+     * @brief      Return an array of x-directed face center coordinates. This function
+     *             effectively calls face_center_at for each of the indexes in a block,
+     *             and returns the resulting array.
+     */
     pub fn face_centers_x(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
     {
         use ndarray_ops::{adjacent_mean, cartesian_product2};
@@ -232,12 +236,35 @@ impl Mesh
         return cartesian_product2(xv, yc);
     }
 
+    /**
+     * @brief      Return an array of y-directed face center coordinates. This function
+     *             effectively calls face_center_at for each of the indexes in a block,
+     *             and returns the resulting array.
+     */
     pub fn face_centers_y(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
     {
         use ndarray_ops::{adjacent_mean, cartesian_product2};
         let (xv, yv) = self.block_vertices(block_index);
         let xc = adjacent_mean(&xv, Axis(0));
         return cartesian_product2(xc, yv);
+    }
+
+    /**
+     * @brief      Return the coordinates of the face centered at the given
+     *             index in either Direction::X or Direction::Y. The x-directed
+     *             face with index i=0 is that the left edge of the block, and
+     *             the face at index i=block_size is at the right edge.
+     */
+    pub fn face_center_at(&self, index: BlockIndex, i: i64, j: i64, direction: Direction) -> (f64, f64)
+    {
+        let (x0, y0) = self.block_start(index);
+        let dx = self.cell_spacing_x();
+        let dy = self.cell_spacing_y();
+
+        match direction {
+            Direction::X => (x0 + (i as f64) * dx, y0 + (j as f64 + 0.5) * dy),
+            Direction::Y => (x0 + (i as f64 + 0.5) * dx, y0 + (j as f64) * dy),
+        }
     }
 
     pub fn cell_spacing_x(&self) -> f64
@@ -281,13 +308,14 @@ impl Mesh
         ]
     }
 
-    //  For Tracers
-    // ========================================================================
+    /**
+     * @brief      Return the cell index at the specified coordinates. The
+     *             coordinates need not belong to this block, so the returned
+     *             indexes can be negative or greater than (or equal to) the
+     *             block size.
+     */
     pub fn get_cell_index(&self, index: BlockIndex, x: f64, y: f64) -> (i64, i64)
-    {    
-        // Gives cell index relative to mesh.block_start(block_index).
-        // Can be negative or beyond the bounds of the calling block.
-        
+    {            
         let (x0, y0) = self.block_start(index);
         let length   = self.block_length();
         let float_i  = (x - x0) / length;
@@ -298,18 +326,6 @@ impl Mesh
         let j = (float_j * n) as i64;
 
         return (i, j);
-    }
-
-    pub fn face_center_at(&self, index: BlockIndex, i: i64, j: i64, direction: Direction) -> (f64, f64)
-    {
-        let (x0, y0) = self.block_start(index);
-        let dx = self.cell_spacing_x();
-        let dy = self.cell_spacing_y();
-
-        match direction {
-            Direction::X => (x0 + (i as f64) * dx, y0 + (j as f64 + 0.5) * dy),
-            Direction::Y => (x0 + (i as f64 + 0.5) * dx, y0 + (j as f64) * dy),
-        }
     }
 }
 
@@ -363,6 +379,30 @@ impl<'a> CellData<'_>
         }
     }
 }
+
+
+
+
+// ============================================================================
+pub fn rebin_tracers(
+    state   : BlockState, 
+    mesh    : &Mesh, 
+    sender  : &crossbeam::Sender<Vec<Tracer>>, 
+    receiver: &crossbeam::Receiver<NeighborTracerVecs>,
+    block_index: BlockIndex) -> BlockState
+{
+    let (my_tracers, their_tracers) = tracers_on_and_off_block(state.tracers, &mesh, block_index);
+
+    sender.send(their_tracers).unwrap();   
+
+    let neigh_tracers = receiver.recv().unwrap();
+
+    return BlockState{
+        solution: state.solution,
+        tracers : push_new_tracers(my_tracers, neigh_tracers, &mesh, block_index),
+    };
+}
+
 
 
 
@@ -450,15 +490,15 @@ fn advance_internal(
     // ========================================================================
     flux_sender.send((fu_x, fu_y)).unwrap();
     let (fu_neigh_x, fu_neigh_y) = flux_receiver.recv().unwrap();
-    let fu_x_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_x, 1, 1, 1, 1);
-    let fu_y_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_y, 1, 1, 1, 1);
+    let fu_x_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_x, 1, 1, 1, 1); // e.g. 103 x 102
+    let fu_y_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_y, 1, 1, 1, 1); // e.g. 102 x 103
 
     // ========================================================================
     let fx_e    = fu_x_e.mapv(|fu| fu.0);
     let fy_e    = fu_y_e.mapv(|fu| fu.0);
     let ustar_x = fu_x_e.mapv(|fu| fu.1);
-    let ustar_y = fu_y_e.mapv(|fu| fu.1);    
-    
+    let ustar_y = fu_y_e.mapv(|fu| fu.1);
+
     let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
     let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
     let next_tracers = tracers.into_iter()
@@ -471,7 +511,7 @@ fn advance_internal(
         fx_e.slice(s![2..-1,1..-1]),
         fy_e.slice(s![1..-1,1..-2]),
         fy_e.slice(s![1..-1,2..-1])]
-    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);    
+    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
     // ============================================================================
     let next_solution = HydroState{
@@ -497,7 +537,7 @@ fn advance_internal_rk(
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
-    senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>, 
+    senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>,
                   crossbeam::Sender<(Array<(Conserved, Conserved), Ix2>, Array<(Conserved, Conserved), Ix2>)>,
                   crossbeam::Sender<Vec<Tracer>>),
     receivers:  &(crossbeam::Receiver<NeighborPrimitiveBlock>, 
@@ -555,7 +595,7 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         let mut flux_sends = Vec::new();
         let mut flux_recvs = Vec::new();
         let mut block_fluxes = HashMap::new();
-        
+
         let mut tracer_sends = Vec::new();
         let mut tracer_recvs = Vec::new();
         let mut block_tracers = HashMap::new();
@@ -568,7 +608,6 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             prim_sends.push(my_prim_s);
             prim_recvs.push(my_prim_r);
 
-            // Fluxes
             // ================================================================
             let (their_flux_s, my_flux_r) = crossbeam::channel::unbounded();
             let (my_flux_s, their_flux_r) = crossbeam::channel::unbounded();
@@ -624,7 +663,6 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
                     .unwrap();                    
                 }
 
-                // Fluxes
                 for (block_data, r) in block_data.iter().zip(flux_recvs.iter())
                 {
                     let (fu_x, fu_y) = r.recv().unwrap();
@@ -644,28 +682,3 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
         }
     }).unwrap();
 }
-
-
-
-
-// ============================================================================
-pub fn rebin_tracers(
-    state   : BlockState, 
-    mesh    : &Mesh, 
-    sender  : &crossbeam::Sender<Vec<Tracer>>, 
-    receiver: &crossbeam::Receiver<NeighborTracerVecs>,
-    block_index: BlockIndex) -> BlockState
-{
-    // Only send tracers I'm not responsible for to the hashmap
-    let (my_tracers, their_tracers) = filter_block_tracers(state.tracers, &mesh, block_index);
-    sender.send(their_tracers).unwrap();   
-    let neigh_tracers = receiver.recv().unwrap();
-
-    return BlockState{
-        solution: state.solution,
-        tracers : push_new_tracers(my_tracers, neigh_tracers, &mesh, block_index),
-    };
-}
-
-
-

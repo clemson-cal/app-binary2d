@@ -108,6 +108,10 @@ pub fn update_tracers(
     tracer.update((vx, vy), dt)
 }
 
+
+
+
+// ============================================================================
 pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracerVecs, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
     let r = mesh.block_length();
@@ -128,12 +132,13 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
     return tracers;
 }
 
-pub fn filter_block_tracers(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
+
+
+
+// ============================================================================
+pub fn tracers_on_and_off_block(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
     return tracers.into_iter().partition(|t| t.x >= x0 && t.x < x0 + r && t.y >= y0 && t.y < y0 + r);
 }
-
-
-
