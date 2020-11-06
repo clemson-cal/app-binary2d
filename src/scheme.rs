@@ -16,7 +16,7 @@ use crate::tracers::*;
 type HydroState             = solution_states::SolutionStateArray<Conserved, Ix2>;
 pub type BlockIndex         = (usize, usize);
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-type NeighborFluxStatePairs = ([[ArcArray<(Conserved, Conserved), Ix2>; 3]; 3], [[ArcArray<(Conserved, Conserved), Ix2>; 3]; 3]);
+type NeighborFluxVeloPairs  = ([[ArcArray<(Conserved, f64), Ix2>; 3]; 3], [[ArcArray<(Conserved, f64), Ix2>; 3]; 3]);
 pub type NeighborTracerVecs = [[Arc<Vec<Tracer>>; 3]; 3];
 
 
@@ -413,9 +413,9 @@ fn advance_internal(
     solver:     &Solver,
     mesh:       &Mesh,
     sender:     (&crossbeam::Sender<Array<Primitive, Ix2>>, 
-                 &crossbeam::Sender<(Array<(Conserved, Conserved), Ix2>, Array<(Conserved, Conserved), Ix2>)>),
+                 &crossbeam::Sender<(Array<(Conserved, f64), Ix2>, Array<(Conserved, f64), Ix2>)>),
     receiver:   (&crossbeam::Receiver<NeighborPrimitiveBlock>, 
-                 &crossbeam::Receiver<NeighborFluxStatePairs>),
+                 &crossbeam::Receiver<NeighborFluxVeloPairs>),
     dt:         f64) -> BlockState
 {
     // ============================================================================
@@ -473,34 +473,37 @@ fn advance_internal(
         gy.slice(s![1..-1, ..  ])]
     .apply_collect(CellData::new);
 
+    // ========================================================================
+    let flux_and_vx = |(f, u): (Conserved, Conserved)| (f, u.momentum_x() / u.density());
+    let flux_and_vy = |(f, u): (Conserved, Conserved)| (f, u.momentum_y() / u.density());
+
     // ============================================================================
-    let fu_x = azip![
+    let fv_x = azip![
         cell_data.slice(s![..-1,1..-1]),
         cell_data.slice(s![ 1..,1..-1]),
         xf]
-    .apply_collect(|l, r, f| intercell_flux_state(l, r, f, X));
+    .apply_collect(|l, r, f| flux_and_vx(intercell_flux_state(l, r, f, X)));
 
     // ============================================================================
-    let fu_y = azip![
+    let fv_y = azip![
         cell_data.slice(s![1..-1,..-1]),
         cell_data.slice(s![1..-1, 1..]),
         yf]
-    .apply_collect(|l, r, f| intercell_flux_state(l, r, f, Y));
+    .apply_collect(|l, r, f| flux_and_vy(intercell_flux_state(l, r, f, Y)));
 
     // ========================================================================
-    flux_sender.send((fu_x, fu_y)).unwrap();
-    let (fu_neigh_x, fu_neigh_y) = flux_receiver.recv().unwrap();
-    let fu_x_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_x, 1, 1, 1, 1); // e.g. 103 x 102
-    let fu_y_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fu_neigh_y, 1, 1, 1, 1); // e.g. 102 x 103
+    flux_sender.send((fv_x, fv_y)).unwrap();
+    let (fv_neigh_x, fv_neigh_y) = flux_receiver.recv().unwrap();
+    let fv_x_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fv_neigh_x, 1, 1, 1, 1); // e.g. 103 x 102
+    let fv_y_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fv_neigh_y, 1, 1, 1, 1); // e.g. 102 x 103
 
     // ========================================================================
-    let fx_e    = fu_x_e.mapv(|fu| fu.0);
-    let fy_e    = fu_y_e.mapv(|fu| fu.0);
-    let ustar_x = fu_x_e.mapv(|fu| fu.1);
-    let ustar_y = fu_y_e.mapv(|fu| fu.1);
+    let fx_e    = fv_x_e.mapv(|fv| fv.0);
+    let fy_e    = fv_y_e.mapv(|fv| fv.0);
+    let vstar_x = fv_x_e.mapv(|fv| fv.1);
+    let vstar_y = fv_y_e.mapv(|fv| fv.1);
 
-    let vstar_x = ustar_x.mapv(|u| u.momentum_x() / u.density()); 
-    let vstar_y = ustar_y.mapv(|u| u.momentum_y() / u.density());
+    // ========================================================================
     let next_tracers = tracers.into_iter()
                               .map(|t| update_tracers(t, &mesh, block_data.index, &vstar_x, &vstar_y, 1, dt))
                               .collect();
@@ -538,10 +541,10 @@ fn advance_internal_rk(
     solver:     &Solver,
     mesh:       &Mesh,
     senders:    &(crossbeam::Sender<Array<Primitive, Ix2>>,
-                  crossbeam::Sender<(Array<(Conserved, Conserved), Ix2>, Array<(Conserved, Conserved), Ix2>)>,
+                  crossbeam::Sender<(Array<(Conserved, f64), Ix2>, Array<(Conserved, f64), Ix2>)>,
                   crossbeam::Sender<Vec<Tracer>>),
     receivers:  &(crossbeam::Receiver<NeighborPrimitiveBlock>, 
-                  crossbeam::Receiver<NeighborFluxStatePairs>,
+                  crossbeam::Receiver<NeighborFluxVeloPairs>,
                   crossbeam::Receiver<NeighborTracerVecs>),
     time:       f64,
     dt:         f64,
