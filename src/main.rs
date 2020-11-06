@@ -106,9 +106,6 @@ pub struct Tasks
     pub checkpoint_count    : usize,
     pub call_count_this_run : usize,
     pub tasks_last_performed: Instant,
-    //
-    pub tracershot_next_time: f64,
-    pub tracershot_count    : usize,
 }
 
 impl Tasks
@@ -128,21 +125,6 @@ impl Tasks
         io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
     }
 
-    fn write_tracer_snapshot(&mut self, state: &State, block_data: &Vec<crate::BlockData>, model: &kind_config::Form, app: &App)
-    {
-        let tracer_out_interval: f64 = model.get("toi").into();
-        let outdir = app.output_directory();
-        let fname  = format!("{}/tracers.{:04}.h5", outdir, self.tracershot_count);
-
-        std::fs::create_dir_all(outdir).unwrap();
-
-        self.tracershot_count     += 1;
-        self.tracershot_next_time += tracer_out_interval;
-
-        println!("   write tracers {}", fname);
-        io::write_tracer_snapshot(&fname, &state, &block_data).expect("HDF5 tracer snapshot failed");
-    }
-
     fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
@@ -157,10 +139,6 @@ impl Tasks
         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
             self.write_checkpoint(state, block_data, model, app);
-        }
-        if state.time / ORBITAL_PERIOD >= self.tracershot_next_time
-        {
-            self.write_tracer_snapshot(state, block_data, model, app);
         }
 
         self.call_count_this_run += 1;
@@ -226,9 +204,6 @@ fn initial_tasks() -> Tasks
         checkpoint_count: 0,
         call_count_this_run: 0,
         tasks_last_performed: Instant::now(),
-        //
-        tracershot_next_time: 0.0,
-        tracershot_count: 0,
     }
 }
 
