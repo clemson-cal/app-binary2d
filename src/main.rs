@@ -274,6 +274,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         .item("cfl"             , 0.4    , "CFL parameter")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
         .item("toi"             , 1.0    , "Tracer output interval [Orbits]")
+        .item("tor"             , 1.0    , "Tracer output ratio [1 in every 'tor' output to tracer snapshots]")
         .item("domain_radius"   , 24.0   , "Half-size of the domain")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
