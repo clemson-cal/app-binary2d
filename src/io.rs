@@ -29,7 +29,9 @@ pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
 {
     let file = File::open(filename)?;
     let cons = file.group("conserved")?;
+    let trcr = file.group("tracers")?;
     let mut conserved = Vec::new();
+    let mut tracers   = Vec::new();
 
     for key in cons.member_names()?
     {
@@ -40,9 +42,14 @@ pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
         conserved.push(u);
     }
 
+    for key in trcr.member_names()?
+    {
+        let t = trcr.dataset(&key)?.read_raw::<Tracer>()?;
+        tracers.push(t);
+    }
+
     let time      = file.dataset("time")     ?.read_scalar::<f64>()?;
     let iteration = file.dataset("iteration")?.read_scalar::<usize>()?;
-    let tracers : Vec<Vec<crate::tracers::Tracer>> = Vec::new();
 
     let result = crate::State{
         conserved: conserved,
