@@ -106,6 +106,9 @@ pub struct Tasks
     pub checkpoint_count    : usize,
     pub call_count_this_run : usize,
     pub tasks_last_performed: Instant,
+    //
+    pub snapshot_next_time: f64,
+    pub snapshot_count    : usize,
 }
 
 impl Tasks
@@ -125,6 +128,21 @@ impl Tasks
         io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
     }
 
+    fn write_snapshot(&mut self, state: &State, model: &kind_config::Form, app: &App)
+    {
+        let snapshot_interval: f64 = model.get("ssi").into();
+        let outdir = app.output_directory();
+        let fname  = format!("{}/snap.{:04}.h5", outdir, self.snapshot_count);
+
+        std::fs::create_dir_all(outdir).unwrap();
+
+        self.snapshot_count += 1;
+        self.snapshot_next_time += snapshot_interval;
+
+        println!("write snapshot {}", fname);
+        io::write_snapshot(&fname, &state, &model).expect("HDF5 write failed");
+    }
+
     fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
@@ -139,6 +157,10 @@ impl Tasks
         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
             self.write_checkpoint(state, block_data, model, app);
+        }
+        if state.time / ORBITAL_PERIOD >= self.snapshot_next_time
+        {
+            self.write_snapshot(state, model, app);
         }
 
         self.call_count_this_run += 1;
@@ -204,6 +226,9 @@ fn initial_tasks() -> Tasks
         checkpoint_count: 0,
         call_count_this_run: 0,
         tasks_last_performed: Instant::now(),
+        //
+        snapshot_next_time: 0.0,
+        snapshot_count: 0,
     }
 }
 
@@ -273,7 +298,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("cfl"             , 0.4    , "CFL parameter")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
-        .item("toi"             , 1.0    , "Tracer output interval [Orbits]")
+        .item("ssi"             , 1.0    , "Snapshot interval [Orbits]")
         .item("tor"             , 1.0    , "Tracer output ratio [1 in every 'tor' output to tracer snapshots]")
         .item("domain_radius"   , 24.0   , "Half-size of the domain")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
