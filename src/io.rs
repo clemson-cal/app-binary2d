@@ -5,6 +5,7 @@ use crate::tracers::Tracer;
 
 
 
+
 // ============================================================================
 fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<crate::BlockData>) -> Result<(), hdf5::Error>
 {
@@ -113,17 +114,16 @@ pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value
 // ============================================================================
 pub fn write_tracer_snapshot(file: &hdf5::Group, tracers: &Vec<Vec<crate::tracers::Tracer>>, tor: usize) -> Result<(), hdf5::Error>
 {
-    let mut subset: Vec<crate::tracers::Tracer> = Vec::new();
-    for block_tracers in tracers.iter()
-    {
-        for t in block_tracers.iter().step_by(tor)
-        {
-            subset.push(t.clone());
-        }
-    }
+    let subset: Vec<crate::tracers::Tracer> = tracers
+        .iter()
+        .map(|v| v.iter().filter(|t| t.id % tor == 0))
+        .flatten()
+        .map(|t| t.clone())
+        .collect();
     file.new_dataset::<crate::tracers::Tracer>().create("tracers", subset.len())?.write(&subset)?;
     Ok(())
 }
+
 
 
 
@@ -152,6 +152,3 @@ pub fn write_snapshot(filename: &str, state: &crate::State, model: &kind_config:
 
     Ok(())
 }
-
-
-
