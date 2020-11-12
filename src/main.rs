@@ -21,6 +21,7 @@ use hydro_iso2d::*;
 
 mod io;
 mod scheme;
+mod scheme_v2;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
