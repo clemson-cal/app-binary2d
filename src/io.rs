@@ -69,8 +69,8 @@ fn write_tasks(group: &hdf5::Group, tasks: &crate::Tasks) -> Result<(), hdf5::Er
 {
     group.new_dataset::<f64>  ().create("checkpoint_next_time", ())?.write_scalar(&tasks.checkpoint_next_time)?;
     group.new_dataset::<usize>().create("checkpoint_count"    , ())?.write_scalar(&tasks.checkpoint_count)?;
-    group.new_dataset::<f64>  ().create("snapshot_next_time"  , ())?.write_scalar(&tasks.snapshot_next_time)?;
-    group.new_dataset::<usize>().create("snapshot_count"      , ())?.write_scalar(&tasks.snapshot_count)?;
+    group.new_dataset::<f64>  ().create("tracer_output_next_time"  , ())?.write_scalar(&tasks.tracer_output_next_time)?;
+    group.new_dataset::<usize>().create("tracer_output_count"      , ())?.write_scalar(&tasks.tracer_output_count)?;
     Ok(())
 }
 
@@ -85,8 +85,8 @@ pub fn read_tasks(filename: &str) -> Result<crate::Tasks, hdf5::Error>
         call_count_this_run: 0,
         tasks_last_performed: Instant::now(),
         //
-        snapshot_next_time: group.dataset("snapshot_next_time")?.read_scalar::<f64>()?,
-        snapshot_count:     group.dataset("snapshot_count")    ?.read_scalar::<usize>()?,
+        tracer_output_next_time: group.dataset("tracer_output_next_time")?.read_scalar::<f64>()?,
+        tracer_output_count:     group.dataset("tracer_output_count")    ?.read_scalar::<usize>()?,
     };
     Ok(result)
 }
@@ -112,7 +112,7 @@ pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value
 
 
 // ============================================================================
-pub fn write_tracer_snapshot(file: &hdf5::Group, tracers: &Vec<Vec<crate::tracers::Tracer>>, tor: usize) -> Result<(), hdf5::Error>
+pub fn write_tracer_subset(file: &hdf5::Group, tracers: &Vec<Vec<crate::tracers::Tracer>>, tor: usize) -> Result<(), hdf5::Error>
 {
     let subset: Vec<crate::tracers::Tracer> = tracers
         .iter()
@@ -141,12 +141,12 @@ pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<c
     Ok(())
 }
 
-pub fn write_snapshot(filename: &str, state: &crate::State, model: &kind_config::Form) -> Result<(), hdf5::Error>
+pub fn write_tracer_output(filename: &str, state: &crate::State, model: &kind_config::Form) -> Result<(), hdf5::Error>
 {
     let file = File::create(filename)?;
     let tracer_output_ratio: f64 = model.get("tor").into();
 
-    write_tracer_snapshot(&file, &state.tracers, tracer_output_ratio as usize)?;
+    write_tracer_subset(&file, &state.tracers, tracer_output_ratio as usize)?;
     file.new_dataset::<i64>().create("iteration", ())?.write_scalar(&state.iteration.to_integer())?;
     file.new_dataset::<f64>().create("time"     , ())?.write_scalar(&state.time)?;
 
