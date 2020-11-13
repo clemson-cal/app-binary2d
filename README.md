@@ -13,7 +13,7 @@ python plotting script is included.
 
 ## Using the suite
 The suite has many parameters, and they are listed below with a description. There are two types
-of parameters: arguments and options. Arguments have the syntax "[argument name]=[value]", 
+of parameters: model parameters and flags. Arguments have the syntax "[argument name]=[value]", 
 and options are used with "--[option]=[value]". Both kinds are used on the command line or in 
 your pbs batch job script. An example of command is:
 
@@ -21,7 +21,7 @@ cargo run --release num_blocks=20 domain_radius=5.0 --outdir=data/temp --fold=10
 
 --------------------------------------------------------------------------------------------------------------
 
-Arguments, [default value]:
+Model Parameters, [default value]:
 
 num_blocks, 1: Number of blocks per (per direction)
 block_size, 100: Number of grid cells (per direction, per block)
@@ -43,7 +43,8 @@ tfinal, 0.0: Time at which to stop the simulation [Orbits]
 --------------------------------------------------------------------------------------------------------------
 --------------------------------------------------------------------------------------------------------------
 
-Options, [default value]:
+Flags, [default value]:
+
 outdir, "data": path of output directory. The root of the of the directory will be the project directory.
 fold, 1: Number of iterations between side effects. 
 restart: Restart file or directory [use latest checkpoint if directory]
