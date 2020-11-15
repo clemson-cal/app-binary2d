@@ -48,12 +48,12 @@ trait Hydrodynamics
     fn source_terms(
         &self,
         solver: &Solver,
-        conserved: Conserved,
-        background_conserved: Conserved,
+        conserved: Self::Conserved,
+        background_conserved: Self::Conserved,
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &OrbitalState) -> [Conserved; 5];
+        two_body_state: &OrbitalState) -> [Self::Conserved; 5];
 }
 
 
@@ -64,9 +64,6 @@ struct TwoDimensionalIsothermalHydrodynamics;
 
 
 
-use hydro_iso2d::Conserved;
-use hydro_iso2d::Primitive;
-
 impl Hydrodynamics for TwoDimensionalIsothermalHydrodynamics
 {
     type Conserved = hydro_iso2d::Conserved;
@@ -75,13 +72,15 @@ impl Hydrodynamics for TwoDimensionalIsothermalHydrodynamics
     fn source_terms(
         &self,
         solver: &Solver,
-        conserved: Conserved,
-        background_conserved: Conserved,
+        conserved: Self::Conserved,
+        background_conserved: Self::Conserved,
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &kepler_two_body::OrbitalState) -> [Conserved; 5]
+        two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
     {
+        use hydro_iso2d::Conserved;
+
         let p1 = two_body_state.0;
         let p2 = two_body_state.1;
 
@@ -142,16 +141,16 @@ impl Solver
     fn source_terms<H: Hydrodynamics>(
         &self,
         hydrodynamics: H,
-        conserved: Conserved,
-        background_conserved: Conserved,
+        conserved: H::Conserved,
+        background_conserved: H::Conserved,
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &OrbitalState) -> [Conserved; 5]
+        two_body_state: &OrbitalState) -> [H::Conserved; 5]
     {
         hydrodynamics.source_terms(self, conserved, background_conserved, x, y, dt, two_body_state)
     }
-    
+
     fn sink_kernel(&self, dx: f64, dy: f64) -> f64
     {
         let r2 = dx * dx + dy * dy;
