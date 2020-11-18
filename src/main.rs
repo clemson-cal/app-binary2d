@@ -45,6 +45,9 @@ struct App
 
     #[clap(long, default_value="1", about="Number of worker threads to use")]
     threads: usize,
+
+    #[clap(long, about="Whether to use the old (message passing) advance scheme")]
+    v1: bool,
 }
 
 impl App
@@ -191,10 +194,10 @@ fn initial_tasks() -> Tasks
 fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
 {
     BlockData{
-        cell_centers:    mesh.cell_centers(block_index),
-        face_centers_x:  mesh.face_centers_x(block_index),
-        face_centers_y:  mesh.face_centers_y(block_index),
-        initial_conserved: initial_conserved(block_index, &mesh),
+        cell_centers:    mesh.cell_centers(block_index).to_shared(),
+        face_centers_x:  mesh.face_centers_x(block_index).to_shared(),
+        face_centers_y:  mesh.face_centers_y(block_index).to_shared(),
+        initial_conserved: initial_conserved(block_index, &mesh).to_shared(),
         index: block_index,
     }
 }
@@ -281,8 +284,11 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        // scheme::advance(&mut state, &block_data, &mesh, &solver, dt, app.fold);
-        state = scheme::advance_v2(state, &block_data, &mesh, &solver, dt, app.fold, app.threads);
+        if app.v1 {
+            scheme::advance(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        } else {
+            state = scheme::advance_v2(state, &block_data, &mesh, &solver, dt, app.fold, app.threads);
+        }
         tasks.perform(&state, &block_data, &mesh, &model, &app);
     }
     Ok(())

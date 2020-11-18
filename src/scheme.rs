@@ -20,13 +20,14 @@ pub type BlockIndex = (usize, usize);
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct BlockData
 {
-    pub initial_conserved: Array<Conserved, Ix2>,
-    pub cell_centers:   Array<(f64, f64), Ix2>,
-    pub face_centers_x: Array<(f64, f64), Ix2>,
-    pub face_centers_y: Array<(f64, f64), Ix2>,
-    pub index:          BlockIndex,
+    pub initial_conserved: ArcArray<Conserved, Ix2>,
+    pub cell_centers:      ArcArray<(f64, f64), Ix2>,
+    pub face_centers_x:    ArcArray<(f64, f64), Ix2>,
+    pub face_centers_y:    ArcArray<(f64, f64), Ix2>,
+    pub index:             BlockIndex,
 }
 
 
@@ -44,6 +45,7 @@ pub struct State
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct Solver
 {
     pub buffer_rate: f64,
@@ -473,7 +475,6 @@ use futures::future::join_all;
 
 
 
-#[allow(unused)]
 async fn join_3by3<T: Clone + Future>(a: [[T; 3]; 3]) -> [[T::Output; 3]; 3]
 {
     [
@@ -486,6 +487,7 @@ async fn join_3by3<T: Clone + Future>(a: [[T; 3]; 3]) -> [[T::Output; 3]; 3]
 
 
 
+// ============================================================================
 pub fn advance_v2(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize, threads: usize) -> State {
     use std::collections::HashMap;
     use tokio::runtime::Builder;
@@ -507,29 +509,97 @@ pub fn advance_v2(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver
                 u2.clone().mapv(Conserved::to_primitive)
             };
             (block_data.index, (u1.clone(), runtime.spawn(uf).map(|f| f.unwrap()).shared()))
-            // (block_data.index, (u1.clone(), uf.shared()))
         })
         .collect());
 
+    let time = state.time;
+
     let updated_cons = block_data.iter().map(|block| {
-        let index = block.index;
-        let mesh = mesh.clone();
-        let cons_prim = cons_prim.clone();
+        let mesh              = mesh.clone();
+        let solver            = solver.clone();
+        let cons_prim         = cons_prim.clone();
+        let block             = block.clone();
 
         let u1 = async move {
-            let pn = join_3by3(mesh.neighbor_block_indexes(index).map(|i| cons_prim[i].1.clone())).await;
+            let uc = &cons_prim[&block.index].0;
+
+            // ============================================================================
+            use ndarray::{s, azip};
+            use ndarray_ops::{map_stencil3};
+            use godunov_core::piecewise_linear::plm_gradient3;
+            use Direction::{X, Y};
+
+            // ============================================================================
+            let dx = mesh.cell_spacing_x();
+            let dy = mesh.cell_spacing_y();
+            let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+            // ============================================================================
+            let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
+            {
+                let cs2 = solver.sound_speed_squared(f, &two_body_state);
+                let pl = *l.pc + *l.gradient_field(axis) * 0.5;
+                let pr = *r.pc - *r.gradient_field(axis) * 0.5;
+                let nu = solver.nu;
+                let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
+                let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
+                riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
+            };
+
+            let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+            // ============================================================================
+            let sources = azip![
+                uc.as_ref(),
+                &block.initial_conserved,
+                &block.cell_centers]
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+
+            let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| cons_prim[i].1.clone())).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let uc = &cons_prim[&index].0;
-            uc.as_ref().clone()
+            let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+            let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+            let xf = block.face_centers_x;
+            let yf = block.face_centers_y;
+
+            // ============================================================================
+            let cell_data = azip![
+                pe.slice(s![1..-1,1..-1]),
+                gx.slice(s![ ..  ,1..-1]),
+                gy.slice(s![1..-1, ..  ])]
+            .apply_collect(CellData::new);
+
+            // ============================================================================
+            let fx = azip![
+                cell_data.slice(s![..-1,1..-1]),
+                cell_data.slice(s![ 1..,1..-1]),
+                &xf]
+            .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
+
+            // ============================================================================
+            let fy = azip![
+                cell_data.slice(s![1..-1,..-1]),
+                cell_data.slice(s![1..-1, 1..]),
+                &yf]
+            .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+
+            // ============================================================================
+            let du = azip![
+                fx.slice(s![..-1,..]),
+                fx.slice(s![ 1..,..]),
+                fy.slice(s![..,..-1]),
+                fy.slice(s![.., 1..])]
+            .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+            uc.as_ref() + &du
         };
         runtime.spawn(u1).map(|f| f.unwrap())
-        // u1
     });
     let updated_cons = runtime.block_on(join_all(updated_cons));
 
     State {
         time: state.time + dt,
-        iteration: state.iteration,
+        iteration: state.iteration + 1,
         conserved: updated_cons,
     }
 }
