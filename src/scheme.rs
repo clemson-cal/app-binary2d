@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
@@ -212,11 +210,6 @@ impl Mesh
     pub fn total_zones(&self) -> usize
     {
         self.num_blocks * self.num_blocks * self.block_size * self.block_size
-    }
-
-    pub fn zones_per_block(&self) -> usize
-    {
-        self.block_size * self.block_size
     }
 
     pub fn block_indexes(&self) -> Vec<BlockIndex>
@@ -469,31 +462,23 @@ pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &M
 
 
 
-use std::future::Future;
-use futures::future::join_all;
-
-
-
-
-async fn join_3by3<T: Clone + Future>(a: [[T; 3]; 3]) -> [[T::Output; 3]; 3]
-{
-    [
-        [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
-        [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
-        [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
-    ]
-}
-
-
-
-
 // ============================================================================
 pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
 {
-    use std::collections::HashMap;
-    use tokio::runtime::Builder;
-    use futures::future::FutureExt;
     use std::sync::Arc;
+    use std::future::Future;
+    use std::collections::HashMap;
+    use futures::future::FutureExt;
+    use futures::future::join_all;
+
+    async fn join_3by3<T: Clone + Future>(a: [[T; 3]; 3]) -> [[T::Output; 3]; 3]
+    {
+        [
+            [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
+            [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
+            [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
+        ]
+    }
 
     let cons_prim: Arc<HashMap<_, _>> = Arc::new(block_data
         .iter()
@@ -513,8 +498,8 @@ pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, sol
     let updated_cons = block_data.iter().map(|block| {
         let mesh              = mesh.clone();
         let solver            = solver.clone();
-        let cons_prim         = cons_prim.clone();
         let block             = block.clone();
+        let cons_prim         = cons_prim.clone();
 
         let u1 = async move {
             let uc = &cons_prim[&block.index].0;
@@ -587,7 +572,7 @@ pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, sol
                 fy.slice(s![.., 1..])]
             .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            uc.as_ref() + &du
+            uc.as_ref() + &du + &sources
         };
         runtime.spawn(u1).map(|f| f.unwrap())
     });
