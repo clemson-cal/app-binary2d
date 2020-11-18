@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
@@ -139,6 +141,7 @@ impl Solver
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct Mesh
 {
     pub num_blocks: usize,
@@ -414,7 +417,7 @@ fn advance_internal_rk(
 
 
 // ============================================================================
-pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
+pub fn advance(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
 {
     crossbeam::scope(|scope|
     {
@@ -459,4 +462,74 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             state.time += dt;
         }
     }).unwrap();
+}
+
+
+
+
+use std::future::Future;
+use futures::future::join_all;
+
+
+
+
+#[allow(unused)]
+async fn join_3by3<T: Clone + Future>(a: [[T; 3]; 3]) -> [[T::Output; 3]; 3]
+{
+    [
+        [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
+        [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
+        [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
+    ]
+}
+
+
+
+
+pub fn advance_v2(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize, threads: usize) -> State {
+    use std::collections::HashMap;
+    use tokio::runtime::Builder;
+    use futures::future::FutureExt;
+    use std::sync::Arc;
+
+    let runtime = Builder::new_multi_thread()
+            .worker_threads(threads)
+            .build()
+            .unwrap();
+
+    let cons_prim: Arc<HashMap<_, _>> = Arc::new(block_data
+        .iter()
+        .zip(state.conserved)
+        .map(|(block_data, conserved)| {
+            let u1 = Arc::new(conserved);
+            let u2 = u1.clone();
+            let uf = async move {
+                u2.clone().mapv(Conserved::to_primitive)
+            };
+            (block_data.index, (u1.clone(), runtime.spawn(uf).map(|f| f.unwrap()).shared()))
+            // (block_data.index, (u1.clone(), uf.shared()))
+        })
+        .collect());
+
+    let updated_cons = block_data.iter().map(|block| {
+        let index = block.index;
+        let mesh = mesh.clone();
+        let cons_prim = cons_prim.clone();
+
+        let u1 = async move {
+            let pn = join_3by3(mesh.neighbor_block_indexes(index).map(|i| cons_prim[i].1.clone())).await;
+            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
+            let uc = &cons_prim[&index].0;
+            uc.as_ref().clone()
+        };
+        runtime.spawn(u1).map(|f| f.unwrap())
+        // u1
+    });
+    let updated_cons = runtime.block_on(join_all(updated_cons));
+
+    State {
+        time: state.time + dt,
+        iteration: state.iteration,
+        conserved: updated_cons,
+    }
 }

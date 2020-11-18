@@ -42,6 +42,9 @@ struct App
 
     #[clap(long, default_value="1", about="Number of iterations between side effects")]
     fold: usize,
+
+    #[clap(long, default_value="1", about="Number of worker threads to use")]
+    threads: usize,
 }
 
 impl App
@@ -127,13 +130,14 @@ impl Tasks
     fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
-        let kzps_per_cu = (mesh.zones_per_block() as f64) * (app.fold as f64) * 1e-3 / elapsed;
-        let kzps        = (mesh.total_zones()     as f64) * (app.fold as f64) * 1e-3 / elapsed;
+        let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
+        let mzps_per_cu = mzps / app.threads as f64;
+
         self.tasks_last_performed = Instant::now();
 
         if self.call_count_this_run > 0
         {
-            println!("[{:05}] orbit={:.3} kzps={:.0} (per cu={:.0})", state.iteration, state.time / ORBITAL_PERIOD, kzps, kzps_per_cu);
+            println!("[{:05}] orbit={:.3} Mzps={:.1} (per cu={:.1})", state.iteration, state.time / ORBITAL_PERIOD, mzps, mzps_per_cu);
         }
         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
@@ -277,7 +281,8 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme::advance(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        // scheme::advance(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        state = scheme::advance_v2(state, &block_data, &mesh, &solver, dt, app.fold, app.threads);
         tasks.perform(&state, &block_data, &mesh, &model, &app);
     }
     Ok(())
