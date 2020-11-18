@@ -48,6 +48,7 @@ dependencies = [
  "ndarray",
  "ndarray-ops",
  "num",
+ "num_cpus",
  "tokio",
 ]
 

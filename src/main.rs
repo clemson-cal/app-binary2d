@@ -46,8 +46,8 @@ struct App
     #[clap(long, default_value="1", about="Number of worker threads to use")]
     threads: usize,
 
-    #[clap(long, about="Whether to use the old (message passing) advance scheme")]
-    v1: bool,
+    #[clap(long, about="Whether to parallelize on the tokio runtime [default: message passing]")]
+    tokio: bool,
 }
 
 impl App
@@ -99,6 +99,15 @@ impl App
             HashMap::new()
         }
     }
+
+    fn compute_units(&self, num_blocks: usize) -> usize
+    {
+        if self.tokio {
+            num_cpus::get_physical().min(self.threads)
+        } else {
+            num_cpus::get_physical().min(num_blocks)
+        }
+    }
 }
 
 
@@ -134,7 +143,7 @@ impl Tasks
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
-        let mzps_per_cu = mzps / app.threads as f64;
+        let mzps_per_cu = mzps / app.compute_units(block_data.len()) as f64;
 
         self.tasks_last_performed = Instant::now();
 
@@ -276,18 +285,26 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
     }
     println!();
     println!("\trestart file            = {}",      app.restart_file().unwrap_or("none".to_string()));
+    println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
     tasks.perform(&state, &block_data, &mesh, &model, &app);
 
+    use tokio::runtime::Builder;
+
+    let runtime = Builder::new_multi_thread()
+            .worker_threads(app.threads)
+            .build()
+            .unwrap();
+
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        if app.v1 {
-            scheme::advance(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        if app.tokio {
+            state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, &runtime);
         } else {
-            state = scheme::advance_v2(state, &block_data, &mesh, &solver, dt, app.fold, app.threads);
+            scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &block_data, &mesh, &model, &app);
     }

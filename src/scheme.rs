@@ -419,7 +419,7 @@ fn advance_internal_rk(
 
 
 // ============================================================================
-pub fn advance(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
+pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
 {
     crossbeam::scope(|scope|
     {
@@ -488,16 +488,12 @@ async fn join_3by3<T: Clone + Future>(a: [[T; 3]; 3]) -> [[T::Output; 3]; 3]
 
 
 // ============================================================================
-pub fn advance_v2(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize, threads: usize) -> State {
+pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
+{
     use std::collections::HashMap;
     use tokio::runtime::Builder;
     use futures::future::FutureExt;
     use std::sync::Arc;
-
-    let runtime = Builder::new_multi_thread()
-            .worker_threads(threads)
-            .build()
-            .unwrap();
 
     let cons_prim: Arc<HashMap<_, _>> = Arc::new(block_data
         .iter()
@@ -595,11 +591,10 @@ pub fn advance_v2(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver
         };
         runtime.spawn(u1).map(|f| f.unwrap())
     });
-    let updated_cons = runtime.block_on(join_all(updated_cons));
 
     State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: updated_cons,
+        conserved: runtime.block_on(join_all(updated_cons)),
     }
 }
