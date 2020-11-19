@@ -640,3 +640,32 @@ pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh,
     }
     state
 }
+
+
+
+
+// ============================================================================
+impl State {
+    fn weighted_average(self, br: Rational64, other: &State, _runtime: &tokio::runtime::Runtime) -> State
+    {
+        let bf = br.to_f64().unwrap();
+
+        State{
+            time:      self.time      + other.time      * bf,
+            iteration: self.iteration + other.iteration * br,
+            conserved: self.conserved.into_iter().zip(&other.conserved).map(|(u1, u2)| u1 + u2 * bf).collect(),
+        }
+    }
+}
+
+fn _advance_rk3<Update: Fn(State) -> State>(state: State, update: Update, runtime: &tokio::runtime::Runtime) -> State
+{
+    let b1 = Rational64::new(3, 4);
+    let b2 = Rational64::new(1, 3);
+
+    let s1 = state.clone();
+    let s1 = update(s1);
+    let s1 = update(s1).weighted_average(b1, &state, runtime);
+    let s1 = update(s1).weighted_average(b2, &state, runtime);
+    s1
+}
