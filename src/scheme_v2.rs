@@ -20,24 +20,37 @@ pub type BlockIndex = (usize, usize);
 
 
 // ============================================================================
-pub struct BlockData<Conserved>
+pub trait Conserved: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Copy {}
+pub trait Primitive: Copy {}
+
+impl Conserved for hydro_iso2d::Conserved {}
+impl Conserved for hydro_euler::euler_2d::Conserved {}
+
+impl Primitive for hydro_iso2d::Primitive {}
+impl Primitive for hydro_euler::euler_2d::Primitive {}
+
+
+
+
+// ============================================================================
+pub struct BlockData<C: Conserved>
 {
-    pub initial_conserved: Array<Conserved, Ix2>,
-    pub cell_centers:   Array<(f64, f64), Ix2>,
-    pub face_centers_x: Array<(f64, f64), Ix2>,
-    pub face_centers_y: Array<(f64, f64), Ix2>,
-    pub index:          BlockIndex,
+    pub initial_conserved: Array<C, Ix2>,
+    pub cell_centers:      Array<(f64, f64), Ix2>,
+    pub face_centers_x:    Array<(f64, f64), Ix2>,
+    pub face_centers_y:    Array<(f64, f64), Ix2>,
+    pub index:             BlockIndex,
 }
 
 
 
 
 // ============================================================================
-pub struct State<Conserved>
+pub struct State<C: Conserved>
 {
     pub time: f64,
     pub iteration: Rational64,
-    pub conserved: Vec<Array<Conserved, Ix2>>,
+    pub conserved: Vec<Array<C, Ix2>>,
 }
 
 
@@ -45,14 +58,14 @@ pub struct State<Conserved>
 
 // ============================================================================
 #[derive(Copy, Clone)]
-pub struct CellData<'a, P>
+pub struct CellData<'a, P: Primitive>
 {
     pc: &'a P,
     gx: &'a P,
     gy: &'a P,
 }
 
-impl<'a, P> CellData<'_, P>
+impl<'a, P: Primitive> CellData<'_, P>
 {
     fn new(pc: &'a P, gx: &'a P, gy: &'a P) -> CellData<'a, P>
     {
@@ -226,8 +239,8 @@ impl Mesh
 // ============================================================================
 pub trait Hydrodynamics
 {
-    type Conserved: Add<Output=Self::Conserved> + Sub<Output=Self::Conserved> + Mul<f64, Output=Self::Conserved> + Div<f64, Output=Self::Conserved> + Copy;
-    type Primitive: Copy;
+    type Conserved: Conserved;
+    type Primitive: Primitive;
     type Direction;
 
     fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Self::Direction) -> &'a Self::Primitive;
@@ -580,7 +593,7 @@ fn advance_internal_rk<H: Hydrodynamics>(
     //         state.time += dt;
     //     }
     // }).unwrap();
-}
+// }
 
 
 

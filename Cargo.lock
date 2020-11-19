@@ -41,6 +41,7 @@ dependencies = [
  "glob",
  "godunov-core",
  "hdf5",
+ "hydro-euler",
  "hydro-iso2d",
  "kepler-two-body",
  "kind-config",
@@ -266,6 +267,11 @@ checksum = "3deed196b6e7f9e44a2ae8d94225d80302d81208b1bb673fd21fe634645c85a9"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "hydro-euler"
+version = "0.1.0"
+source = "git+https://github.com/clemson-cal/hydro-euler#7abed0313acd20fd39c3765bcb4ae3918984e9d7"
 
 [[package]]
 name = "hydro-iso2d"
@@ -596,9 +602,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.4.2"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbee7696b84bbf3d89a1c2eccff0850e3047ed46bfcd2e92c29a2d074d57e252"
+checksum = "7acad6f34eb9e8a259d3283d1e8c1d34d7415943d4895f65cc73813c7396fc85"
 
 [[package]]
 name = "strsim"
@@ -619,9 +625,9 @@ dependencies = [
 
 [[package]]
 name = "termcolor"
-version = "1.1.0"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb6bfa289a4d7c5766392812c0a1f4c1ba45afa1ad47803c11e1f407d846d75f"
+checksum = "2dfed899f0eb03f32ee8c6a0aabdb8a7949659e3466561fc0adf54e26d88c5f4"
 dependencies = [
  "winapi-util",
 ]
