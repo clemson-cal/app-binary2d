@@ -302,7 +302,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
     while state.time < tfinal * ORBITAL_PERIOD
     {
         if app.tokio {
-            state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, &runtime);
+            state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
         } else {
             scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }

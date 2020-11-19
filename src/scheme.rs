@@ -32,6 +32,7 @@ pub struct BlockData
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct State
 {
     pub time: f64,
@@ -463,7 +464,42 @@ pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &M
 
 
 // ============================================================================
-pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
+use core::ops::{Add, Mul};
+use num::ToPrimitive;
+
+impl Add for State
+{
+    type Output = State;
+
+    fn add(self, b: Self::Output) -> Self::Output
+    {
+        Self::Output{
+            time: self.time + b.time,
+            iteration: self.iteration + b.iteration,
+            conserved: self.conserved.into_iter().zip(b.conserved).map(|(u1, u2)| u1 + u2).collect(),
+        }
+    }
+}
+
+impl Mul<Rational64> for State
+{
+    type Output = State;
+
+    fn mul(self, b: Rational64) -> Self::Output
+    {
+        Self::Output{
+            time: self.time * b.to_f64().unwrap(),
+            iteration: self.iteration * b,
+            conserved: self.conserved.into_iter().map(|u| u * b.to_f64().unwrap()).collect(),
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
 {
     use std::sync::Arc;
     use std::future::Future;
@@ -483,7 +519,8 @@ pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, sol
     let cons_prim: Arc<HashMap<_, _>> = Arc::new(block_data
         .iter()
         .zip(state.conserved)
-        .map(|(block_data, conserved)| {
+        .map(|(block_data, conserved)|
+        {
             let u1 = Arc::new(conserved);
             let u2 = u1.clone();
             let uf = async move {
@@ -495,13 +532,15 @@ pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, sol
 
     let time = state.time;
 
-    let updated_cons = block_data.iter().map(|block| {
+    let updated_cons = block_data.iter().map(|block|
+    {
         let mesh              = mesh.clone();
         let solver            = solver.clone();
         let block             = block.clone();
         let cons_prim         = cons_prim.clone();
 
-        let u1 = async move {
+        let u1 = async move
+        {
             let uc = &cons_prim[&block.index].0;
 
             // ============================================================================
@@ -536,6 +575,7 @@ pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, sol
                 &block.cell_centers]
             .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
+            // ============================================================================
             let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| cons_prim[i].1.clone())).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
             let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
@@ -582,4 +622,21 @@ pub fn advance_tokio(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, sol
         iteration: state.iteration + 1,
         conserved: runtime.block_on(join_all(updated_cons)),
     }
+}
+
+
+
+
+// ============================================================================
+pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize, runtime: &tokio::runtime::Runtime) -> State
+{
+    use std::convert::TryFrom;
+
+    let update = |state| advance_tokio_rk(state, block_data, mesh, solver, dt, runtime);
+    let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
+
+    for _ in 0..fold {
+        state = rk_order.advance(state, update);
+    }
+    state
 }
