@@ -16,6 +16,9 @@ type NeighborPrimitiveBlock<Primitive> = [[ArcArray<Primitive, Ix2>; 3]; 3];
 type BlockState<Conserved> = solution_states::SolutionStateArray<Conserved, Ix2>;
 pub type BlockIndex = (usize, usize);
 
+#[derive(Copy, Clone)]
+pub enum Direction { X, Y }
+
 
 
 
@@ -241,11 +244,10 @@ pub trait Hydrodynamics
 {
     type Conserved: Conserved;
     type Primitive: Primitive;
-    type Direction;
 
-    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Self::Direction) -> &'a Self::Primitive;
-    fn strain_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Self::Direction, col: Self::Direction) -> f64;
-    fn stress_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Self::Direction, col: Self::Direction) -> f64;
+    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive;
+    fn strain_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64;
+    fn stress_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64;
 
     fn source_terms(
         &self,
@@ -290,11 +292,10 @@ impl Hydrodynamics for Isothermal
 {
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
-    type Direction = hydro_iso2d::Direction;
 
-    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Self::Direction) -> &'a Self::Primitive
+    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
     {
-        use hydro_iso2d::Direction::{X, Y};
+        use Direction::{X, Y};
 
         match axis
         {
@@ -303,9 +304,9 @@ impl Hydrodynamics for Isothermal
         }
     }
 
-    fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Self::Direction, col: Self::Direction) -> f64
+    fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64
     {
-        use hydro_iso2d::Direction::{X, Y};
+        use Direction::{X, Y};
 
         match (row, col)
         {
@@ -316,7 +317,7 @@ impl Hydrodynamics for Isothermal
         }
     }
 
-    fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Self::Direction, col: Self::Direction) -> f64
+    fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
     {
         kinematic_viscosity * cell_data.pc.density() * self.strain_field(cell_data, row, col)
     }
@@ -375,7 +376,7 @@ impl Hydrodynamics for Isothermal
         f: &(f64, f64), 
         two_body_state: &kepler_two_body::OrbitalState) -> Self::Conserved 
     {
-        self.intercell_flux(solver, l, r, f, two_body_state, Self::Direction::X)
+        self.intercell_flux(solver, l, r, f, two_body_state, Direction::X)
     }
     
     fn intercell_flux_y<'a>(
@@ -386,7 +387,7 @@ impl Hydrodynamics for Isothermal
         f: &(f64, f64), 
         two_body_state: &kepler_two_body::OrbitalState) -> Self::Conserved
     {
-        self.intercell_flux(solver, l, r, f, two_body_state, Self::Direction::Y)
+        self.intercell_flux(solver, l, r, f, two_body_state, Direction::Y)
     }
 
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
@@ -413,15 +414,19 @@ impl Isothermal
         r: &CellData<'a, hydro_iso2d::Primitive>, 
         f: &(f64, f64), 
         two_body_state: &kepler_two_body::OrbitalState,
-        axis: hydro_iso2d::Direction) -> hydro_iso2d::Conserved
+        axis: Direction) -> hydro_iso2d::Conserved
     {
         let cs2 = solver.sound_speed_squared(f, &two_body_state);
         let pl = *l.pc + *self.gradient_field(l, axis) * 0.5;
         let pr = *r.pc - *self.gradient_field(r, axis) * 0.5;
         let nu = solver.nu;
-        let tau_x = 0.5 * (self.stress_field(l, nu, axis, hydro_iso2d::Direction::X) + self.stress_field(r, nu, axis, hydro_iso2d::Direction::X));
-        let tau_y = 0.5 * (self.stress_field(l, nu, axis, hydro_iso2d::Direction::Y) + self.stress_field(r, nu, axis, hydro_iso2d::Direction::Y));
-        hydro_iso2d::riemann_hlle(pl, pr, axis, cs2) + hydro_iso2d::Conserved(0.0, -tau_x, -tau_y)
+        let tau_x = 0.5 * (self.stress_field(l, nu, axis, Direction::X) + self.stress_field(r, nu, axis, Direction::X));
+        let tau_y = 0.5 * (self.stress_field(l, nu, axis, Direction::Y) + self.stress_field(r, nu, axis, Direction::Y));
+        let iso2d_axis = match axis {
+            Direction::X => hydro_iso2d::Direction::X,
+            Direction::Y => hydro_iso2d::Direction::Y,
+        };
+        hydro_iso2d::riemann_hlle(pl, pr, iso2d_axis, cs2) + hydro_iso2d::Conserved(0.0, -tau_x, -tau_y)
     }
 }
 
@@ -599,112 +604,104 @@ fn advance_internal_rk<H: Hydrodynamics>(
 
 
 // ============================================================================
-// use hydro_euler::euler_2d::Primitive as Primitive_Euler;
-// use hydro_euler::euler_2d::Conserved as Conserved_Euler;
-// use hydro_euler::euler_2d::riemann_hlle as riemann_euler;
-// struct TwoDimensionalHydrodynamicsWithEnergy;
+struct Euler {}
     
-// impl Hydrodynamics for TwoDimensionalHydrodynamicsWithEnergy
-// {
-//     type Conserved = Conserved_Euler;
-//     type Primitive = Primitive_Euler;
-//     type Direction = hydro_euler::geometry::Direction;
+impl Hydrodynamics for Euler
+{
+    type Conserved = hydro_euler::euler_2d::Conserved;
+    type Primitive = hydro_euler::euler_2d::Primitive;
 
-//     fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Self::Direction) -> &'a Self::Primitive
-//     {
-//         use hydro_euler::geometry::Direction::{X, Y, Z};
+    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
+    {
+        use Direction::{X, Y};
 
-//         match axis
-//         {
-//             X => cell_data.gx,
-//             Y => cell_data.gy,
-//             Z => panic!(),
-//         }
-//     }
+        match axis
+        {
+            X => cell_data.gx,
+            Y => cell_data.gy,
+        }
+    }
 
-//     fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Self::Direction, col: Self::Direction) -> f64
-//     {
-//         use hydro_euler::geometry::Direction::{X, Y};
+    fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64
+    {
+        use Direction::{X, Y};
 
-//         match (row, col)
-//         {
-//             (X, X) => cell_data.gx.velocity_1() - cell_data.gy.velocity_2(),
-//             (X, Y) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
-//             (Y, X) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
-//             (Y, Y) =>-cell_data.gx.velocity_1() + cell_data.gy.velocity_2(),
-//             (_, _) => panic!(),     
-//         }
-//     }
+        match (row, col)
+        {
+            (X, X) => cell_data.gx.velocity_1() - cell_data.gy.velocity_2(),
+            (X, Y) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
+            (Y, X) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
+            (Y, Y) =>-cell_data.gx.velocity_1() + cell_data.gy.velocity_2(),
+            (_, _) => panic!(),     
+        }
+    }
 
-//     fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Self::Direction, col: Self::Direction) -> f64
-//     {
-//         kinematic_viscosity * cell_data.pc.mass_density() * self.strain_field(cell_data, row, col)
-//     }
+    fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
+    {
+        kinematic_viscosity * cell_data.pc.mass_density() * self.strain_field(cell_data, row, col)
+    }
 
-//     fn source_terms(
-//         &self,
-//         solver: &Solver,
-//         conserved: Self::Conserved,
-//         background_conserved: Self::Conserved,
-//         x: f64,
-//         y: f64,
-//         dt: f64,
-//         two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
-//     {
-//         let p1 = two_body_state.0;
-//         let p2 = two_body_state.1;
+    fn source_terms(
+        &self,
+        solver: &Solver,
+        conserved: Self::Conserved,
+        background_conserved: Self::Conserved,
+        x: f64,
+        y: f64,
+        dt: f64,
+        two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
+    {
+        let p1 = two_body_state.0;
+        let p2 = two_body_state.1;
 
-//         let [ax1, ay1] = p1.gravitational_acceleration(x, y, solver.softening_length);
-//         let [ax2, ay2] = p2.gravitational_acceleration(x, y, solver.softening_length);
+        let [ax1, ay1] = p1.gravitational_acceleration(x, y, solver.softening_length);
+        let [ax2, ay2] = p2.gravitational_acceleration(x, y, solver.softening_length);
 
-//         let rho = conserved.mass_density();
-//         let fx1 = rho * ax1;
-//         let fy1 = rho * ay1;
-//         let fx2 = rho * ax2;
-//         let fy2 = rho * ay2;
+        let rho = conserved.mass_density();
+        let fx1 = rho * ax1;
+        let fy1 = rho * ay1;
+        let fx2 = rho * ax2;
+        let fy2 = rho * ay2;
 
-//         let x1 = p1.position_x();
-//         let y1 = p1.position_y();
-//         let x2 = p2.position_x();
-//         let y2 = p2.position_y();
+        let x1 = p1.position_x();
+        let y1 = p1.position_y();
+        let x2 = p2.position_x();
+        let y2 = p2.position_y();
 
-//         let sink_rate1 = solver.sink_kernel(x - x1, y - y1);
-//         let sink_rate2 = solver.sink_kernel(x - x2, y - y2);
+        let sink_rate1 = solver.sink_kernel(x - x1, y - y1);
+        let sink_rate2 = solver.sink_kernel(x - x2, y - y2);
 
-//         let r = (x * x + y * y).sqrt();
-//         let y = (r - solver.domain_radius) / solver.buffer_scale;
-//         let omega_outer = (two_body_state.total_mass() / solver.domain_radius.powi(3)).sqrt();
-//         let buffer_rate = 0.5 * solver.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
+        let r = (x * x + y * y).sqrt();
+        let y = (r - solver.domain_radius) / solver.buffer_scale;
+        let omega_outer = (two_body_state.total_mass() / solver.domain_radius.powi(3)).sqrt();
+        let buffer_rate = 0.5 * solver.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
 
-//         return [
-//             Conserved_Euler(0.0, fx1, fy1, 0.0) * dt,
-//             Conserved_Euler(0.0, fx2, fy2, 0.0) * dt,
-//             conserved * (-sink_rate1 * dt),
-//             conserved * (-sink_rate2 * dt),
-//             (conserved - background_conserved) * (-dt * buffer_rate),
-//         ];
-//     }
+        return [
+            hydro_euler::euler_2d::Conserved(0.0, fx1, fy1, 0.0) * dt,
+            hydro_euler::euler_2d::Conserved(0.0, fx2, fy2, 0.0) * dt,
+            conserved * (-sink_rate1 * dt),
+            conserved * (-sink_rate2 * dt),
+            (conserved - background_conserved) * (-dt * buffer_rate),
+        ];
+    }
 
-//     fn intercell_flux<'a>(
-//         &self,
-//         solver: &Solver,
-//         l: &CellData<'a, Self::Primitive>, 
-//         r: &CellData<'a, Self::Primitive>, 
-//         f: &(f64, f64), 
-//         two_body_state: &kepler_two_body::OrbitalState,
-//         axis: Self::Direction) -> Self::Conserved
-//     {
-//         let cs2 = solver.sound_speed_squared(f, &two_body_state);
-//         let pl = *l.pc + *self.gradient_field(l, axis) * 0.5;
-//         let pr = *r.pc - *self.gradient_field(r, axis) * 0.5;
-//         let nu = solver.nu;
-//         let tau_x = 0.5 * (self.stress_field(l, nu, axis, Self::Direction::X) + self.stress_field(r, nu, axis, Self::Direction::X));
-//         let tau_y = 0.5 * (self.stress_field(l, nu, axis, Self::Direction::Y) + self.stress_field(r, nu, axis, Self::Direction::Y));
-//         hydro_euler::euler_2d::riemann_hlle(pl, pr, axis, cs2) + Conserved_Euler(0.0, -tau_x, -tau_y, 0.0)
-//     }
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
+    {
+        godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
+    }
 
-//     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
-//     {
-//         godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
-//     }
-// }
+    fn intercell_flux_x<'a>(&self, _: &Solver, _: &CellData<'a, Self::Primitive>, _: &CellData<'a, Self::Primitive>, _: &(f64, f64), _: &kepler_two_body::OrbitalState) -> Self::Conserved
+    {
+        todo!()
+    }
+
+    fn intercell_flux_y<'a>(&self, _: &Solver, _: &CellData<'a, Self::Primitive>, _: &CellData<'a, Self::Primitive>, _: &(f64, f64), _: &kepler_two_body::OrbitalState) -> Self::Conserved
+    {
+        todo!()
+    }
+
+    fn to_primitive(&self, _: Self::Conserved) -> Self::Primitive
+    {
+        todo!()
+    }
+}
