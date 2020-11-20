@@ -1,17 +1,17 @@
 use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
-use hydro_iso2d::*;
 use kepler_two_body::{OrbitalElements, OrbitalState};
-use godunov_core::solution_states;
-use godunov_core::runge_kutta;
+// use godunov_core::solution_states;
+// use godunov_core::runge_kutta;
+use hydro_iso2d::{Conserved, Primitive, Direction, riemann_hlle};
 
 
 
 
 // ============================================================================
-type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
+// type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
+// type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
 pub type BlockIndex = (usize, usize);
 
 
@@ -37,7 +37,7 @@ pub struct State
 {
     pub time: f64,
     pub iteration: Rational64,
-    pub conserved: Vec<Array<Conserved, Ix2>>,
+    pub conserved: Vec<ArcArray<Conserved, Ix2>>,
 }
 
 
@@ -290,216 +290,7 @@ impl<'a> CellData<'_>
 
 
 // ============================================================================
-fn advance_internal(
-    state:      BlockState,
-    block_data: &crate::BlockData,
-    solver:     &Solver,
-    mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
-    dt:         f64) -> BlockState
-{
-    // ============================================================================
-    use ndarray::{s, azip};
-    use ndarray_ops::{map_stencil3};
-    use godunov_core::piecewise_linear::plm_gradient3;
-    use Direction::{X, Y};
-
-    // ============================================================================
-    let dx = mesh.cell_spacing_x();
-    let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
-
-    // ============================================================================
-    let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
-    {
-        let cs2 = solver.sound_speed_squared(f, &two_body_state);
-        let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-        let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-        let nu = solver.nu;
-        let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
-        let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
-        riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
-    };
-
-    let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-
-    // ============================================================================
-    sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
-
-    // ============================================================================
-    let sources = azip![
-        &state.conserved,
-        &block_data.initial_conserved,
-        &block_data.cell_centers]
-    .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
-
-    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
-    let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
-    let xf = &block_data.face_centers_x;
-    let yf = &block_data.face_centers_y;
-
-    // ============================================================================
-    let cell_data = azip![
-        pe.slice(s![1..-1,1..-1]),
-        gx.slice(s![ ..  ,1..-1]),
-        gy.slice(s![1..-1, ..  ])]
-    .apply_collect(CellData::new);
-
-    // ============================================================================
-    let fx = azip![
-        cell_data.slice(s![..-1,1..-1]),
-        cell_data.slice(s![ 1..,1..-1]),
-        xf]
-    .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
-
-    // ============================================================================
-    let fy = azip![
-        cell_data.slice(s![1..-1,..-1]),
-        cell_data.slice(s![1..-1, 1..]),
-        yf]
-    .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
-
-    // ============================================================================
-    let du = azip![
-        fx.slice(s![..-1,..]),
-        fx.slice(s![ 1..,..]),
-        fy.slice(s![..,..-1]),
-        fy.slice(s![.., 1..])]
-    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-
-    // ============================================================================
-    BlockState{
-        time: state.time + dt,
-        iteration: state.iteration + 1,
-        conserved: state.conserved + du + sources,
-    }
-}
-
-
-
-
-// ============================================================================
-fn advance_internal_rk(
-    conserved:  &mut Array<Conserved, Ix2>,
-    block_data: &crate::BlockData,
-    solver:     &Solver,
-    mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
-    time:       f64,
-    dt:         f64,
-    fold:       usize)
-{
-    use std::convert::TryFrom;
-
-    let update = |state| advance_internal(state, block_data, solver, mesh, sender, receiver, dt);
-    let mut state = BlockState {
-        time: time,
-        iteration: Rational64::new(0, 1),
-        conserved: conserved.clone(),
-    };
-    let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
-
-    for _ in 0..fold
-    {
-        state = rk_order.advance(state, update);
-    }
-    *conserved = state.conserved;
-}
-
-
-
-
-// ============================================================================
-pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
-{
-    crossbeam::scope(|scope|
-    {
-        use std::collections::HashMap;
-
-        let time = state.time;
-        let mut receivers       = Vec::new();
-        let mut senders         = Vec::new();
-        let mut block_primitive = HashMap::new();
-
-        for (u, b) in state.conserved.iter_mut().zip(block_data)
-        {
-            let (their_s, my_r) = crossbeam::channel::unbounded();
-            let (my_s, their_r) = crossbeam::channel::unbounded();
-
-            senders.push(my_s);
-            receivers.push(my_r);
-
-            scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
-        }
-
-        for _ in 0..fold
-        {
-            for _ in 0..solver.rk_order
-            {
-                for (block_data, r) in block_data.iter().zip(receivers.iter())
-                {
-                    block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
-                }
-
-                for (block_data, s) in block_data.iter().zip(senders.iter())
-                {
-                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
-                        .get(i)
-                        .unwrap()
-                        .clone()))
-                    .unwrap();
-                }
-            }
-
-            state.iteration += 1;
-            state.time += dt;
-        }
-    }).unwrap();
-}
-
-
-
-
-// ============================================================================
-use core::ops::{Add, Mul};
-use num::ToPrimitive;
-
-impl Add for State
-{
-    type Output = State;
-
-    fn add(self, b: Self::Output) -> Self::Output
-    {
-        Self::Output{
-            time: self.time + b.time,
-            iteration: self.iteration + b.iteration,
-            conserved: self.conserved.into_iter().zip(b.conserved).map(|(u1, u2)| u1 + u2).collect(),
-        }
-    }
-}
-
-impl Mul<Rational64> for State
-{
-    type Output = State;
-
-    fn mul(self, b: Rational64) -> Self::Output
-    {
-        Self::Output{
-            time: self.time * b.to_f64().unwrap(),
-            iteration: self.iteration * b,
-            conserved: self.conserved.into_iter().map(|u| u * b.to_f64().unwrap()).collect(),
-        }
-    }
-}
-
-
-
-
-// ============================================================================
-fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
+async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
 {
     use std::sync::Arc;
     use std::future::Future;
@@ -521,10 +312,11 @@ fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solv
         .zip(state.conserved)
         .map(|(block_data, conserved)|
         {
-            let u1 = Arc::new(conserved);
-            let u2 = u1.clone();
+            // let u1 = Arc::new(conserved);
+            let u1 = conserved.clone();
+            let u2 = conserved.clone();
             let uf = async move {
-                u2.clone().mapv(Conserved::to_primitive)
+                u2.mapv(Conserved::to_primitive)
             };
             (block_data.index, (u1.clone(), runtime.spawn(uf).map(|f| f.unwrap()).shared()))
         })
@@ -569,19 +361,20 @@ fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solv
             let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
             // ============================================================================
-            let sources = azip![
-                uc.as_ref(),
-                &block.initial_conserved,
-                &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
-
-            // ============================================================================
             let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| cons_prim[i].1.clone())).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
             let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
             let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
             let xf = block.face_centers_x;
             let yf = block.face_centers_y;
+
+            // ============================================================================
+            let sources = azip![
+                // uc.as_ref(),
+                uc,
+                &block.initial_conserved,
+                &block.cell_centers]
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
             // ============================================================================
             let cell_data = azip![
@@ -612,7 +405,7 @@ fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solv
                 fy.slice(s![.., 1..])]
             .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            uc.as_ref() + &du + &sources
+            (uc + &du + &sources).to_shared()
         };
         runtime.spawn(u1).map(|f| f.unwrap())
     });
@@ -620,8 +413,84 @@ fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solv
     State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: runtime.block_on(join_all(updated_cons)),
+        conserved: join_all(updated_cons).await,
     }
+}
+
+
+
+
+// ============================================================================
+impl State
+{
+    async fn weighted_average(self, br: Rational64, other: &State, runtime: &tokio::runtime::Runtime) -> State
+    {
+        use num::ToPrimitive;
+        use futures::future::FutureExt;
+        use futures::future::join_all;
+
+        let bf = br.to_f64().unwrap();
+
+        let u_avg = self.conserved
+            .iter()
+            .zip(&other.conserved)
+            .map(|(u1, u2)| {
+                let u1 = u1.clone();
+                let u2 = u2.clone();
+                runtime.spawn(async move { u1 * bf + u2 * (-bf + 1.0) }).map(|u| u.unwrap())
+            });
+
+        State{
+            time:      self.time      * bf + other.time      * (-bf + 1.0),
+            iteration: self.iteration * br + other.iteration * (-br + 1),
+            conserved: join_all(u_avg).await,
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk1<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, _runtime: &tokio::runtime::Runtime) -> State
+where
+    FutureState: std::future::Future<Output=State>
+{
+    update(state).await
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk2<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, runtime: &tokio::runtime::Runtime) -> State
+where
+    FutureState: std::future::Future<Output=State>
+{
+    let b1 = Rational64::new(1, 2);
+
+    let s1 = state.clone();
+    let s1 = update(s1).await;
+    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
+    s1
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk3<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, runtime: &tokio::runtime::Runtime) -> State
+where
+    FutureState: std::future::Future<Output=State>
+{
+    let b1 = Rational64::new(3, 4);
+    let b2 = Rational64::new(1, 3);
+
+    let s1 = state.clone();
+    let s1 = update(s1).await;
+    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
+    let s1 = update(s1).await.weighted_average(b2, &state, runtime).await;
+    s1
 }
 
 
@@ -630,42 +499,204 @@ fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solv
 // ============================================================================
 pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize, runtime: &tokio::runtime::Runtime) -> State
 {
-    use std::convert::TryFrom;
-
     let update = |state| advance_tokio_rk(state, block_data, mesh, solver, dt, runtime);
-    let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
 
     for _ in 0..fold {
-        state = rk_order.advance(state, update);
+        state = match solver.rk_order {
+            1 => runtime.block_on(advance_rk1(state, update, runtime)),
+            2 => runtime.block_on(advance_rk2(state, update, runtime)),
+            3 => runtime.block_on(advance_rk3(state, update, runtime)),
+            _ => panic!("illegal RK order {}", solver.rk_order),
+        }
     }
-    state
+    return state;
 }
+
+
+
+
+
+
+
+
+// /**
+//  * The code below advances the state using the old message-passing
+//  * parallelization strategy based on channels. I would prefer to either
+//  * deprecate it, since it duplicates msot of the update scheme, and will
+//  * thus need to be kept in sync manually as the scheme evolves. The only
+//  * reason to retain it is for benchmarking purposes.
+//  */
 
 
 
 
 // ============================================================================
-impl State {
-    fn weighted_average(self, br: Rational64, other: &State, _runtime: &tokio::runtime::Runtime) -> State
-    {
-        let bf = br.to_f64().unwrap();
+// fn advance_channels_internal_block(
+//     state:      BlockState,
+//     block_data: &crate::BlockData,
+//     solver:     &Solver,
+//     mesh:       &Mesh,
+//     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
+//     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+//     dt:         f64) -> BlockState
+// {
+//     // ============================================================================
+//     use ndarray::{s, azip};
+//     use ndarray_ops::{map_stencil3};
+//     use godunov_core::piecewise_linear::plm_gradient3;
+//     use Direction::{X, Y};
 
-        State{
-            time:      self.time      + other.time      * bf,
-            iteration: self.iteration + other.iteration * br,
-            conserved: self.conserved.into_iter().zip(&other.conserved).map(|(u1, u2)| u1 + u2 * bf).collect(),
-        }
-    }
-}
+//     // ============================================================================
+//     let dx = mesh.cell_spacing_x();
+//     let dy = mesh.cell_spacing_y();
+//     let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
 
-fn _advance_rk3<Update: Fn(State) -> State>(state: State, update: Update, runtime: &tokio::runtime::Runtime) -> State
-{
-    let b1 = Rational64::new(3, 4);
-    let b2 = Rational64::new(1, 3);
+//     // ============================================================================
+//     let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
+//     {
+//         let cs2 = solver.sound_speed_squared(f, &two_body_state);
+//         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
+//         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
+//         let nu = solver.nu;
+//         let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
+//         let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
+//         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
+//     };
 
-    let s1 = state.clone();
-    let s1 = update(s1);
-    let s1 = update(s1).weighted_average(b1, &state, runtime);
-    let s1 = update(s1).weighted_average(b2, &state, runtime);
-    s1
-}
+//     let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+//     // ============================================================================
+//     sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
+
+//     // ============================================================================
+//     let sources = azip![
+//         &state.conserved,
+//         &block_data.initial_conserved,
+//         &block_data.cell_centers]
+//     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+
+//     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
+//     let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+//     let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+//     let xf = &block_data.face_centers_x;
+//     let yf = &block_data.face_centers_y;
+
+//     // ============================================================================
+//     let cell_data = azip![
+//         pe.slice(s![1..-1,1..-1]),
+//         gx.slice(s![ ..  ,1..-1]),
+//         gy.slice(s![1..-1, ..  ])]
+//     .apply_collect(CellData::new);
+
+//     // ============================================================================
+//     let fx = azip![
+//         cell_data.slice(s![..-1,1..-1]),
+//         cell_data.slice(s![ 1..,1..-1]),
+//         xf]
+//     .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
+
+//     // ============================================================================
+//     let fy = azip![
+//         cell_data.slice(s![1..-1,..-1]),
+//         cell_data.slice(s![1..-1, 1..]),
+//         yf]
+//     .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+
+//     // ============================================================================
+//     let du = azip![
+//         fx.slice(s![..-1,..]),
+//         fx.slice(s![ 1..,..]),
+//         fy.slice(s![..,..-1]),
+//         fy.slice(s![.., 1..])]
+//     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+//     // ============================================================================
+//     BlockState{
+//         time: state.time + dt,
+//         iteration: state.iteration + 1,
+//         conserved: state.conserved + du + sources,
+//     }
+// }
+
+
+
+
+// // ============================================================================
+// fn advance_channels_internal(
+//     conserved:  &mut Array<Conserved, Ix2>,
+//     block_data: &crate::BlockData,
+//     solver:     &Solver,
+//     mesh:       &Mesh,
+//     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
+//     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+//     time:       f64,
+//     dt:         f64,
+//     fold:       usize)
+// {
+//     use std::convert::TryFrom;
+
+//     let update = |state| advance_channels_internal_block(state, block_data, solver, mesh, sender, receiver, dt);
+//     let mut state = BlockState {
+//         time: time,
+//         iteration: Rational64::new(0, 1),
+//         conserved: conserved.clone(),
+//     };
+//     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
+
+//     for _ in 0..fold
+//     {
+//         state = rk_order.advance(state, update);
+//     }
+//     *conserved = state.conserved;
+// }
+
+
+
+
+// // ============================================================================
+// pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
+// {
+//     crossbeam::scope(|scope|
+//     {
+//         use std::collections::HashMap;
+
+//         let time = state.time;
+//         let mut receivers       = Vec::new();
+//         let mut senders         = Vec::new();
+//         let mut block_primitive = HashMap::new();
+
+//         for (u, b) in state.conserved.iter_mut().zip(block_data)
+//         {
+//             let (their_s, my_r) = crossbeam::channel::unbounded();
+//             let (my_s, their_r) = crossbeam::channel::unbounded();
+
+//             senders.push(my_s);
+//             receivers.push(my_r);
+
+//             scope.spawn(move |_| advance_channels_internal(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+//         }
+
+//         for _ in 0..fold
+//         {
+//             for _ in 0..solver.rk_order
+//             {
+//                 for (block_data, r) in block_data.iter().zip(receivers.iter())
+//                 {
+//                     block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+//                 }
+
+//                 for (block_data, s) in block_data.iter().zip(senders.iter())
+//                 {
+//                     s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
+//                         .get(i)
+//                         .unwrap()
+//                         .clone()))
+//                     .unwrap();
+//                 }
+//             }
+
+//             state.iteration += 1;
+//             state.time += dt;
+//         }
+//     }).unwrap();
+// }

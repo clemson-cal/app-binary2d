@@ -13,7 +13,7 @@
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
-use ndarray::{Array, Ix2};
+use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use scheme::{State, BlockIndex, BlockData};
@@ -174,11 +174,12 @@ fn disk_model(xy: (f64, f64)) -> Primitive
     return Primitive(1.0, vx, vy);
 }
 
-fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Conserved, Ix2>
+fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> ArcArray<Conserved, Ix2>
 {
     mesh.cell_centers(block_index)
         .mapv(disk_model)
         .mapv(Primitive::to_conserved)
+        .to_shared()
 }
 
 fn initial_state(mesh: &scheme::Mesh) -> State
@@ -293,7 +294,6 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
     tasks.perform(&state, &block_data, &mesh, &model, &app);
 
     use tokio::runtime::Builder;
-
     let runtime = Builder::new_multi_thread()
             .worker_threads(app.threads)
             .build()
@@ -304,7 +304,8 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         if app.tokio {
             state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
         } else {
-            scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+            panic!();
+            // scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &block_data, &mesh, &model, &app);
     }
