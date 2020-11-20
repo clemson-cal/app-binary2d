@@ -23,8 +23,8 @@ pub enum Direction { X, Y }
 
 
 // ============================================================================
-pub trait Conserved: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Copy {}
-pub trait Primitive: Copy {}
+pub trait Conserved: Copy + Send + Sync + Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> {}
+pub trait Primitive: Copy + Send + Sync {}
 
 impl Conserved for hydro_iso2d::Conserved {}
 impl Conserved for hydro_euler::euler_2d::Conserved {}
@@ -240,7 +240,7 @@ impl Mesh
 
 
 // ============================================================================
-pub trait Hydrodynamics
+pub trait Hydrodynamics: Sync
 {
     type Conserved: Conserved;
     type Primitive: Primitive;
@@ -378,7 +378,7 @@ impl Hydrodynamics for Isothermal
     {
         self.intercell_flux(solver, l, r, f, two_body_state, Direction::X)
     }
-    
+
     fn intercell_flux_y<'a>(
         &self,
         solver: &Solver,
@@ -546,59 +546,60 @@ fn advance_internal_rk<H: Hydrodynamics>(
 
 
 // ============================================================================
-// pub fn advance<H: Hydrodynamics>(
-//     state: &mut State<H::Conserved>,
-//     hydro: &H,
-//     block_data: &Vec<BlockData<H::Conserved>>,
-//     mesh: &Mesh,
-//     solver: &Solver,
-//     dt: f64,
-//     fold: usize)
-// {
-    // crossbeam::scope(|scope|
-    // {
-    //     use std::collections::HashMap;
+pub fn advance<H: Hydrodynamics>(
+    state: &mut State<H::Conserved>,
+    hydro: &H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh: &Mesh,
+    solver: &Solver,
+    dt: f64,
+    fold: usize)
+{
+    crossbeam::scope(|scope|
+    {
+        use std::collections::HashMap;
 
-    //     let time = state.time;
-    //     let mut receivers       = Vec::new();
-    //     let mut senders         = Vec::new();
-    //     let mut block_primitive = HashMap::new();
+        let time = state.time;
+        let mut receivers       = Vec::new();
+        let mut senders         = Vec::new();
+        let mut block_primitive = HashMap::new();
+        let hydro = hydro.clone();
 
-    //     for (u, b) in state.conserved.iter_mut().zip(block_data)
-    //     {
-    //         let (their_s, my_r) = crossbeam::channel::unbounded();
-    //         let (my_s, their_r) = crossbeam::channel::unbounded();
+        for (u, b) in state.conserved.iter_mut().zip(block_data)
+        {
+            let (their_s, my_r) = crossbeam::channel::unbounded();
+            let (my_s, their_r) = crossbeam::channel::unbounded();
 
-    //         senders.push(my_s);
-    //         receivers.push(my_r);
+            senders.push(my_s);
+            receivers.push(my_r);
 
-    //         scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
-    //     }
+            scope.spawn(move |_| advance_internal_rk(u, hydro, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+        }
 
-    //     for _ in 0..fold
-    //     {
-    //         for _ in 0..solver.rk_order
-    //         {
-    //             for (block_data, r) in block_data.iter().zip(receivers.iter())
-    //             {
-    //                 block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
-    //             }
+        for _ in 0..fold
+        {
+            for _ in 0..solver.rk_order
+            {
+                for (block_data, r) in block_data.iter().zip(receivers.iter())
+                {
+                    block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+                }
 
-    //             for (block_data, s) in block_data.iter().zip(senders.iter())
-    //             {
-    //                 s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
-    //                     .get(i)
-    //                     .unwrap()
-    //                     .clone()))
-    //                 .unwrap();
-    //             }
-    //         }
+                for (block_data, s) in block_data.iter().zip(senders.iter())
+                {
+                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
+                        .get(i)
+                        .unwrap()
+                        .clone()))
+                    .unwrap();
+                }
+            }
 
-    //         state.iteration += 1;
-    //         state.time += dt;
-    //     }
-    // }).unwrap();
-// }
+            state.iteration += 1;
+            state.time += dt;
+        }
+    }).unwrap();
+}
 
 
 
