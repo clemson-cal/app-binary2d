@@ -282,11 +282,11 @@ pub trait Hydrodynamics
 
 
 // ============================================================================
-struct TwoDimensionalIsothermalHydrodynamics
+struct Isothermal
 {
 }
 
-impl Hydrodynamics for TwoDimensionalIsothermalHydrodynamics
+impl Hydrodynamics for Isothermal
 {
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
@@ -404,7 +404,7 @@ impl Hydrodynamics for TwoDimensionalIsothermalHydrodynamics
 
 
 // ============================================================================
-impl TwoDimensionalIsothermalHydrodynamics
+impl Isothermal
 {
     fn intercell_flux<'a>(
         &self,
