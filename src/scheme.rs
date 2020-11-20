@@ -2,16 +2,16 @@ use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
 use kepler_two_body::{OrbitalElements, OrbitalState};
-// use godunov_core::solution_states;
-// use godunov_core::runge_kutta;
+use godunov_core::solution_states;
+use godunov_core::runge_kutta;
 use hydro_iso2d::{Conserved, Primitive, Direction, riemann_hlle};
 
 
 
 
 // ============================================================================
-// type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-// type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
+type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
+type BlockState = solution_states::SolutionStateArcArray<Conserved, Ix2>;
 pub type BlockIndex = (usize, usize);
 
 
@@ -312,13 +312,12 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
         .zip(state.conserved)
         .map(|(block_data, conserved)|
         {
-            // let u1 = Arc::new(conserved);
             let u1 = conserved.clone();
             let u2 = conserved.clone();
             let uf = async move {
                 u2.mapv(Conserved::to_primitive)
             };
-            (block_data.index, (u1.clone(), runtime.spawn(uf).map(|f| f.unwrap()).shared()))
+            (block_data.index, (u1, runtime.spawn(uf).map(|f| f.unwrap()).shared()))
         })
         .collect());
 
@@ -370,7 +369,6 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
 
             // ============================================================================
             let sources = azip![
-                // uc.as_ref(),
                 uc,
                 &block.initial_conserved,
                 &block.cell_centers]
@@ -519,184 +517,184 @@ pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh,
 
 
 
-// /**
-//  * The code below advances the state using the old message-passing
-//  * parallelization strategy based on channels. I would prefer to either
-//  * deprecate it, since it duplicates msot of the update scheme, and will
-//  * thus need to be kept in sync manually as the scheme evolves. The only
-//  * reason to retain it is for benchmarking purposes.
-//  */
+/**
+ * The code below advances the state using the old message-passing
+ * parallelization strategy based on channels. I would prefer to either
+ * deprecate it, since it duplicates msot of the update scheme, and will
+ * thus need to be kept in sync manually as the scheme evolves. The only
+ * reason to retain it is for benchmarking purposes.
+ */
 
 
 
 
 // ============================================================================
-// fn advance_channels_internal_block(
-//     state:      BlockState,
-//     block_data: &crate::BlockData,
-//     solver:     &Solver,
-//     mesh:       &Mesh,
-//     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-//     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
-//     dt:         f64) -> BlockState
-// {
-//     // ============================================================================
-//     use ndarray::{s, azip};
-//     use ndarray_ops::{map_stencil3};
-//     use godunov_core::piecewise_linear::plm_gradient3;
-//     use Direction::{X, Y};
+fn advance_channels_internal_block(
+    state:      BlockState,
+    block_data: &crate::BlockData,
+    solver:     &Solver,
+    mesh:       &Mesh,
+    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    dt:         f64) -> BlockState
+{
+    // ============================================================================
+    use ndarray::{s, azip};
+    use ndarray_ops::{map_stencil3};
+    use godunov_core::piecewise_linear::plm_gradient3;
+    use Direction::{X, Y};
 
-//     // ============================================================================
-//     let dx = mesh.cell_spacing_x();
-//     let dy = mesh.cell_spacing_y();
-//     let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
+    // ============================================================================
+    let dx = mesh.cell_spacing_x();
+    let dy = mesh.cell_spacing_y();
+    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
 
-//     // ============================================================================
-//     let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
-//     {
-//         let cs2 = solver.sound_speed_squared(f, &two_body_state);
-//         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-//         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-//         let nu = solver.nu;
-//         let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
-//         let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
-//         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
-//     };
+    // ============================================================================
+    let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
+    {
+        let cs2 = solver.sound_speed_squared(f, &two_body_state);
+        let pl = *l.pc + *l.gradient_field(axis) * 0.5;
+        let pr = *r.pc - *r.gradient_field(axis) * 0.5;
+        let nu = solver.nu;
+        let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
+        let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
+        riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
+    };
 
-//     let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+    let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
-//     // ============================================================================
-//     sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
+    // ============================================================================
+    sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
 
-//     // ============================================================================
-//     let sources = azip![
-//         &state.conserved,
-//         &block_data.initial_conserved,
-//         &block_data.cell_centers]
-//     .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+    // ============================================================================
+    let sources = azip![
+        &state.conserved,
+        &block_data.initial_conserved,
+        &block_data.cell_centers]
+    .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
-//     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-//     let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
-//     let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
-//     let xf = &block_data.face_centers_x;
-//     let yf = &block_data.face_centers_y;
+    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
+    let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+    let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+    let xf = &block_data.face_centers_x;
+    let yf = &block_data.face_centers_y;
 
-//     // ============================================================================
-//     let cell_data = azip![
-//         pe.slice(s![1..-1,1..-1]),
-//         gx.slice(s![ ..  ,1..-1]),
-//         gy.slice(s![1..-1, ..  ])]
-//     .apply_collect(CellData::new);
+    // ============================================================================
+    let cell_data = azip![
+        pe.slice(s![1..-1,1..-1]),
+        gx.slice(s![ ..  ,1..-1]),
+        gy.slice(s![1..-1, ..  ])]
+    .apply_collect(CellData::new);
 
-//     // ============================================================================
-//     let fx = azip![
-//         cell_data.slice(s![..-1,1..-1]),
-//         cell_data.slice(s![ 1..,1..-1]),
-//         xf]
-//     .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
+    // ============================================================================
+    let fx = azip![
+        cell_data.slice(s![..-1,1..-1]),
+        cell_data.slice(s![ 1..,1..-1]),
+        xf]
+    .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
 
-//     // ============================================================================
-//     let fy = azip![
-//         cell_data.slice(s![1..-1,..-1]),
-//         cell_data.slice(s![1..-1, 1..]),
-//         yf]
-//     .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+    // ============================================================================
+    let fy = azip![
+        cell_data.slice(s![1..-1,..-1]),
+        cell_data.slice(s![1..-1, 1..]),
+        yf]
+    .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
 
-//     // ============================================================================
-//     let du = azip![
-//         fx.slice(s![..-1,..]),
-//         fx.slice(s![ 1..,..]),
-//         fy.slice(s![..,..-1]),
-//         fy.slice(s![.., 1..])]
-//     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+    // ============================================================================
+    let du = azip![
+        fx.slice(s![..-1,..]),
+        fx.slice(s![ 1..,..]),
+        fy.slice(s![..,..-1]),
+        fy.slice(s![.., 1..])]
+    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-//     // ============================================================================
-//     BlockState{
-//         time: state.time + dt,
-//         iteration: state.iteration + 1,
-//         conserved: state.conserved + du + sources,
-//     }
-// }
-
-
-
-
-// // ============================================================================
-// fn advance_channels_internal(
-//     conserved:  &mut Array<Conserved, Ix2>,
-//     block_data: &crate::BlockData,
-//     solver:     &Solver,
-//     mesh:       &Mesh,
-//     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-//     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
-//     time:       f64,
-//     dt:         f64,
-//     fold:       usize)
-// {
-//     use std::convert::TryFrom;
-
-//     let update = |state| advance_channels_internal_block(state, block_data, solver, mesh, sender, receiver, dt);
-//     let mut state = BlockState {
-//         time: time,
-//         iteration: Rational64::new(0, 1),
-//         conserved: conserved.clone(),
-//     };
-//     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
-
-//     for _ in 0..fold
-//     {
-//         state = rk_order.advance(state, update);
-//     }
-//     *conserved = state.conserved;
-// }
+    // ============================================================================
+    BlockState{
+        time: state.time + dt,
+        iteration: state.iteration + 1,
+        conserved: (state.conserved + du + sources).to_shared(),
+    }
+}
 
 
 
 
-// // ============================================================================
-// pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
-// {
-//     crossbeam::scope(|scope|
-//     {
-//         use std::collections::HashMap;
+// ============================================================================
+fn advance_channels_internal(
+    conserved:  &mut ArcArray<Conserved, Ix2>,
+    block_data: &crate::BlockData,
+    solver:     &Solver,
+    mesh:       &Mesh,
+    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    time:       f64,
+    dt:         f64,
+    fold:       usize)
+{
+    use std::convert::TryFrom;
 
-//         let time = state.time;
-//         let mut receivers       = Vec::new();
-//         let mut senders         = Vec::new();
-//         let mut block_primitive = HashMap::new();
+    let update = |state| advance_channels_internal_block(state, block_data, solver, mesh, sender, receiver, dt);
+    let mut state = BlockState {
+        time: time,
+        iteration: Rational64::new(0, 1),
+        conserved: conserved.clone(),
+    };
+    let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
 
-//         for (u, b) in state.conserved.iter_mut().zip(block_data)
-//         {
-//             let (their_s, my_r) = crossbeam::channel::unbounded();
-//             let (my_s, their_r) = crossbeam::channel::unbounded();
+    for _ in 0..fold
+    {
+        state = rk_order.advance(state, update);
+    }
+    *conserved = state.conserved;
+}
 
-//             senders.push(my_s);
-//             receivers.push(my_r);
 
-//             scope.spawn(move |_| advance_channels_internal(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
-//         }
 
-//         for _ in 0..fold
-//         {
-//             for _ in 0..solver.rk_order
-//             {
-//                 for (block_data, r) in block_data.iter().zip(receivers.iter())
-//                 {
-//                     block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
-//                 }
 
-//                 for (block_data, s) in block_data.iter().zip(senders.iter())
-//                 {
-//                     s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
-//                         .get(i)
-//                         .unwrap()
-//                         .clone()))
-//                     .unwrap();
-//                 }
-//             }
+// ============================================================================
+pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
+{
+    crossbeam::scope(|scope|
+    {
+        use std::collections::HashMap;
 
-//             state.iteration += 1;
-//             state.time += dt;
-//         }
-//     }).unwrap();
-// }
+        let time = state.time;
+        let mut receivers       = Vec::new();
+        let mut senders         = Vec::new();
+        let mut block_primitive = HashMap::new();
+
+        for (u, b) in state.conserved.iter_mut().zip(block_data)
+        {
+            let (their_s, my_r) = crossbeam::channel::unbounded();
+            let (my_s, their_r) = crossbeam::channel::unbounded();
+
+            senders.push(my_s);
+            receivers.push(my_r);
+
+            scope.spawn(move |_| advance_channels_internal(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+        }
+
+        for _ in 0..fold
+        {
+            for _ in 0..solver.rk_order
+            {
+                for (block_data, r) in block_data.iter().zip(receivers.iter())
+                {
+                    block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+                }
+
+                for (block_data, s) in block_data.iter().zip(senders.iter())
+                {
+                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
+                        .get(i)
+                        .unwrap()
+                        .clone()))
+                    .unwrap();
+                }
+            }
+
+            state.iteration += 1;
+            state.time += dt;
+        }
+    }).unwrap();
+}

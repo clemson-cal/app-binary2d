@@ -304,8 +304,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         if app.tokio {
             state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
         } else {
-            panic!();
-            // scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+            scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &block_data, &mesh, &model, &app);
     }
