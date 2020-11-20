@@ -45,7 +45,7 @@ pub struct State<Conserved>
 
 // ============================================================================
 #[derive(Copy, Clone)]
-struct CellData<'a, P>
+pub struct CellData<'a, P>
 {
     pc: &'a P,
     gx: &'a P,
@@ -224,7 +224,7 @@ impl Mesh
 
 
 // ============================================================================
-trait Hydrodynamics
+pub trait Hydrodynamics
 {
     type Conserved: Add<Output=Self::Conserved> + Sub<Output=Self::Conserved> + Mul<f64, Output=Self::Conserved> + Div<f64, Output=Self::Conserved> + Copy;
     type Primitive: Copy;
@@ -418,7 +418,7 @@ impl TwoDimensionalIsothermalHydrodynamics
 // ============================================================================
 fn advance_internal<H: Hydrodynamics>(
     state:      BlockState<H::Conserved>,
-    hydro:      H,
+    hydro:      &H,
     block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
     mesh:       &Mesh,
@@ -495,92 +495,92 @@ fn advance_internal<H: Hydrodynamics>(
 
 
 // ============================================================================
-// fn advance_internal_rk<H: Hydrodynamics, Conserved, Primitive>(
-//     conserved:  &mut Array<Conserved, Ix2>,
-//     hydro:       H,
-//     block_data: &BlockData<Conserved>,
-//     solver:     &Solver,
-//     mesh:       &Mesh,
-//     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-//     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock<Primitive>>,
-//     time:       f64,
-//     dt:         f64,
-//     fold:       usize)
-// {
-//     use std::convert::TryFrom;
+fn advance_internal_rk<H: Hydrodynamics>(
+    conserved:  &mut Array<H::Conserved, Ix2>,
+    hydro:      &H,
+    block_data: &BlockData<H::Conserved>,
+    solver:     &Solver,
+    mesh:       &Mesh,
+    sender:     &crossbeam::Sender<Array<H::Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock<H::Primitive>>,
+    time:       f64,
+    dt:         f64,
+    fold:       usize)
+{
+    use std::convert::TryFrom;
 
-//     let update = |state| advance_internal(state, block_data, solver, mesh, sender, receiver, dt);
-//     let mut state = BlockState::<Conserved> {
-//         time: time,
-//         iteration: Rational64::new(0, 1),
-//         conserved: conserved.clone(),
-//     };
-//     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
+    let update = |state| advance_internal(state, hydro, block_data, solver, mesh, sender, receiver, dt);
+    let mut state = BlockState::<H::Conserved> {
+        time: time,
+        iteration: Rational64::new(0, 1),
+        conserved: conserved.clone(),
+    };
+    let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
 
-//     for _ in 0..fold
-//     {
-//         state = rk_order.advance(state, update);
-//     }
-//     *conserved = state.conserved;
-// }
+    for _ in 0..fold
+    {
+        state = rk_order.advance(state, update);
+    }
+    *conserved = state.conserved;
+}
 
 
 
 
 // ============================================================================
-// pub fn advance<H: Hydrodynamics, Conserved, Primitive>(
-//     state: &mut State<Conserved>,
-//     hydro: H,
-//     block_data: &Vec<BlockData<Conserved>>,
+// pub fn advance<H: Hydrodynamics>(
+//     state: &mut State<H::Conserved>,
+//     hydro: &H,
+//     block_data: &Vec<BlockData<H::Conserved>>,
 //     mesh: &Mesh,
 //     solver: &Solver,
 //     dt: f64,
 //     fold: usize)
 // {
-//     crossbeam::scope(|scope|
-//     {
-//         use std::collections::HashMap;
+    // crossbeam::scope(|scope|
+    // {
+    //     use std::collections::HashMap;
 
-//         let time = state.time;
-//         let mut receivers       = Vec::new();
-//         let mut senders         = Vec::new();
-//         let mut block_primitive = HashMap::new();
+    //     let time = state.time;
+    //     let mut receivers       = Vec::new();
+    //     let mut senders         = Vec::new();
+    //     let mut block_primitive = HashMap::new();
 
-//         for (u, b) in state.conserved.iter_mut().zip(block_data)
-//         {
-//             let (their_s, my_r) = crossbeam::channel::unbounded();
-//             let (my_s, their_r) = crossbeam::channel::unbounded();
+    //     for (u, b) in state.conserved.iter_mut().zip(block_data)
+    //     {
+    //         let (their_s, my_r) = crossbeam::channel::unbounded();
+    //         let (my_s, their_r) = crossbeam::channel::unbounded();
 
-//             senders.push(my_s);
-//             receivers.push(my_r);
+    //         senders.push(my_s);
+    //         receivers.push(my_r);
 
-//             scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
-//         }
+    //         scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+    //     }
 
-//         for _ in 0..fold
-//         {
-//             for _ in 0..solver.rk_order
-//             {
-//                 for (block_data, r) in block_data.iter().zip(receivers.iter())
-//                 {
-//                     block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
-//                 }
+    //     for _ in 0..fold
+    //     {
+    //         for _ in 0..solver.rk_order
+    //         {
+    //             for (block_data, r) in block_data.iter().zip(receivers.iter())
+    //             {
+    //                 block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
+    //             }
 
-//                 for (block_data, s) in block_data.iter().zip(senders.iter())
-//                 {
-//                     s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
-//                         .get(i)
-//                         .unwrap()
-//                         .clone()))
-//                     .unwrap();
-//                 }
-//             }
+    //             for (block_data, s) in block_data.iter().zip(senders.iter())
+    //             {
+    //                 s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
+    //                     .get(i)
+    //                     .unwrap()
+    //                     .clone()))
+    //                 .unwrap();
+    //             }
+    //         }
 
-//             state.iteration += 1;
-//             state.time += dt;
-//         }
-//     }).unwrap();
-// }
+    //         state.iteration += 1;
+    //         state.time += dt;
+    //     }
+    // }).unwrap();
+}
 
 
 
