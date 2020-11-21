@@ -414,7 +414,7 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
 // ============================================================================
 impl State
 {
-    async fn weighted_average(self, br: Rational64, other: &State, runtime: &tokio::runtime::Runtime) -> State
+    async fn weighted_average(self, br: Rational64, s0: &State, runtime: &tokio::runtime::Runtime) -> State
     {
         use num::ToPrimitive;
         use futures::future::FutureExt;
@@ -424,16 +424,16 @@ impl State
 
         let u_avg = self.conserved
             .iter()
-            .zip(&other.conserved)
+            .zip(&s0.conserved)
             .map(|(u1, u2)| {
                 let u1 = u1.clone();
                 let u2 = u2.clone();
-                runtime.spawn(async move { u1 * bf + u2 * (-bf + 1.0) }).map(|u| u.unwrap())
+                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
             });
 
         State{
-            time:      self.time      * bf + other.time      * (-bf + 1.0),
-            iteration: self.iteration * br + other.iteration * (-br + 1),
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
             conserved: join_all(u_avg).await,
         }
     }
