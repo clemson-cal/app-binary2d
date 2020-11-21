@@ -486,7 +486,14 @@ impl Hydrodynamics for Euler
         ];
     }
 
-    fn intercell_flux<'a>(&self, _: &Solver, _: &CellData<'a, Self::Primitive>, _: &CellData<'a, Self::Primitive>, _: &(f64, f64), _: &kepler_two_body::OrbitalState, axis: Direction) -> Self::Conserved
+    fn intercell_flux<'a>(
+        &self,
+        solver: &Solver,
+        l: &CellData<'a, Self::Primitive>, 
+        r: &CellData<'a, Self::Primitive>, 
+        f: &(f64, f64), 
+        two_body_state: &kepler_two_body::OrbitalState,
+        axis: Direction) -> Self::Conserved
     {
         todo!()
     }
