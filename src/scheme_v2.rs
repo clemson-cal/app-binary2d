@@ -323,8 +323,13 @@ pub trait Hydrodynamics: Sync
         axis: Direction) -> Self::Conserved;
 }
 
-struct Isothermal {}
-struct Euler {}
+struct Isothermal {
+
+}
+
+struct Euler {
+    gamma_law_index: f64,
+}
 
 
 
@@ -337,12 +342,10 @@ impl Hydrodynamics for Isothermal
 
     fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
     {
-        use Direction::{X, Y};
-
         match axis
         {
-            X => cell_data.gx,
-            Y => cell_data.gy,
+            Direction::X => cell_data.gx,
+            Direction::Y => cell_data.gy,
         }
     }
 
@@ -428,12 +431,10 @@ impl Hydrodynamics for Euler
 
     fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
     {
-        use Direction::{X, Y};
-
         match axis
         {
-            X => cell_data.gx,
-            Y => cell_data.gy,
+            Direction::X => cell_data.gx,
+            Direction::Y => cell_data.gy,
         }
     }
 
@@ -461,9 +462,9 @@ impl Hydrodynamics for Euler
         godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
     }
 
-    fn to_primitive(&self, _: Self::Conserved) -> Self::Primitive
+    fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive
     {
-        todo!()
+        conserved.to_primitive(self.gamma_law_index)
     }
 
     fn source_terms(
@@ -476,6 +477,8 @@ impl Hydrodynamics for Euler
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
     {
+        todo!("We need to add the energy source terms associated with gravitational force below");
+
         let st = solver.source_terms(two_body_state, x, y, conserved.mass_density());
         return [
             hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, 0.0) * dt,
