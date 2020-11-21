@@ -292,13 +292,15 @@ impl<'a> CellData<'_>
 // ============================================================================
 async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
 {
-    use std::sync::Arc;
-    use std::future::Future;
     use std::collections::HashMap;
-    use futures::future::FutureExt;
-    use futures::future::join_all;
+    use ndarray::{s, azip};
+    use ndarray_ops::{map_stencil3};
+    use futures::future::{Future, FutureExt, join_all};
+    use godunov_core::piecewise_linear::plm_gradient3;
+    use Direction::{X, Y};
 
-    async fn join_3by3<T: Clone + Future>(a: [[T; 3]; 3]) -> [[T::Output; 3]; 3]
+
+    async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
     {
         [
             [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
@@ -307,38 +309,27 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
         ]
     }
 
-    let cons_prim: Arc<HashMap<_, _>> = Arc::new(block_data
-        .iter()
-        .zip(state.conserved)
-        .map(|(block_data, conserved)|
-        {
-            let u1 = conserved.clone();
-            let u2 = conserved.clone();
-            let uf = async move {
-                u2.mapv(Conserved::to_primitive)
-            };
-            (block_data.index, (u1, runtime.spawn(uf).map(|f| f.unwrap()).shared()))
-        })
-        .collect());
 
-    let time = state.time;
-
-    let updated_cons = block_data.iter().map(|block|
+    let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
     {
-        let mesh              = mesh.clone();
-        let solver            = solver.clone();
-        let block             = block.clone();
-        let cons_prim         = cons_prim.clone();
+        let uc = uc.clone();
+        let primitive = async move {
+            uc.mapv(Conserved::to_primitive).to_shared()
+        };
+        (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
+    }).collect();
 
-        let u1 = async move
-        {
-            let uc = &cons_prim[&block.index].0;
 
-            // ============================================================================
-            use ndarray::{s, azip};
-            use ndarray_ops::{map_stencil3};
-            use godunov_core::piecewise_linear::plm_gradient3;
-            use Direction::{X, Y};
+    let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    {
+        let solver = solver.clone();
+        let mesh   = mesh.clone();
+        let block  = block.clone();
+        let time   = state.time;
+        let pc_map = pc_map.clone();
+        let uc     = uc.clone();
+
+        let u1 = async move {
 
             // ============================================================================
             let dx = mesh.cell_spacing_x();
@@ -360,16 +351,17 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
             let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
             // ============================================================================
-            let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| cons_prim[i].1.clone())).await;
+            let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
+
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
             let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
             let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
-            let xf = block.face_centers_x;
-            let yf = block.face_centers_y;
+            let xf = &block.face_centers_x;
+            let yf = &block.face_centers_y;
 
             // ============================================================================
             let sources = azip![
-                uc,
+                &uc,
                 &block.initial_conserved,
                 &block.cell_centers]
             .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
@@ -385,14 +377,14 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
             let fx = azip![
                 cell_data.slice(s![..-1,1..-1]),
                 cell_data.slice(s![ 1..,1..-1]),
-                &xf]
+                xf]
             .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
 
             // ============================================================================
             let fy = azip![
                 cell_data.slice(s![1..-1,..-1]),
                 cell_data.slice(s![1..-1, 1..]),
-                &yf]
+                yf]
             .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
 
             // ============================================================================
@@ -405,13 +397,14 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
 
             (uc + &du + &sources).to_shared()
         };
-        runtime.spawn(u1).map(|f| f.unwrap())
+        runtime.spawn(u1).map(|u| u.unwrap())
     });
+
 
     State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: join_all(updated_cons).await,
+        conserved: join_all(u1_vec).await,
     }
 }
 
