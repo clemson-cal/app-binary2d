@@ -13,7 +13,7 @@
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
-use ndarray::{Array, Ix2};
+use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use scheme::{State, BlockIndex, BlockData};
@@ -42,6 +42,12 @@ struct App
 
     #[clap(long, default_value="1", about="Number of iterations between side effects")]
     fold: usize,
+
+    #[clap(long, default_value="1", about="Number of worker threads to use")]
+    threads: usize,
+
+    #[clap(long, about="Whether to parallelize on the tokio runtime [default: message passing]")]
+    tokio: bool,
 }
 
 impl App
@@ -93,6 +99,15 @@ impl App
             HashMap::new()
         }
     }
+
+    fn compute_units(&self, num_blocks: usize) -> usize
+    {
+        if self.tokio {
+            num_cpus::get_physical().min(self.threads)
+        } else {
+            num_cpus::get_physical().min(num_blocks)
+        }
+    }
 }
 
 
@@ -127,13 +142,14 @@ impl Tasks
     fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
-        let kzps_per_cu = (mesh.zones_per_block() as f64) * (app.fold as f64) * 1e-3 / elapsed;
-        let kzps        = (mesh.total_zones()     as f64) * (app.fold as f64) * 1e-3 / elapsed;
+        let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
+        let mzps_per_cu = mzps / app.compute_units(block_data.len()) as f64;
+
         self.tasks_last_performed = Instant::now();
 
         if self.call_count_this_run > 0
         {
-            println!("[{:05}] orbit={:.3} kzps={:.0} (per cu={:.0})", state.iteration, state.time / ORBITAL_PERIOD, kzps, kzps_per_cu);
+            println!("[{:05}] orbit={:.3} Mzps={:.1} (per cu={:.1})", state.iteration, state.time / ORBITAL_PERIOD, mzps, mzps_per_cu);
         }
         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
@@ -158,11 +174,12 @@ fn disk_model(xy: (f64, f64)) -> Primitive
     return Primitive(1.0, vx, vy);
 }
 
-fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> Array<Conserved, Ix2>
+fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> ArcArray<Conserved, Ix2>
 {
     mesh.cell_centers(block_index)
         .mapv(disk_model)
         .mapv(Primitive::to_conserved)
+        .to_shared()
 }
 
 fn initial_state(mesh: &scheme::Mesh) -> State
@@ -187,10 +204,10 @@ fn initial_tasks() -> Tasks
 fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
 {
     BlockData{
-        cell_centers:    mesh.cell_centers(block_index),
-        face_centers_x:  mesh.face_centers_x(block_index),
-        face_centers_y:  mesh.face_centers_y(block_index),
-        initial_conserved: initial_conserved(block_index, &mesh),
+        cell_centers:    mesh.cell_centers(block_index).to_shared(),
+        face_centers_x:  mesh.face_centers_x(block_index).to_shared(),
+        face_centers_y:  mesh.face_centers_y(block_index).to_shared(),
+        initial_conserved: initial_conserved(block_index, &mesh).to_shared(),
         index: block_index,
     }
 }
@@ -269,15 +286,26 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
     }
     println!();
     println!("\trestart file            = {}",      app.restart_file().unwrap_or("none".to_string()));
+    println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
     tasks.perform(&state, &block_data, &mesh, &model, &app);
 
+    use tokio::runtime::Builder;
+    let runtime = Builder::new_multi_thread()
+            .worker_threads(app.threads)
+            .build()
+            .unwrap();
+
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme::advance(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        if app.tokio {
+            state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
+        } else {
+            scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        }
         tasks.perform(&state, &block_data, &mesh, &model, &app);
     }
     Ok(())

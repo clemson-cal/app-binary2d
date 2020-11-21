@@ -33,7 +33,8 @@ pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
         let u = cons.dataset(&key)?
             .read_dyn::<[f64; 3]>()?
             .into_dimensionality::<ndarray::Ix2>()?
-            .mapv(Into::<hydro_iso2d::Conserved>::into);
+            .mapv(Into::<hydro_iso2d::Conserved>::into)
+            .to_shared();
         conserved.push(u);
     }
 
