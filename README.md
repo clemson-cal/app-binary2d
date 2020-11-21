@@ -8,6 +8,7 @@ CDC is written and maintained by the [Computational Astrophysics Lab](https://jz
 - Jonathan Zrake (Clemson)
 - Chris Tiede (NYU)
 - Ryan Westernacher-Schneider (Clemson)
+- Jack Hu (Clemson)
 
 # Recent publications
 - [Gas-driven inspiral of binaries in thin accretion disks (Tiede+ 2020)](https://ui.adsabs.harvard.edu/abs/2020ApJ...900...43T/abstract)
