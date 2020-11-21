@@ -84,6 +84,21 @@ impl<'a, P: Primitive> CellData<'_, P>
 
 
 // ============================================================================
+struct SourceTerms
+{
+    fx1: f64,
+    fy1: f64,
+    fx2: f64,
+    fy2: f64,
+    sink_rate1: f64,
+    sink_rate2: f64,
+    buffer_rate: f64,
+}
+
+
+
+
+// ============================================================================
 pub struct Solver
 {
     pub buffer_rate: f64,
@@ -102,6 +117,16 @@ pub struct Solver
 
 impl Solver
 {
+    pub fn effective_resolution(&self, mesh: &Mesh) -> f64
+    {
+        f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
+    }
+
+    pub fn min_time_step(&self, mesh: &Mesh) -> f64
+    {
+        self.cfl * self.effective_resolution(mesh) / self.maximum_orbital_velocity()
+    }
+
     fn sink_kernel(&self, dx: f64, dy: f64) -> f64
     {
         let r2 = dx * dx + dy * dy;
@@ -124,14 +149,41 @@ impl Solver
         1.0 / self.softening_length.sqrt()
     }
 
-    pub fn effective_resolution(&self, mesh: &Mesh) -> f64
+    fn source_terms(&self, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms
     {
-        f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
-    }
+        let p1 = two_body_state.0;
+        let p2 = two_body_state.1;
 
-    pub fn min_time_step(&self, mesh: &Mesh) -> f64
-    {
-        self.cfl * self.effective_resolution(mesh) / self.maximum_orbital_velocity()
+        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length);
+        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length);
+
+        let fx1 = surface_density * ax1;
+        let fy1 = surface_density * ay1;
+        let fx2 = surface_density * ax2;
+        let fy2 = surface_density * ay2;
+
+        let x1 = p1.position_x();
+        let y1 = p1.position_y();
+        let x2 = p2.position_x();
+        let y2 = p2.position_y();
+
+        let sink_rate1 = self.sink_kernel(x - x1, y - y1);
+        let sink_rate2 = self.sink_kernel(x - x2, y - y2);
+
+        let r = (x * x + y * y).sqrt();
+        let y = (r - self.domain_radius) / self.buffer_scale;
+        let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
+        let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
+
+        SourceTerms{
+            fx1: fx1,
+            fy1: fy1,
+            fx2: fx2,
+            fy2: fy2,
+            sink_rate1: sink_rate1,
+            sink_rate2: sink_rate2,
+            buffer_rate: buffer_rate,
+        }
     }
 }
 
@@ -248,6 +300,8 @@ pub trait Hydrodynamics: Sync
     fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive;
     fn strain_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64;
     fn stress_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64;
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
+    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
 
     fn source_terms(
         &self,
@@ -267,10 +321,6 @@ pub trait Hydrodynamics: Sync
         f: &(f64, f64), 
         two_body_state: &kepler_two_body::OrbitalState,
         axis: Direction) -> Self::Conserved;
-
-    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
-
-    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
 }
 
 struct Isothermal {}
@@ -314,6 +364,16 @@ impl Hydrodynamics for Isothermal
         kinematic_viscosity * cell_data.pc.density() * self.strain_field(cell_data, row, col)
     }
 
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
+    {
+        godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
+    }
+
+    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive
+    {
+        u.to_primitive()
+    }
+
     fn source_terms(
         &self,
         solver: &Solver,
@@ -324,39 +384,13 @@ impl Hydrodynamics for Isothermal
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
     {
-        use hydro_iso2d::Conserved;
-
-        let p1 = two_body_state.0;
-        let p2 = two_body_state.1;
-
-        let [ax1, ay1] = p1.gravitational_acceleration(x, y, solver.softening_length);
-        let [ax2, ay2] = p2.gravitational_acceleration(x, y, solver.softening_length);
-
-        let rho = conserved.density();
-        let fx1 = rho * ax1;
-        let fy1 = rho * ay1;
-        let fx2 = rho * ax2;
-        let fy2 = rho * ay2;
-
-        let x1 = p1.position_x();
-        let y1 = p1.position_y();
-        let x2 = p2.position_x();
-        let y2 = p2.position_y();
-
-        let sink_rate1 = solver.sink_kernel(x - x1, y - y1);
-        let sink_rate2 = solver.sink_kernel(x - x2, y - y2);
-
-        let r = (x * x + y * y).sqrt();
-        let y = (r - solver.domain_radius) / solver.buffer_scale;
-        let omega_outer = (two_body_state.total_mass() / solver.domain_radius.powi(3)).sqrt();
-        let buffer_rate = 0.5 * solver.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
-
+        let st = solver.source_terms(two_body_state, x, y, conserved.density());
         return [
-            hydro_iso2d::Conserved(0.0, fx1, fy1) * dt,
-            hydro_iso2d::Conserved(0.0, fx2, fy2) * dt,
-            conserved * (-sink_rate1 * dt),
-            conserved * (-sink_rate2 * dt),
-            (conserved - background_conserved) * (-dt * buffer_rate),
+            hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
+            hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
+            conserved * (-st.sink_rate1 * dt),
+            conserved * (-st.sink_rate2 * dt),
+            (conserved - background_conserved) * (-dt * st.buffer_rate),
         ];
     }
 
@@ -380,16 +414,6 @@ impl Hydrodynamics for Isothermal
             Direction::Y => hydro_iso2d::Direction::Y,
         };
         hydro_iso2d::riemann_hlle(pl, pr, iso2d_axis, cs2) + hydro_iso2d::Conserved(0.0, -tau_x, -tau_y)
-    }
-
-    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
-    {
-        godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
-    }
-
-    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive
-    {
-        u.to_primitive()
     }
 }
 
@@ -432,6 +456,16 @@ impl Hydrodynamics for Euler
         kinematic_viscosity * cell_data.pc.mass_density() * self.strain_field(cell_data, row, col)
     }
 
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
+    {
+        godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
+    }
+
+    fn to_primitive(&self, _: Self::Conserved) -> Self::Primitive
+    {
+        todo!()
+    }
+
     fn source_terms(
         &self,
         solver: &Solver,
@@ -442,51 +476,17 @@ impl Hydrodynamics for Euler
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
     {
-        let p1 = two_body_state.0;
-        let p2 = two_body_state.1;
-
-        let [ax1, ay1] = p1.gravitational_acceleration(x, y, solver.softening_length);
-        let [ax2, ay2] = p2.gravitational_acceleration(x, y, solver.softening_length);
-
-        let rho = conserved.mass_density();
-        let fx1 = rho * ax1;
-        let fy1 = rho * ay1;
-        let fx2 = rho * ax2;
-        let fy2 = rho * ay2;
-
-        let x1 = p1.position_x();
-        let y1 = p1.position_y();
-        let x2 = p2.position_x();
-        let y2 = p2.position_y();
-
-        let sink_rate1 = solver.sink_kernel(x - x1, y - y1);
-        let sink_rate2 = solver.sink_kernel(x - x2, y - y2);
-
-        let r = (x * x + y * y).sqrt();
-        let y = (r - solver.domain_radius) / solver.buffer_scale;
-        let omega_outer = (two_body_state.total_mass() / solver.domain_radius.powi(3)).sqrt();
-        let buffer_rate = 0.5 * solver.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
-
+        let st = solver.source_terms(two_body_state, x, y, conserved.mass_density());
         return [
-            hydro_euler::euler_2d::Conserved(0.0, fx1, fy1, 0.0) * dt,
-            hydro_euler::euler_2d::Conserved(0.0, fx2, fy2, 0.0) * dt,
-            conserved * (-sink_rate1 * dt),
-            conserved * (-sink_rate2 * dt),
-            (conserved - background_conserved) * (-dt * buffer_rate),
+            hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, 0.0) * dt,
+            hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, 0.0) * dt,
+            conserved * (-st.sink_rate1 * dt),
+            conserved * (-st.sink_rate2 * dt),
+            (conserved - background_conserved) * (-dt * st.buffer_rate),
         ];
     }
 
-    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
-    {
-        godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
-    }
-
     fn intercell_flux<'a>(&self, _: &Solver, _: &CellData<'a, Self::Primitive>, _: &CellData<'a, Self::Primitive>, _: &(f64, f64), _: &kepler_two_body::OrbitalState, axis: Direction) -> Self::Conserved
-    {
-        todo!()
-    }
-
-    fn to_primitive(&self, _: Self::Conserved) -> Self::Primitive
     {
         todo!()
     }
