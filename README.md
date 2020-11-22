@@ -79,6 +79,22 @@ The model parameters are specified as `key=value` pairs on the command line (no 
 ```
 
 
+# Workflow
+
+
+__Model parameters__
+
+The _model parameters_ control the grid resolution, domain size, physical conditions, and solver parameters. They are a set of `key=value` pairs which are provided on the command line. All of the model parameters have default values, which define the fiducial simulation setup. You can inspect the model parameters of a particular run by looking in the HDF5 checkpoint files under the `model` group.
+
+
+__Restarting runs__
+
+Runs can be restarted from HDF5 checkpoint files (e.g. `chkpt.0000.h5`). These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that had run uninterrupted. Checkpoints are written at a cadence given by the `cpi` model parameter (for checkpoint interval), and will appear in the directory specified by the `--outdir` flag.
+
+A run can be restarted either by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`, or the run directory itself, in which case the most recent checkpoint file in that directory is used. In a restarted run, the default value of the output directory becomes the parent directory of the checkpoint file. However, you can still supply `--outdir` to override the default, for example if you want to "branch" a run.
+
+All the model parameters are stored in the checkpoint file, so you don't need to provide them again. Any model parameters you do provide will supercede the ones in the checkpoint. Be careful how you use this feature -- superceding parameters which only specified the initial condition would not effect the run, and doing this could confuse you later on. Other model parameters, such as the block size, cannot be changed and would (hopefully!) trigger a runtime error. Changing other parameters such as physical conditions or solver parameters can be very useful, for example if you want to see how an already well-evolved run responds to specific parameters.
+
 
 # Performance and parallelization
 
