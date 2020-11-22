@@ -110,11 +110,9 @@ In isothermal mode, the 2D arrays of conserved quantities have element type `[f6
 
 __Restarting runs__
 
-Runs can be restarted from HDF5 checkpoint files (e.g. `chkpt.0000.h5`). These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that ran uninterrupted.
+Runs can be restarted from HDF5 checkpoint files. These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that ran uninterrupted. A run can be restarted by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`. Alternatively, setting the flag `--restart=my-run` will find the most recent checkpoint file in that directory, and continue from it. In a restarted run, subsequent outputs are placed in the same directory as the checkpoint file, unless a different directory is given with the `--outdir` flag.
 
-A run can be restarted either by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`, or the run directory itself, in which case the most recent checkpoint file in that directory is used. In a restarted run, subsequent outputs are placed in the same directory as the checkpoint file, unless a different directory is given with the `--outdir` flag.
-
-All the model parameters are stored in the checkpoint file, so any model parameters you do provide on the command line will supercede those in the checkpoint. Be careful how you use this feature -- superceding parameters which only specified the initial condition would not effect the run, and doing this could cause confuse later on. Other model parameters, such as the block size, cannot be changed and would (hopefully!) trigger a runtime error. Changing other parameters such as physical conditions or solver parameters can be very useful, for example if you want to see how an already well-evolved run responds to a change of parameters.
+All the model parameters are stored in the checkpoint file. Any model parameters you do provide on the command line will supercede those in the checkpoint. Be careful how you use this feature -- superceding model parameters sometimes makes sense, but can other times be confusing. For example, if the parameter is only used once to generate the initial condition, then superceding it would have no effect, other than obscuring the parameters used to start the simulation. Other model parameters, such as the block size or domain radius, should never be superceded; doing so _should_ but is not guaranteed to cause a runtime error. Superceding certain physical conditions (e.g. disk Mach number or viscosity) or solver parameters (CFL, etc) can be very useful, for example if you want to see how an already well-evolved run responds to these changes.
 
 
 # Performance and parallelization
@@ -138,3 +136,13 @@ The performance characteristics with `--tokio` are different from the message-pa
 The last configuration with `--tokio` approaches ~70% scaling on a single node. On a 28-core Mac Pro workstation, it tops 90 million zone-updates per second, per RK step (Mzps), with the block size set to 64. For comparison, message passing with blocks ~ physical cores tops out at ~100 Mzps with message passing.
 
 Since the optimal mode depends on the mesh configuration, we are tentatively planning to maintain both parallelization strategies. That may not mean that all runtime configurations are supported in both parallelization modes. For example runs with tracer particles may require `--tokio`.
+
+
+
+# Developer guidelines
+
+The main branch may updated incrementally with improvements to the code performance, documentation, and non-breaking changes to the user interface or analysis scripts. New features which are expected to remain incomplete for days or weeks are developed on separate _feature branches_. Presently, the work-in-progess features are on the following branches:
+
+- `energy-eqn`: Includes thermodynamics of viscous heating, radiative cooling, etc.
+- `tracers`: Massless tracer particles which help to visualize the accretion flow
+- `orbital-ev`: Evolution of the binary orbital parameters under gravitational and accretion forces
