@@ -43,6 +43,15 @@ pub struct State
 
 
 
+#[derive(Clone, Copy)]
+pub struct TimeSeriesSample
+{
+    pub time: f64,
+}
+
+
+
+
 // ============================================================================
 #[derive(Clone)]
 pub struct Solver

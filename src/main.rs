@@ -16,11 +16,12 @@ use num::rational::Rational64;
 use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
-use scheme::{State, BlockIndex, BlockData};
+use scheme::{State, TimeSeriesSample, BlockIndex, BlockData};
 use hydro_iso2d::*;
 
 mod io;
 mod scheme;
+mod dataflow;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
@@ -99,9 +100,24 @@ impl App
     }
 
     /**
+     * Determine the name of a restart directory, if the --restart option had
+     * been given, failing if the checkpoint file cannot be found. If no restart
+     * file was requested, then return None.
+     */
+    fn restart_rundir(&self) -> anyhow::Result<Option<String>>
+    {
+        if let Some(restart) = &self.restart_file()? {
+            Ok(Some(std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /**
      * Return the requested data output directory, or an error if it was
      * supposed to be inferred from the restart file and the restart file could
-     * not be found.
+     * not be found. If no output directory was provided, the default "data" is
+     * returned.
      */
     fn output_directory(&self) -> anyhow::Result<String>
     {
@@ -226,6 +242,11 @@ fn initial_tasks() -> Tasks
     }
 }
 
+fn initial_time_series() -> Vec<TimeSeriesSample>
+{
+    Vec::new()
+}
+
 fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
 {
     BlockData{
@@ -307,6 +328,7 @@ fn main() -> anyhow::Result<()>
     let dt         = solver.min_time_step(&mesh);
     let mut state  = app.restart_file()?.map(|r| io::read_state(&r)).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
     let mut tasks  = app.restart_file()?.map(|r| io::read_tasks(&r)).unwrap_or_else(|| Ok(initial_tasks()))?;
+    let mut time_series = app.restart_rundir()?.map(|r| io::read_time_series(&r)).unwrap_or_else(|| Ok(initial_time_series()))?;
 
     println!();
     for key in &model.sorted_keys() {
@@ -335,6 +357,7 @@ fn main() -> anyhow::Result<()>
             scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &block_data, &mesh, &model, &app)?;
+        time_series.push(TimeSeriesSample{time: state.time});
     }
     Ok(())
 }

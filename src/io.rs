@@ -95,6 +95,20 @@ pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value
 
 
 // ============================================================================
+pub fn _write_time_series(_rundir: &str, _time_series: &Vec<crate::TimeSeriesSample>) -> Result<(), hdf5::Error>
+{
+    Ok(())
+}
+
+pub fn read_time_series(_rundir: &str) -> Result<Vec<crate::TimeSeriesSample>, hdf5::Error>
+{
+    Ok(Vec::new())
+}
+
+
+
+
+// ============================================================================
 pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<crate::BlockData>, model: &HashMap::<String, kind_config::Value>, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
 {
     let file = File::create(filename)?;
