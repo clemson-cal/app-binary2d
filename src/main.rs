@@ -27,7 +27,6 @@ static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
 // ============================================================================
-#[derive(Debug)]
 #[derive(Clap)]
 struct App
 {
@@ -52,51 +51,75 @@ struct App
 
 impl App
 {
-    fn last_checkpoint_in_directory(&self, mut path: std::path::PathBuf) -> Option<String>
+
+    /**
+     * Return the last filename matching chkpt.*.h5 in the given directory, or
+     * an error if the directory was empty.
+     */
+    fn last_checkpoint_in_directory(&self, path: std::path::PathBuf) -> anyhow::Result<String>
     {
-        path.push("chkpt.*.h5");
-        let mut checkpoints: Vec<_> = glob::glob(&path.to_str().unwrap())
+        let path_dir = path.clone();
+        let mut path_with_chkpt = path.clone();
+
+        path_with_chkpt.push("chkpt.*.h5");
+
+        let mut checkpoints: Vec<_> = glob::glob(path_with_chkpt.to_str().unwrap())
             .unwrap()
             .map(|x| x.unwrap().to_str().unwrap().to_string())
             .collect();
+
         checkpoints.sort();
-        checkpoints.last().map(|x| x.to_string())
+
+        if let Some(checkpoint) = checkpoints.last() {
+            Ok(checkpoint.to_string().into())
+        } else {
+            Err(anyhow::anyhow!("the restart directory '{}' has no checkpoints", path_dir.to_str().unwrap()))
+        }
     }
 
-    fn restart_file(&self) -> Option<String>
+    /**
+     * Determine the name of a restart file, if the --restart option had been
+     * given, failing if the checkpoint file cannot be found. If no restart
+     * file was requested, then return None.
+     */
+    fn restart_file(&self) -> anyhow::Result<Option<String>>
     {
         if let Some(restart) = &self.restart {
             let path = std::path::PathBuf::from(&restart);
-
             if path.is_file() {
-                Some(restart.into())
+                Ok(Some(restart.into()))
             } else if path.is_dir() {
-                self.last_checkpoint_in_directory(path)
+                Ok(Some(self.last_checkpoint_in_directory(path)?))
             } else {
-                None
+                Err(anyhow::anyhow!("missing restart file '{}'", restart))
             }
         } else {
-            None
+            Ok(None)
         }
     }
 
-    fn output_directory(&self) -> String
+    /**
+     * Return the requested data output directory, or an error if it was
+     * supposed to be inferred from the restart file and the restart file could
+     * not be found.
+     */
+    fn output_directory(&self) -> anyhow::Result<String>
     {
         if let Some(outdir) = &self.outdir {
-            outdir.into()
-        } else if let Some(restart) = &self.restart_file() {
-            std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into()
+            Ok(outdir.into())
+        } else if let Some(restart) = &self.restart_file()? {
+            Ok(std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into())
         } else {
-            "data".into()
+            Ok("data".into())
         }
     }
 
-    fn restart_model_parameters(&self) -> HashMap<String, kind_config::Value>
+    fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
-        if let Some(restart) = &self.restart_file() {
-            io::read_model(restart).unwrap()
+        if let Some(restart) = &self.restart_file()? {
+            Ok(io::read_model(restart)?)
         } else {
-            HashMap::new()
+            Ok(HashMap::new())
         }
     }
 
@@ -124,10 +147,10 @@ pub struct Tasks
 
 impl Tasks
 {
-    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App)
+    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App) -> Result<(), Box<dyn std::error::Error>>
     {
         let checkpoint_interval: f64 = model.get("cpi").into();
-        let outdir = app.output_directory();
+        let outdir = app.output_directory()?;
         let fname = format!("{}/chkpt.{:04}.h5", outdir, self.checkpoint_count);
 
         std::fs::create_dir_all(outdir).unwrap();
@@ -136,26 +159,28 @@ impl Tasks
         self.checkpoint_next_time += checkpoint_interval;
 
         println!("write checkpoint {}", fname);
-        io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).expect("HDF5 write failed");
+        io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).unwrap();
+        Ok(())
     }
 
-    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App)
+    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App) -> Result<(), Box<dyn std::error::Error>>
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
-        let mzps_per_cu = mzps / app.compute_units(block_data.len()) as f64;
+        let mzps_per_cu = mzps / app.compute_units(block_data.len()) as f64 * i64::from(model.get("rk_order")) as f64;
 
         self.tasks_last_performed = Instant::now();
 
         if self.call_count_this_run > 0
         {
-            println!("[{:05}] orbit={:.3} Mzps={:.1} (per cu={:.1})", state.iteration, state.time / ORBITAL_PERIOD, mzps, mzps_per_cu);
+            println!("[{:05}] orbit={:.3} Mzps={:.2} (per cu-rk={:.2})", state.iteration, state.time / ORBITAL_PERIOD, mzps, mzps_per_cu);
         }
         if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
         {
-            self.write_checkpoint(state, block_data, model, app);
+            self.write_checkpoint(state, block_data, model, app)?;
         }
         self.call_count_this_run += 1;
+        Ok(())
     }
 }
 
@@ -250,8 +275,11 @@ fn create_block_data(mesh: &scheme::Mesh) -> Vec<BlockData>
 
 
 // ============================================================================
-fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
+fn main() -> Result<(), Box<dyn std::error::Error>>
 {
+    let _silence_hdf5_errors = hdf5::silence_errors();
+    let app = App::parse();
+
     let model = kind_config::Form::new()
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
@@ -269,7 +297,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
         .item("softening_length", 0.05   , "Gravitational softening length")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
-        .merge_value_map(&app.restart_model_parameters())?
+        .merge_value_map(&app.restart_model_parameters()?)?
         .merge_string_args(&app.model_parameters)?;
 
     let solver     = create_solver(&model);
@@ -277,21 +305,21 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
     let block_data = create_block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file().map(|r| io::read_state(&r).unwrap()).unwrap_or_else(|| initial_state(&mesh));
-    let mut tasks  = app.restart_file().map(|r| io::read_tasks(&r).unwrap()).unwrap_or_else(|| initial_tasks());
+    let mut state  = app.restart_file()?.map(|r| io::read_state(&r)).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
+    let mut tasks  = app.restart_file()?.map(|r| io::read_tasks(&r)).unwrap_or_else(|| Ok(initial_tasks()))?;
 
     println!();
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
     }
     println!();
-    println!("\trestart file            = {}",      app.restart_file().unwrap_or("none".to_string()));
+    println!("\trestart file            = {}",      app.restart_file()?.unwrap_or("none".to_string()));
     println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
-    tasks.perform(&state, &block_data, &mesh, &model, &app);
+    tasks.perform(&state, &block_data, &mesh, &model, &app)?;
 
     use tokio::runtime::Builder;
     let runtime = Builder::new_multi_thread()
@@ -306,16 +334,7 @@ fn run(app: App) -> Result<(), Box<dyn std::error::Error>>
         } else {
             scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }
-        tasks.perform(&state, &block_data, &mesh, &model, &app);
+        tasks.perform(&state, &block_data, &mesh, &model, &app)?;
     }
     Ok(())
-}
-
-
-
-
-// ============================================================================
-fn main()
-{
-    run(App::parse()).unwrap_or_else(|error| println!("{}", error));
 }
