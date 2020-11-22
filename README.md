@@ -10,7 +10,7 @@ CDC is written and maintained by the [Computational Astrophysics Lab](https://jz
 - Ryan Westernacher-Schneider (Clemson)
 - Jack Hu (Clemson)
 
-# Recent publications
+# Publications
 - [Gas-driven inspiral of binaries in thin accretion disks (Tiede+ 2020)](https://ui.adsabs.harvard.edu/abs/2020ApJ...900...43T/abstract)
 - [Equilibrium eccentricity of accreting binaries (Zrake+ 2020)](https://ui.adsabs.harvard.edu/abs/2020arXiv201009707Z/abstract)
 
@@ -19,7 +19,6 @@ CDC is written and maintained by the [Computational Astrophysics Lab](https://jz
 # Quick start
 
 __Requirements__: Rust and HDF5
-
 
 __Build and install__:
 
@@ -72,7 +71,7 @@ You can inspect the output file `data/chkpt.0000.h5`, which is simply the simula
 > python3 plot.py data/chkpt.0000h5
 ```
 
-The model parameters are specified as `key=value` pairs on the command line (no dashes), possibly mixed in with the command line options (which control execution, and do have dashes). For example, to run a simulation for 500 binary orbits, and output the data to a directory called `my-disk`, you would type
+The model parameters are specified as `key=value` pairs on the command line (no dashes), possibly mixed in with the command line options (which control execution, and do have dashes). For example, to run a simulation for 500 binary orbits, and output the data to a directory called `my-run`, you would type
 
 ```Bash
 > binary2d --outdir=my-disk tfinal=500
@@ -81,19 +80,41 @@ The model parameters are specified as `key=value` pairs on the command line (no 
 
 # Workflow
 
-
 __Model parameters__
 
 The _model parameters_ control the grid resolution, domain size, physical conditions, and solver parameters. They are a set of `key=value` pairs which are provided on the command line. All of the model parameters have default values, which define the fiducial simulation setup. You can inspect the model parameters of a particular run by looking in the HDF5 checkpoint files under the `model` group.
 
+Some detail on the model parameters affecting the mesh:
+
+- `domain_radius` controls the half-length of the domain, in units of the binary semi-major axis
+- `block_size=64` means the blocks all have shape 64x64
+- `num_blocks=8` means there are 8x8 blocks in the domain
+
+Upon startup the code will output the corresponding grid resolution in terms of cell size per semi-major axis.
+
+__Data outputs__
+
+The code's data products are a series of _checkpoint_ files in HDF5 format. Checkpoints are written at a cadence given by the `cpi` model parameter (for checkpoint interval), and will appear in the directory specified by the `--outdir` flag.
+
+Checkpoint files may be inspected either with the `h5ls` utility or with the `h5py` Python module. They have the following root-level group structure:
+
+```
+iteration    Dataset {SCALAR}   # The iteration number
+time         Dataset {SCALAR}   # The simulation time
+conserved    Group              # 2D arrays of the conserved quantities, one for each block
+model        Group              # The model parameters
+tasks        Group              # Times when analysis and output tasks were last performed
+```
+
+In isothermal mode, the 2D arrays of conserved quantities have element type `[f64; 3]`. The order of these floats is (surface density, x-momentum, y-momentum). When the energy equation is being solved, the type is `[f64; 4]` and the final element is the total energy.
 
 __Restarting runs__
 
-Runs can be restarted from HDF5 checkpoint files (e.g. `chkpt.0000.h5`). These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that had run uninterrupted. Checkpoints are written at a cadence given by the `cpi` model parameter (for checkpoint interval), and will appear in the directory specified by the `--outdir` flag.
+Runs can be restarted from HDF5 checkpoint files (e.g. `chkpt.0000.h5`). These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that ran uninterrupted.
 
-A run can be restarted either by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`, or the run directory itself, in which case the most recent checkpoint file in that directory is used. In a restarted run, the default value of the output directory becomes the parent directory of the checkpoint file. However, you can still supply `--outdir` to override the default, for example if you want to "branch" a run.
+A run can be restarted either by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`, or the run directory itself, in which case the most recent checkpoint file in that directory is used. In a restarted run, subsequent outputs are placed in the same directory as the checkpoint file, unless a different directory is given with the `--outdir` flag.
 
-All the model parameters are stored in the checkpoint file, so you don't need to provide them again. Any model parameters you do provide will supercede the ones in the checkpoint. Be careful how you use this feature -- superceding parameters which only specified the initial condition would not effect the run, and doing this could confuse you later on. Other model parameters, such as the block size, cannot be changed and would (hopefully!) trigger a runtime error. Changing other parameters such as physical conditions or solver parameters can be very useful, for example if you want to see how an already well-evolved run responds to specific parameters.
+All the model parameters are stored in the checkpoint file, so any model parameters you do provide on the command line will supercede those in the checkpoint. Be careful how you use this feature -- superceding parameters which only specified the initial condition would not effect the run, and doing this could cause confuse later on. Other model parameters, such as the block size, cannot be changed and would (hopefully!) trigger a runtime error. Changing other parameters such as physical conditions or solver parameters can be very useful, for example if you want to see how an already well-evolved run responds to a change of parameters.
 
 
 # Performance and parallelization
@@ -114,6 +135,6 @@ The performance characteristics with `--tokio` are different from the message-pa
 - Parallel execution with blocks ~ threads is as bad as 50% slower
 - Parallel execution with blocks >> threads is as much as 2x faster
 
-The last configuration with `--tokio` approaches ~70% scaling on a single node. On a 28-core Mac Pro workstation, it should top 90 Mzps per RK step, with the block size set to 64. For comparison, message passing with blocks ~ physical cores tops out at ~100 Mzps with message passing.
+The last configuration with `--tokio` approaches ~70% scaling on a single node. On a 28-core Mac Pro workstation, it tops 90 million zone-updates per second, per RK step (Mzps), with the block size set to 64. For comparison, message passing with blocks ~ physical cores tops out at ~100 Mzps with message passing.
 
 Since the optimal mode depends on the mesh configuration, we are tentatively planning to maintain both parallelization strategies. That may not mean that all runtime configurations are supported in both parallelization modes. For example runs with tracer particles may require `--tokio`.
