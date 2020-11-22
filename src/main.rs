@@ -147,7 +147,7 @@ pub struct Tasks
 
 impl Tasks
 {
-    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App) -> Result<(), Box<dyn std::error::Error>>
+    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
     {
         let checkpoint_interval: f64 = model.get("cpi").into();
         let outdir = app.output_directory()?;
@@ -163,7 +163,7 @@ impl Tasks
         Ok(())
     }
 
-    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App) -> Result<(), Box<dyn std::error::Error>>
+    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
@@ -275,7 +275,7 @@ fn create_block_data(mesh: &scheme::Mesh) -> Vec<BlockData>
 
 
 // ============================================================================
-fn main() -> Result<(), Box<dyn std::error::Error>>
+fn main() -> anyhow::Result<()>
 {
     let _silence_hdf5_errors = hdf5::silence_errors();
     let app = App::parse();
