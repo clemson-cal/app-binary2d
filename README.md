@@ -78,3 +78,26 @@ The model parameters are specified as `key=value` pairs on the command line (no 
 > binary2d --outdir=my-disk tfinal=500
 ```
 
+
+
+# Performance and parallelization
+
+CDC uses a simple block-based domain decomposition to facilitate parallel processing of the solution update. At present, only shared memory parallelization is supported (although distributed memory parallelization using MPI is planned). There are two shared memory parallelization strategies: _message-passing_ and _task-based_. The message-passing mode assigns each block of the domain to its own worker thread, and utilizes channels from the [Crossbeam](https://github.com/crossbeam-rs/crossbeam) crate to pass messages between the workers. The task-based mode assigns a computation on each block to its own _task_, and then spawns those tasks into a [Tokio](https://github.com/tokio-rs/tokio) runtime, which in turn delegates those tasks to a user-specified number of worker threads.
+
+
+__Using the Tokio runtime__
+
+To use task-based parallism, pass `--tokio` flag on the command line. The `--threads` flag will then specify the number of worker threads in the Tokio runtime. This is 1 by default, and setting it to the number of physical cores on your machine should be optimal. `--threads` is ignored in message-passing mode, because message passing only works with one thread per block.
+
+
+__Performance characteristics__
+
+The performance characteristics with `--tokio` are different from the message-passing mode in a few ways:
+
+- Single-block / single-threaded execution is about 10% slower with `--tokio`
+- Parallel execution with blocks ~ threads is as bad as 50% slower
+- Parallel execution with blocks >> threads is as much as 2x faster
+
+The last configuration with `--tokio` approaches ~70% scaling on a single node. On a 28-core Mac Pro workstation, it should top 90 Mzps per RK step, with the block size set to 64. For comparison, message passing with blocks ~ physical cores tops out at ~100 Mzps with message passing.
+
+Since the optimal mode depends on the mesh configuration, we are tentatively planning to maintain both parallelization strategies. That may not mean that all runtime configurations are supported in both parallelization modes. For example runs with tracer particles may require `--tokio`.
