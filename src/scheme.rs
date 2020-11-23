@@ -56,6 +56,7 @@ pub struct Solver
     pub sink_rate: f64,
     pub softening_length: f64,
     pub orbital_elements: OrbitalElements,
+    pub dim: f64,
 }
 
 impl Solver
@@ -259,21 +260,21 @@ impl<'a> CellData<'_>
         }
     }
 
-    fn strain_field(&self, row: Direction, col: Direction) -> f64
+    fn strain_field(&self, true_dimension: f64, row: Direction, col: Direction) -> f64
     {
         use Direction::{X, Y};
         match (row, col)
         {
-            (X, X) => self.gx.velocity_x() - self.gy.velocity_y(),
+            (X, X) => 2.0 * ( (1.0 - 1.0 / true_dimension) * self.gx.velocity_x() - (1.0 / true_dimension) * self.gy.velocity_y() ),
             (X, Y) => self.gx.velocity_y() + self.gy.velocity_x(),
             (Y, X) => self.gx.velocity_y() + self.gy.velocity_x(),
-            (Y, Y) =>-self.gx.velocity_x() + self.gy.velocity_y(),
+            (Y, Y) => 2.0 * ( (1.0 - 1.0 / true_dimension) * self.gx.velocity_y() - (1.0 / true_dimension) * self.gy.velocity_x() ),
         }
     }
 
-    fn stress_field(&self, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
+    fn stress_field(&self, kinematic_viscosity: f64, true_dimension: f64, row: Direction, col: Direction) -> f64
     {
-        kinematic_viscosity * self.pc.density() * self.strain_field(row, col)
+        kinematic_viscosity * self.pc.density() * self.strain_field(true_dimension, row, col)
     }
 
     fn gradient_field(&self, axis: Direction) -> &Primitive
@@ -314,12 +315,13 @@ fn advance_internal(
     // ============================================================================
     let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
     {
-        let cs2 = solver.sound_speed_squared(f, &two_body_state);
-        let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-        let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-        let nu = solver.nu;
-        let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
-        let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
+        let cs2   = solver.sound_speed_squared(f, &two_body_state);
+        let pl    = *l.pc + *l.gradient_field(axis) * 0.5;
+        let pr    = *r.pc - *r.gradient_field(axis) * 0.5;
+        let nu    = solver.nu;
+        let dim   = solver.dim;
+        let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
+        let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
     };
 
