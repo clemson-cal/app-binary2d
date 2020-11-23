@@ -52,7 +52,6 @@ struct App
 
 impl App
 {
-
     fn restart_file(&self) -> anyhow::Result<Option<verified::File>>
     {
         if let Some(restart) = self.restart.clone() {
@@ -101,33 +100,101 @@ impl App
 
 
 // ============================================================================
+#[derive(Clone, hdf5::H5Type)]
+#[repr(C)]
+pub struct RecurringTask
+{
+    count: usize,
+    next_time: f64,
+}
+
+impl RecurringTask
+{
+    pub fn new() -> RecurringTask
+    {
+        RecurringTask{
+            count: 0,
+            next_time: 0.0,
+        }        
+    }
+    pub fn advance(&mut self, interval: f64)
+    {
+        self.count += 1;
+        self.next_time += interval;
+    }
+}
+
+
+
+
+// ============================================================================
+#[derive(Clone)]
 pub struct Tasks
 {
-    pub checkpoint_next_time: f64,
-    pub checkpoint_count: usize,
+    pub write_checkpoint: RecurringTask,
+    pub record_time_sample: RecurringTask,
+
     pub call_count_this_run: usize,
     pub tasks_last_performed: Instant,
 }
 
+
+
+
+
+// ============================================================================
+impl From<Tasks> for Vec<(String, RecurringTask)>
+{
+    fn from(_tasks: Tasks) -> Self {
+        todo!()
+    }
+}
+
+
+
+
+// ============================================================================
+impl From<Vec<(String, RecurringTask)>> for Tasks
+{
+    fn from(a: Vec<(String, RecurringTask)>) -> Tasks {
+        let task_map: HashMap<_, _> = a.into_iter().collect();
+
+        Tasks {
+            write_checkpoint:     task_map.get("write_checkpoint")  .unwrap_or(&RecurringTask::new()).clone(),
+            record_time_sample:   task_map.get("record_time_sample").unwrap_or(&RecurringTask::new()).clone(),
+            call_count_this_run: 0,
+            tasks_last_performed: Instant::now(),
+        }
+    }
+}
+
+
+
+
+// ============================================================================
 impl Tasks
 {
-    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
+    fn write_checkpoint(&mut self, state: &State, time_series: &Vec<TimeSeriesSample>, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
     {
-        let checkpoint_interval: f64 = model.get("cpi").into();
         let outdir = app.output_directory()?;
-        let fname = format!("{}/chkpt.{:04}.h5", outdir.to_string(), self.checkpoint_count);
+        let fname = format!("{}/chkpt.{:04}.h5", outdir.to_string(), self.write_checkpoint.count);
 
-        // std::fs::create_dir_all(outdir).unwrap();
-
-        self.checkpoint_count += 1;
-        self.checkpoint_next_time += checkpoint_interval;
+        self.write_checkpoint.advance(model.get("cpi").into());
 
         println!("write checkpoint {}", fname);
-        io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).unwrap();
+        io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self)?;
+        io::write_time_series("", time_series)?;
         Ok(())
     }
 
-    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
+    fn record_time_sample(&mut self, state: &State, time_series: &mut Vec<TimeSeriesSample>, model: &kind_config::Form)
+    {
+        self.record_time_sample.advance(model.get("tsi").into());
+
+        time_series.push(TimeSeriesSample{time: state.time});
+    }
+
+    fn perform(&mut self, state: &State, time_series: &mut Vec<TimeSeriesSample>, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
@@ -139,10 +206,17 @@ impl Tasks
         {
             println!("[{:05}] orbit={:.3} Mzps={:.2} (per cu-rk={:.2})", state.iteration, state.time / ORBITAL_PERIOD, mzps, mzps_per_cu);
         }
-        if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
+
+        if state.time / ORBITAL_PERIOD >= self.record_time_sample.next_time
         {
-            self.write_checkpoint(state, block_data, model, app)?;
+            self.record_time_sample(state, time_series, model);
         }
+
+        if state.time / ORBITAL_PERIOD >= self.write_checkpoint.next_time
+        {
+            self.write_checkpoint(state, time_series, block_data, model, app)?;
+        }
+
         self.call_count_this_run += 1;
         Ok(())
     }
@@ -183,8 +257,8 @@ fn initial_state(mesh: &scheme::Mesh) -> State
 fn initial_tasks() -> Tasks
 {
     Tasks{
-        checkpoint_next_time: 0.0,
-        checkpoint_count: 0,
+        write_checkpoint: RecurringTask::new(),
+        record_time_sample: RecurringTask::new(),
         call_count_this_run: 0,
         tasks_last_performed: Instant::now(),
     }
@@ -289,13 +363,10 @@ fn main() -> anyhow::Result<()>
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
-    tasks.perform(&state, &block_data, &mesh, &model, &app)?;
+    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
     use tokio::runtime::Builder;
-    let runtime = Builder::new_multi_thread()
-            .worker_threads(app.threads)
-            .build()
-            .unwrap();
+    let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
@@ -304,8 +375,7 @@ fn main() -> anyhow::Result<()>
         } else {
             scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }
-        tasks.perform(&state, &block_data, &mesh, &model, &app)?;
-        time_series.push(TimeSeriesSample{time: state.time});
+        tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
     Ok(())
 }

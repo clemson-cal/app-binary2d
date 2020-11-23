@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::time::Instant;
-use hdf5::File;
+use hdf5::{File, H5Type};
 
 
 
@@ -53,25 +52,39 @@ pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
 
 
 // ============================================================================
+fn write_group<E: H5Type, T: Into<Vec<(String, E)>>>(group: &hdf5::Group, tasks: T) -> Result<(), hdf5::Error>
+{
+    for (name, task) in Into::<Vec<(String, E)>>::into(tasks)
+    {
+        group.new_dataset::<E>().create(&name, ())?.write_scalar(&task)?;
+    }
+    Ok(())
+}
+
+fn read_group<E: H5Type, T: From<Vec<(String, E)>>>(group: &hdf5::Group) -> Result<T, hdf5::Error>
+{
+    let task_iter = group.member_names()?
+        .into_iter()
+        .map(|name| group.dataset(&name)?.read_scalar::<E>().map(|task| (name, task)))
+        .filter_map(Result::ok);
+
+    Ok(From::<Vec<(String, E)>>::from(task_iter.collect()))
+}
+
+
+
+
+// ============================================================================
 fn write_tasks(group: &hdf5::Group, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
 {
-    group.new_dataset::<f64>  ().create("checkpoint_next_time", ())?.write_scalar(&tasks.checkpoint_next_time)?;
-    group.new_dataset::<usize>().create("checkpoint_count",     ())?.write_scalar(&tasks.checkpoint_count)?;
-    Ok(())
+    write_group(group, tasks.clone())
 }
 
 pub fn read_tasks(filename: &str) -> Result<crate::Tasks, hdf5::Error>
 {
     let file = File::open(filename)?;
     let group = file.group("tasks")?;
-
-    let result = crate::Tasks{
-        checkpoint_next_time: group.dataset("checkpoint_next_time")?.read_scalar::<f64>()?,
-        checkpoint_count:     group.dataset("checkpoint_count")    ?.read_scalar::<usize>()?,
-        call_count_this_run: 0,
-        tasks_last_performed: Instant::now(),
-    };
-    Ok(result)
+    read_group(&group)
 }
 
 
@@ -95,7 +108,7 @@ pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value
 
 
 // ============================================================================
-pub fn _write_time_series(_rundir: &str, _time_series: &Vec<crate::TimeSeriesSample>) -> Result<(), hdf5::Error>
+pub fn write_time_series(_rundir: &str, _time_series: &Vec<crate::TimeSeriesSample>) -> Result<(), hdf5::Error>
 {
     Ok(())
 }
