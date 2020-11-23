@@ -50,14 +50,13 @@ dependencies = [
  "godunov-core",
  "hdf5",
  "hydro-iso2d",
+ "io-logical",
  "kepler-two-body",
  "kind-config",
  "ndarray",
  "ndarray-ops",
  "num",
  "num_cpus",
- "serial_test",
- "thiserror",
  "tokio",
 ]
 
@@ -191,6 +190,12 @@ dependencies = [
  "cfg-if 0.1.10",
  "lazy_static",
 ]
+
+[[package]]
+name = "either"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
 
 [[package]]
 name = "futures"
@@ -393,6 +398,16 @@ checksum = "55e2e4c765aa53a0424761bf9f41aa7a6ac1efa87238f59560640e27fca028f2"
 dependencies = [
  "autocfg",
  "hashbrown",
+]
+
+[[package]]
+name = "io-logical"
+version = "0.1.0"
+dependencies = [
+ "either",
+ "glob",
+ "serial_test",
+ "thiserror",
 ]
 
 [[package]]
@@ -809,9 +824,9 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "syn"
-version = "1.0.48"
+version = "1.0.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc371affeffc477f42a221a1e4297aedcea33d47d19b61455588bd9d8f6b19ac"
+checksum = "443b4178719c5a851e1bde36ce12da21d74a0e60b4d982ec3385a933c812f0f6"
 dependencies = [
  "proc-macro2",
  "quote",

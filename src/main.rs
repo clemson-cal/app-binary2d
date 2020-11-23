@@ -21,7 +21,6 @@ use hydro_iso2d::*;
 
 mod io;
 mod scheme;
-mod dataflow;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
@@ -329,6 +328,20 @@ fn main() -> anyhow::Result<()>
     let mut state  = app.restart_file()?.map(|r| io::read_state(&r)).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
     let mut tasks  = app.restart_file()?.map(|r| io::read_tasks(&r)).unwrap_or_else(|| Ok(initial_tasks()))?;
     let mut time_series = app.restart_rundir()?.map(|r| io::read_time_series(&r)).unwrap_or_else(|| Ok(initial_time_series()))?;
+
+
+
+
+
+    use io_logical::verified;
+    let _rundir = verified::Directory::require(app.outdir.clone().unwrap_or("data".into()))?;
+    let _srcdir = app.restart.clone().map(verified::file_or_directory);
+
+
+
+
+
+
 
     println!();
     for key in &model.sorted_keys() {
