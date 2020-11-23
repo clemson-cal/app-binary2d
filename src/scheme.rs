@@ -59,7 +59,7 @@ pub struct Solver
     pub sink_rate: f64,
     pub softening_length: f64,
     pub orbital_elements: OrbitalElements,
-    pub dim: f64,
+    pub stress_dim: i64,
 }
 
 impl Solver
@@ -259,21 +259,35 @@ impl<'a> CellData<'_>
         }
     }
 
-    fn strain_field(&self, true_dimension: f64, row: Direction, col: Direction) -> f64
+    fn stress_field(&self, kinematic_viscosity: f64, dimensionality: i64, row: Direction, col: Direction) -> f64
     {
         use Direction::{X, Y};
-        match (row, col)
-        {
-            (X, X) => 2.0 * ( (1.0 - 1.0 / true_dimension) * self.gx.velocity_x() - (1.0 / true_dimension) * self.gy.velocity_y() ),
-            (X, Y) => self.gx.velocity_y() + self.gy.velocity_x(),
-            (Y, X) => self.gx.velocity_y() + self.gy.velocity_x(),
-            (Y, Y) => 2.0 * ( (1.0 - 1.0 / true_dimension) * self.gx.velocity_y() - (1.0 / true_dimension) * self.gy.velocity_x() ),
-        }
-    }
 
-    fn stress_field(&self, kinematic_viscosity: f64, true_dimension: f64, row: Direction, col: Direction) -> f64
-    {
-        kinematic_viscosity * self.pc.density() * self.strain_field(true_dimension, row, col)
+        let stress = if dimensionality == 2 {
+            // This form of the stress tensor comes from Eqn. 7 in Farris+
+            // (2014). Formally it corresponds a "true" dimensionality of 2.
+            match (row, col)
+            {
+                (X, X) =>  self.gx.velocity_x() - self.gy.velocity_y(),
+                (X, Y) =>  self.gx.velocity_y() + self.gy.velocity_x(),
+                (Y, X) =>  self.gx.velocity_y() + self.gy.velocity_x(),
+                (Y, Y) => -self.gx.velocity_x() + self.gy.velocity_y(),
+            }
+        } else if dimensionality == 3 {
+            // This form of the stress tensor is the correct one for vertically
+            // averaged hydrodynamics, when the bulk viscosity is equal to zero.
+            match (row, col)
+            {
+                (X, X) => 4.0 / 3.0 * self.gx.velocity_x() - 2.0 / 3.0 * self.gy.velocity_y(),
+                (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
+                (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
+                (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() + 4.0 / 3.0 * self.gy.velocity_y(),
+            }
+        } else {
+            panic!("The true dimension must be 2 or 3")
+        };
+
+        kinematic_viscosity * self.pc.density() * stress
     }
 
     fn gradient_field(&self, axis: Direction) -> &Primitive
@@ -343,8 +357,8 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
                 let cs2 = solver.sound_speed_squared(f, &two_body_state);
                 let pl = *l.pc + *l.gradient_field(axis) * 0.5;
                 let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-                let nu = solver.nu;
-                let dim   = solver.dim;
+                let nu    = solver.nu;
+                let dim   = solver.stress_dim;
                 let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
                 let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
                 riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
@@ -551,7 +565,7 @@ fn advance_channels_internal_block(
         let pl    = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr    = *r.pc - *r.gradient_field(axis) * 0.5;
         let nu    = solver.nu;
-        let dim   = solver.dim;
+        let dim   = solver.stress_dim;
         let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
         let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)

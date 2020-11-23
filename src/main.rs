@@ -253,8 +253,8 @@ fn create_solver(model: &kind_config::Form) -> scheme::Solver
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
+        stress_dim:       model.get("stress_dim").into(),
         orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
-        dim:              model.get("dim").into(),
     }
 }
 
@@ -298,7 +298,7 @@ fn main() -> anyhow::Result<()>
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
         .item("softening_length", 0.05   , "Gravitational softening length")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
-        .item("dim"             , 2.0    , "The true physical dimension in which the viscous stress tensor lives")
+        .item("stress_dim"      , 2      , "The viscous stress tensor dimensionality [2: Farris14, 3: Corrected]")
         .merge_value_map(&app.restart_model_parameters()?)?
         .merge_string_args(&app.model_parameters)?;
 
