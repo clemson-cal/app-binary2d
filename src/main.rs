@@ -17,12 +17,23 @@ use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
-use scheme::{State, TimeSeriesSample, BlockIndex, BlockData};
+use scheme::{State, BlockIndex, BlockData};
 use hydro_iso2d::*;
 
 mod io;
 mod scheme;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+
+
+
+
+// ============================================================================
+#[derive(hdf5::H5Type)]
+#[repr(C)]
+pub struct TimeSeriesSample
+{
+    pub time: f64,
+}
 
 
 
@@ -150,27 +161,24 @@ pub struct Tasks
 
 
 
-
 // ============================================================================
 impl From<Tasks> for Vec<(String, RecurringTask)>
 {
-    fn from(_tasks: Tasks) -> Self {
-        todo!()
+    fn from(tasks: Tasks) -> Self {
+        vec![
+            ("write_checkpoint".into(), tasks.write_checkpoint),
+            ("record_time_sample".into(), tasks.record_time_sample),
+        ]
     }
 }
 
-
-
-
-// ============================================================================
 impl From<Vec<(String, RecurringTask)>> for Tasks
 {
     fn from(a: Vec<(String, RecurringTask)>) -> Tasks {
         let task_map: HashMap<_, _> = a.into_iter().collect();
-
         Tasks {
-            write_checkpoint:     task_map.get("write_checkpoint")  .unwrap_or(&RecurringTask::new()).clone(),
-            record_time_sample:   task_map.get("record_time_sample").unwrap_or(&RecurringTask::new()).clone(),
+            write_checkpoint:   task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
+            record_time_sample: task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
             call_count_this_run: 0,
             tasks_last_performed: Instant::now(),
         }
@@ -183,27 +191,43 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
 // ============================================================================
 impl Tasks
 {
-    fn write_checkpoint(&mut self, state: &State, time_series: &Vec<TimeSeriesSample>, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
+    fn write_checkpoint(&mut self,
+        state: &State,
+        time_series: &Vec<TimeSeriesSample>,
+        block_data: &Vec<BlockData>,
+        model: &kind_config::Form,
+        app: &App) -> anyhow::Result<()>
     {
         let outdir = app.output_directory()?;
-        let fname = format!("{}/chkpt.{:04}.h5", outdir.to_string(), self.write_checkpoint.count);
+        let fname_chkpt       = outdir.child(&format!("chkpt.{:04}.h5", self.write_checkpoint.count));
+        let fname_time_series = outdir.child("time_series.h5");
 
         self.write_checkpoint.advance(model.get("cpi").into());
 
-        println!("write checkpoint {}", fname);
-        io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self)?;
-        io::write_time_series("", time_series)?;
+        println!("write checkpoint {}", fname_chkpt);
+        io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
+        io::write_time_series(&fname_time_series, time_series)?;
+
         Ok(())
     }
 
-    fn record_time_sample(&mut self, state: &State, time_series: &mut Vec<TimeSeriesSample>, model: &kind_config::Form)
+    fn record_time_sample(&mut self,
+        state: &State,
+        time_series: &mut Vec<TimeSeriesSample>,
+        model: &kind_config::Form)
     {
         self.record_time_sample.advance(model.get("tsi").into());
-
         time_series.push(TimeSeriesSample{time: state.time});
     }
 
-    fn perform(&mut self, state: &State, time_series: &mut Vec<TimeSeriesSample>, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
+    fn perform(
+        &mut self,
+        state: &State,
+        time_series: &mut Vec<TimeSeriesSample>,
+        block_data: &Vec<BlockData>,
+        mesh: &scheme::Mesh,
+        model: &kind_config::Form,
+        app: &App) -> anyhow::Result<()>
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
@@ -340,6 +364,7 @@ fn main() -> anyhow::Result<()>
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("cfl"             , 0.4    , "CFL parameter")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
+        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
         .item("domain_radius"   , 24.0   , "Half-size of the domain")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")

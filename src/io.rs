@@ -6,19 +6,44 @@ use io_logical::verified;
 
 
 // ============================================================================
+fn write_group<E: H5Type, T: Into<Vec<(String, E)>>>(group: &hdf5::Group, tasks: T) -> Result<(), hdf5::Error>
+{
+    let task_vec: Vec<_> = tasks.into();
+
+    for (name, task) in task_vec {
+        group.new_dataset::<E>().create(&name, ())?.write_scalar(&task)?;
+    }
+    Ok(())
+}
+
+fn read_group<E: H5Type, T: From<Vec<(String, E)>>>(group: &hdf5::Group) -> Result<T, hdf5::Error>
+{
+    let task_vec: Vec<_> = group.member_names()?
+        .into_iter()
+        .map(|name| group.dataset(&name)?.read_scalar::<E>().map(|task| (name, task)))
+        .filter_map(Result::ok)
+        .collect();
+
+    Ok(task_vec.into())
+}
+
+
+
+
+// ============================================================================
 fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<crate::BlockData>) -> Result<(), hdf5::Error>
 {
     let cons = group.create_group("conserved")?;
 
     for (b, u) in block_data.iter().zip(&state.conserved)
     {
-        let gname = format!("0:{:03}-{:03}", b.index.0, b.index.1);
+        let dname = format!("0:{:03}-{:03}", b.index.0, b.index.1);
         let udata = u.mapv(Into::<[f64; 3]>::into);
-        cons.new_dataset::<[f64; 3]>().create(&gname, u.dim())?.write(&udata)?;
+        cons.new_dataset::<[f64; 3]>().create(&dname, u.dim())?.write(&udata)?;
     }
-    group.new_dataset::<i64>().create("iteration",  ())?.write_scalar(&state.iteration.to_integer())?;
-    group.new_dataset::<f64>().create("time",       ())?.write_scalar(&state.time)?;
 
+    group.new_dataset::<i64>().create("iteration", ())?.write_scalar(&state.iteration.to_integer())?;
+    group.new_dataset::<f64>().create("time",      ())?.write_scalar(&state.time)?;
     Ok(())
 }
 
@@ -53,29 +78,6 @@ pub fn read_state(file: verified::File) -> Result<crate::State, hdf5::Error>
 
 
 // ============================================================================
-fn write_group<E: H5Type, T: Into<Vec<(String, E)>>>(group: &hdf5::Group, tasks: T) -> Result<(), hdf5::Error>
-{
-    for (name, task) in Into::<Vec<(String, E)>>::into(tasks)
-    {
-        group.new_dataset::<E>().create(&name, ())?.write_scalar(&task)?;
-    }
-    Ok(())
-}
-
-fn read_group<E: H5Type, T: From<Vec<(String, E)>>>(group: &hdf5::Group) -> Result<T, hdf5::Error>
-{
-    let task_iter = group.member_names()?
-        .into_iter()
-        .map(|name| group.dataset(&name)?.read_scalar::<E>().map(|task| (name, task)))
-        .filter_map(Result::ok);
-
-    Ok(From::<Vec<(String, E)>>::from(task_iter.collect()))
-}
-
-
-
-
-// ============================================================================
 fn write_tasks(group: &hdf5::Group, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
 {
     write_group(group, tasks.clone())
@@ -83,9 +85,7 @@ fn write_tasks(group: &hdf5::Group, tasks: &crate::Tasks) -> Result<(), hdf5::Er
 
 pub fn read_tasks(file: verified::File) -> Result<crate::Tasks, hdf5::Error>
 {
-    let file = File::open(file.to_string())?;
-    let group = file.group("tasks")?;
-    read_group(&group)
+    read_group(&File::open(file.to_string())?.group("tasks")?)
 }
 
 
@@ -109,14 +109,15 @@ pub fn read_model(file: verified::File) -> Result<HashMap::<String, kind_config:
 
 
 // ============================================================================
-pub fn write_time_series(_filename: &str, _time_series: &Vec<crate::TimeSeriesSample>) -> Result<(), hdf5::Error>
+pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>) -> Result<(), hdf5::Error>
 {
+    File::create(filename)?.new_dataset::<T>().create("time_series", time_series.len())?.write_raw(time_series)?;
     Ok(())
 }
 
-pub fn read_time_series(_file: verified::File) -> Result<Vec<crate::TimeSeriesSample>, hdf5::Error>
+pub fn read_time_series<T: H5Type>(file: verified::File) -> Result<Vec<T>, hdf5::Error>
 {
-    Ok(Vec::new())
+    File::open(file.to_string())?.dataset("time_series")?.read_raw::<T>()
 }
 
 

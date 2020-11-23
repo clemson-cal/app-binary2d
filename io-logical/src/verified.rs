@@ -91,6 +91,11 @@ impl File
         self.path_string
     }
 
+    pub fn as_str(&self) -> &str
+    {
+        &self.path_string
+    }
+
     pub fn as_path(&self) -> &Path
     {
         Path::new(&self.path_string)
@@ -137,6 +142,11 @@ impl Directory
     pub fn to_string(self) -> String
     {
         self.path_string
+    }
+
+    pub fn as_str(&self) -> &str
+    {
+        &self.path_string
     }
 
     pub fn remove(self) -> Result<(), Error>
