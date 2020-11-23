@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use hdf5::{File, H5Type};
+use io_logical::verified;
 
 
 
@@ -21,9 +22,9 @@ fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<crate
     Ok(())
 }
 
-pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
+pub fn read_state(file: verified::File) -> Result<crate::State, hdf5::Error>
 {
-    let file = File::open(filename)?;
+    let file = File::open(file.to_string())?;
     let cons = file.group("conserved")?;
     let mut conserved = Vec::new();
 
@@ -80,9 +81,9 @@ fn write_tasks(group: &hdf5::Group, tasks: &crate::Tasks) -> Result<(), hdf5::Er
     write_group(group, tasks.clone())
 }
 
-pub fn read_tasks(filename: &str) -> Result<crate::Tasks, hdf5::Error>
+pub fn read_tasks(file: verified::File) -> Result<crate::Tasks, hdf5::Error>
 {
-    let file = File::open(filename)?;
+    let file = File::open(file.to_string())?;
     let group = file.group("tasks")?;
     read_group(&group)
 }
@@ -97,9 +98,9 @@ fn write_model(group: &hdf5::Group, model: &HashMap::<String, kind_config::Value
     Ok(())
 }
 
-pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value>, hdf5::Error>
+pub fn read_model(file: verified::File) -> Result<HashMap::<String, kind_config::Value>, hdf5::Error>
 {
-    let file = File::open(filename)?;
+    let file = File::open(file.to_string())?;
     let group = file.group("model")?;
     kind_config::io::read_from_hdf5(&group)
 }
@@ -108,12 +109,12 @@ pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value
 
 
 // ============================================================================
-pub fn write_time_series(_rundir: &str, _time_series: &Vec<crate::TimeSeriesSample>) -> Result<(), hdf5::Error>
+pub fn write_time_series(_filename: &str, _time_series: &Vec<crate::TimeSeriesSample>) -> Result<(), hdf5::Error>
 {
     Ok(())
 }
 
-pub fn read_time_series(_rundir: &str) -> Result<Vec<crate::TimeSeriesSample>, hdf5::Error>
+pub fn read_time_series(_file: verified::File) -> Result<Vec<crate::TimeSeriesSample>, hdf5::Error>
 {
     Ok(Vec::new())
 }

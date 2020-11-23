@@ -66,6 +66,15 @@ impl App
         Ok(self.restart_file()?.map(|f| f.parent()))
     }
 
+    fn restart_rundir_child(&self, filename: &str) -> anyhow::Result<Option<verified::File>>
+    {
+        if let Some(restart_rundir) = self.restart_rundir()? {
+            Ok(Some(restart_rundir.existing_child(filename)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn output_directory(&self) -> anyhow::Result<verified::Directory>
     {
         if let Some(outdir) = self.outdir.clone() {
@@ -80,7 +89,7 @@ impl App
     fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
         if let Some(restart) = self.restart_file()? {
-            Ok(io::read_model(&restart.to_string())?)
+            Ok(io::read_model(restart)?)
         } else {
             Ok(HashMap::new())
         }
@@ -348,9 +357,9 @@ fn main() -> anyhow::Result<()>
     let block_data = create_block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file()?.map(|r| io::read_state(&r.to_string())).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
-    let mut tasks  = app.restart_file()?.map(|r| io::read_tasks(&r.to_string())).unwrap_or_else(|| Ok(initial_tasks()))?;
-    let mut time_series = app.restart_rundir()?.map(|r| io::read_time_series(&r.to_string())).unwrap_or_else(|| Ok(initial_time_series()))?;
+    let mut state  = app.restart_file()?.map(io::read_state).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
+    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(initial_tasks()))?;
+    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
 
     println!();
     for key in &model.sorted_keys() {
