@@ -86,6 +86,11 @@ impl File
         File::from_path(Path::new(path_str))
     }
 
+    pub fn to_string(self) -> String
+    {
+        self.path_string
+    }
+
     pub fn as_path(&self) -> &Path
     {
         Path::new(&self.path_string)
@@ -123,11 +128,18 @@ impl Directory
 
     pub fn require(path_string: String) -> Result<Directory, Error>
     {
-        std::fs::create_dir_all(&path_string).map_err(|_| Error::UnableToCreateDirectory(path_string.clone()))?;
+        if ! Path::new(&path_string).is_dir() {
+            std::fs::create_dir_all(&path_string).map_err(|_| Error::UnableToCreateDirectory(path_string.clone()))?;
+        }
         Ok(Directory{path_string: path_string})
     }
 
-    pub fn remove(&self) -> Result<(), Error>
+    pub fn to_string(self) -> String
+    {
+        self.path_string
+    }
+
+    pub fn remove(self) -> Result<(), Error>
     {
         std::fs::remove_dir(self.as_path()).map_err(|_| Error::UnableToRemoveDirectory(self.path_string.clone()))
     }
@@ -189,6 +201,24 @@ pub fn file_or_directory(path_string: String) -> Result<Either<File, Directory>,
 
 
 
+/**
+ * Return either an existing file, if the given file system location is a file,
+ * or if the location is a directory, then return the most recent file in that
+ * directory matching the given pattern. If no file or directory exists at that
+ * location, or the pattern is invalid, or no matching files exist, then return
+ * an error.
+ */
+pub fn file_or_most_recent_matching_in_directory(path_string: String, pattern: &str) -> Result<File, Error>
+{
+    match file_or_directory(path_string)? {
+        Either::Left(file) => Ok(file),
+        Either::Right(dir) => Ok(dir.most_recent_file_matching(pattern)?),
+    }
+}
+
+
+
+
 // ============================================================================
 #[cfg(test)]
 mod tests {
@@ -205,7 +235,6 @@ mod tests {
     fn able_to_require_dir() {
         let directory = Directory::require("test_dir".into()).unwrap();
         assert!(!directory.remove().is_err());
-        assert!( directory.remove().is_err());
     }
 
     #[test]

@@ -16,6 +16,7 @@ use num::rational::Rational64;
 use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
+use io_logical::verified;
 use scheme::{State, TimeSeriesSample, BlockIndex, BlockData};
 use hydro_iso2d::*;
 
@@ -52,87 +53,35 @@ struct App
 impl App
 {
 
-    /**
-     * Return the last filename matching chkpt.*.h5 in the given directory, or
-     * an error if the directory was empty.
-     */
-    fn last_checkpoint_in_directory(&self, path: std::path::PathBuf) -> anyhow::Result<String>
+    fn restart_file(&self) -> anyhow::Result<Option<verified::File>>
     {
-        let path_dir = path.clone();
-        let mut path_with_chkpt = path.clone();
-
-        path_with_chkpt.push("chkpt.*.h5");
-
-        let mut checkpoints: Vec<_> = glob::glob(path_with_chkpt.to_str().unwrap())
-            .unwrap()
-            .map(|x| x.unwrap().to_str().unwrap().to_string())
-            .collect();
-
-        checkpoints.sort();
-
-        if let Some(checkpoint) = checkpoints.last() {
-            Ok(checkpoint.to_string().into())
-        } else {
-            Err(anyhow::anyhow!("the restart directory '{}' has no checkpoints", path_dir.to_str().unwrap()))
-        }
-    }
-
-    /**
-     * Determine the name of a restart file, if the --restart option had been
-     * given, failing if the checkpoint file cannot be found. If no restart
-     * file was requested, then return None.
-     */
-    fn restart_file(&self) -> anyhow::Result<Option<String>>
-    {
-        if let Some(restart) = &self.restart {
-            let path = std::path::PathBuf::from(&restart);
-            if path.is_file() {
-                Ok(Some(restart.into()))
-            } else if path.is_dir() {
-                Ok(Some(self.last_checkpoint_in_directory(path)?))
-            } else {
-                Err(anyhow::anyhow!("missing restart file '{}'", restart))
-            }
+        if let Some(restart) = self.restart.clone() {
+            Ok(Some(verified::file_or_most_recent_matching_in_directory(restart, "chkpt.????.h5")?))
         } else {
             Ok(None)
         }
     }
 
-    /**
-     * Determine the name of a restart directory, if the --restart option had
-     * been given, failing if the checkpoint file cannot be found. If no restart
-     * file was requested, then return None.
-     */
-    fn restart_rundir(&self) -> anyhow::Result<Option<String>>
+    fn restart_rundir(&self) -> anyhow::Result<Option<verified::Directory>>
     {
-        if let Some(restart) = &self.restart_file()? {
-            Ok(Some(std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into()))
-        } else {
-            Ok(None)
-        }
+        Ok(self.restart_file()?.map(|f| f.parent()))
     }
 
-    /**
-     * Return the requested data output directory, or an error if it was
-     * supposed to be inferred from the restart file and the restart file could
-     * not be found. If no output directory was provided, the default "data" is
-     * returned.
-     */
-    fn output_directory(&self) -> anyhow::Result<String>
+    fn output_directory(&self) -> anyhow::Result<verified::Directory>
     {
-        if let Some(outdir) = &self.outdir {
-            Ok(outdir.into())
+        if let Some(outdir) = self.outdir.clone() {
+            Ok(verified::Directory::require(outdir)?)
         } else if let Some(restart) = &self.restart_file()? {
-            Ok(std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into())
+            Ok(restart.parent())
         } else {
-            Ok("data".into())
+            Ok(verified::Directory::require("data".into())?)
         }
     }
 
     fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
-        if let Some(restart) = &self.restart_file()? {
-            Ok(io::read_model(restart)?)
+        if let Some(restart) = self.restart_file()? {
+            Ok(io::read_model(&restart.to_string())?)
         } else {
             Ok(HashMap::new())
         }
@@ -166,9 +115,9 @@ impl Tasks
     {
         let checkpoint_interval: f64 = model.get("cpi").into();
         let outdir = app.output_directory()?;
-        let fname = format!("{}/chkpt.{:04}.h5", outdir, self.checkpoint_count);
+        let fname = format!("{}/chkpt.{:04}.h5", outdir.to_string(), self.checkpoint_count);
 
-        std::fs::create_dir_all(outdir).unwrap();
+        // std::fs::create_dir_all(outdir).unwrap();
 
         self.checkpoint_count += 1;
         self.checkpoint_next_time += checkpoint_interval;
@@ -325,30 +274,16 @@ fn main() -> anyhow::Result<()>
     let block_data = create_block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file()?.map(|r| io::read_state(&r)).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
-    let mut tasks  = app.restart_file()?.map(|r| io::read_tasks(&r)).unwrap_or_else(|| Ok(initial_tasks()))?;
-    let mut time_series = app.restart_rundir()?.map(|r| io::read_time_series(&r)).unwrap_or_else(|| Ok(initial_time_series()))?;
-
-
-
-
-
-    use io_logical::verified;
-    let _rundir = verified::Directory::require(app.outdir.clone().unwrap_or("data".into()))?;
-    let _srcdir = app.restart.clone().map(verified::file_or_directory);
-
-
-
-
-
-
+    let mut state  = app.restart_file()?.map(|r| io::read_state(&r.to_string())).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
+    let mut tasks  = app.restart_file()?.map(|r| io::read_tasks(&r.to_string())).unwrap_or_else(|| Ok(initial_tasks()))?;
+    let mut time_series = app.restart_rundir()?.map(|r| io::read_time_series(&r.to_string())).unwrap_or_else(|| Ok(initial_time_series()))?;
 
     println!();
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
     }
     println!();
-    println!("\trestart file            = {}",      app.restart_file()?.unwrap_or("none".to_string()));
+    println!("\trestart file            = {}",      app.restart_file()?.map(|f|f.to_string()).unwrap_or("none".to_string()));
     println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
