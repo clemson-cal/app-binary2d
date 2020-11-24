@@ -41,7 +41,7 @@ print(new_bs)
 
 # Create a new h5 file with the filename and copy the content of the old file
 # without the conserved data.
-new_file_pointer = h5py.File(args.output + '.h5', 'w-')
+new_file_pointer = h5py.File(args.output, 'w-')
 
 new_file_pointer.copy(old_file_pointer['model'], 'model')
 new_file_pointer.copy(old_file_pointer['iteration'], 'iteration')
@@ -57,12 +57,10 @@ new_file_pointer['model']['block_size'][()] = new_bs
 for group in old_file_pointer['conserved']:
     # For each block, create a new dataset that has a dimension of
     # (old_bs * 2, old_bs * 2, 3)
-    new_dataset = new_file_pointer['conserved'].create_dataset(group,
-                                                               (new_bs, 
-                                                                new_bs,
-                                                                3))
+    dtype = old_file_pointer['conserved'][group].dtype
+    new_dataset = new_file_pointer['conserved'].create_dataset(group, (new_bs, new_bs), dtype=dtype)
     new_dataset[0::2, 0::2, ] = old_file_pointer['conserved'][group][()]
-    new_dataset[1::2, 0::2, ] = old_file_pointer['conserved'][group][()]
+    new_dataset[0::2, 1::2, ] = old_file_pointer['conserved'][group][()]
     new_dataset[1::2, 0::2, ] = old_file_pointer['conserved'][group][()]
     new_dataset[1::2, 1::2, ] = old_file_pointer['conserved'][group][()]
 
