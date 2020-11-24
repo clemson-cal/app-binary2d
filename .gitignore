@@ -1,3 +1,9 @@
 target
 ndarray-ops/Cargo.lock
 *.h5
+*.ipynb
+*.pbs
+*.png
+output_parse.py
+*.txt
+logfile_parse.py
