@@ -9,7 +9,6 @@ use io_logical::verified;
 fn write_group<E: H5Type, T: Into<Vec<(String, E)>>>(group: &hdf5::Group, tasks: T) -> Result<(), hdf5::Error>
 {
     let task_vec: Vec<_> = tasks.into();
-
     for (name, task) in task_vec {
         group.new_dataset::<E>().create(&name, ())?.write_scalar(&task)?;
     }
@@ -23,7 +22,6 @@ fn read_group<E: H5Type, T: From<Vec<(String, E)>>>(group: &hdf5::Group) -> Resu
         .map(|name| group.dataset(&name)?.read_scalar::<E>().map(|task| (name, task)))
         .filter_map(Result::ok)
         .collect();
-
     Ok(task_vec.into())
 }
 
@@ -94,15 +92,12 @@ pub fn read_tasks(file: verified::File) -> Result<crate::Tasks, hdf5::Error>
 // ============================================================================
 fn write_model(group: &hdf5::Group, model: &HashMap::<String, kind_config::Value>) -> Result<(), hdf5::Error>
 {
-    kind_config::io::write_to_hdf5(&group, &model)?;
-    Ok(())
+    kind_config::io::write_to_hdf5(&group, &model)
 }
 
 pub fn read_model(file: verified::File) -> Result<HashMap::<String, kind_config::Value>, hdf5::Error>
 {
-    let file = File::open(file.to_string())?;
-    let group = file.group("model")?;
-    kind_config::io::read_from_hdf5(&group)
+    kind_config::io::read_from_hdf5(&File::open(file.to_string())?.group("model")?)
 }
 
 
@@ -111,8 +106,7 @@ pub fn read_model(file: verified::File) -> Result<HashMap::<String, kind_config:
 // ============================================================================
 pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>) -> Result<(), hdf5::Error>
 {
-    File::create(filename)?.new_dataset::<T>().create("time_series", time_series.len())?.write_raw(time_series)?;
-    Ok(())
+    File::create(filename)?.new_dataset::<T>().create("time_series", time_series.len())?.write_raw(time_series)
 }
 
 pub fn read_time_series<T: H5Type>(file: verified::File) -> Result<Vec<T>, hdf5::Error>

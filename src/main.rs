@@ -386,6 +386,8 @@ fn main() -> anyhow::Result<()>
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(initial_tasks()))?;
     let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
 
+    time_series.retain(|s| s.time < state.time);
+
     println!();
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
