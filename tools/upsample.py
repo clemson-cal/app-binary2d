@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 This script takes in a checkpoint file and up-samples each cell in each block
 into four cells. The grid spacing is reduced by a factor of two compared to the
@@ -19,7 +21,6 @@ parser.add_argument("--clobber", action='store_true', help='Overwrite the output
 args = parser.parse_args()
 
 old_file = h5py.File(args.input, 'r')
-
 old_bs = old_file['model']['block_size'][()]
 new_bs = old_bs * 2
 num_blocks = old_file['model']['num_blocks'][()]
@@ -40,16 +41,17 @@ for group in old_file:
     if group != 'conserved':
         new_file.copy(old_file[group], group)
 
-new_file['model']['block_size'][()] = new_bs # Make sure the new block size is reflected
-                                             # in the model parameters
+# Make sure the new block size is reflected in the model parameters
+new_file['model']['block_size'][()] = new_bs
 
 old_conserved = old_file['conserved']
 new_conserved = new_file.create_group('conserved')
 
 for group in old_conserved:
     dtype = old_conserved[group].dtype
+    u = old_conserved[group][()]
     new_dataset = new_conserved.create_dataset(group, (new_bs, new_bs), dtype=dtype)
-    new_dataset[0::2, 0::2] = old_conserved[group][()]
-    new_dataset[0::2, 1::2] = old_conserved[group][()]
-    new_dataset[1::2, 0::2] = old_conserved[group][()]
-    new_dataset[1::2, 1::2] = old_conserved[group][()]
+    new_dataset[0::2, 0::2] = u
+    new_dataset[0::2, 1::2] = u
+    new_dataset[1::2, 0::2] = u
+    new_dataset[1::2, 1::2] = u
