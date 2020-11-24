@@ -4,6 +4,4 @@ ndarray-ops/Cargo.lock
 *.ipynb
 *.pbs
 *.png
-output_parse.py
 *.txt
-logfile_parse.py
