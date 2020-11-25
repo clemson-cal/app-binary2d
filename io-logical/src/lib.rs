@@ -1,2 +1,2 @@
 pub mod verified;
-pub mod workspace;
+pub mod nicer_hdf5;

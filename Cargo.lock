@@ -406,6 +406,9 @@ version = "0.1.0"
 dependencies = [
  "either",
  "glob",
+ "hdf5",
+ "ndarray",
+ "num",
  "serial_test",
  "thiserror",
 ]
