@@ -308,9 +308,9 @@ impl<'a> CellData<'_>
 async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
 {
     use std::collections::HashMap;
+    use futures::future::{Future, FutureExt, join_all};
     use ndarray::{s, azip};
     use ndarray_ops::{map_stencil3};
-    use futures::future::{Future, FutureExt, join_all};
     use godunov_core::piecewise_linear::plm_gradient3;
     use Direction::{X, Y};
 
@@ -325,6 +325,10 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
     }
 
 
+    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
+
+
+    // ============================================================================
     let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
     {
         let uc = uc.clone();
@@ -335,22 +339,16 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
     }).collect();
 
 
-    let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    // ============================================================================
+    let flux_map: HashMap<_, _> = block_data.iter().map(|block|
     {
         let solver = solver.clone();
         let mesh   = mesh.clone();
         let block  = block.clone();
-        let time   = state.time;
         let pc_map = pc_map.clone();
-        let uc     = uc.clone();
+        let block_index = block.index;
 
-        let u1 = async move {
-
-            // ============================================================================
-            let dx = mesh.cell_spacing_x();
-            let dy = mesh.cell_spacing_y();
-            let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
+        let flux = async move {
             // ============================================================================
             let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
             {
@@ -364,23 +362,13 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
                 riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
             };
 
-            let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-
             // ============================================================================
             let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
-
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
             let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
             let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
             let xf = &block.face_centers_x;
             let yf = &block.face_centers_y;
-
-            // ============================================================================
-            let sources = azip![
-                &uc,
-                &block.initial_conserved,
-                &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
 
             // ============================================================================
             let cell_data = azip![
@@ -403,15 +391,51 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
                 yf]
             .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
 
+            (fx.to_shared(), fy.to_shared())
+        };
+
+        (block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared())
+    }).collect();
+
+
+    // ============================================================================
+    let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    {
+        let solver   = solver.clone();
+        let mesh     = mesh.clone();
+        let block    = block.clone();
+        let uc       = uc.clone();
+        let flux_map = flux_map.clone();
+
+        let u1 = async move {
+            // ============================================================================
+            let dx = mesh.cell_spacing_x();
+            let dy = mesh.cell_spacing_y();
+
+            let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+            // ============================================================================
+            let sources = azip![
+                &uc,
+                &block.initial_conserved,
+                &block.cell_centers]
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+
+            let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
+            let fx_n = flux_n.map(|f| f.clone().0);
+            let fy_n = flux_n.map(|f| f.clone().1);
+            let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
+            let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
+
             // ============================================================================
             let du = azip![
-                fx.slice(s![..-1,..]),
-                fx.slice(s![ 1..,..]),
-                fy.slice(s![..,..-1]),
-                fy.slice(s![.., 1..])]
+                fx_e.slice(s![1..-2, 1..-1]),
+                fx_e.slice(s![2..-1, 1..-1]),
+                fy_e.slice(s![1..-1, 1..-2]),
+                fy_e.slice(s![1..-1, 2..-1])]
             .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            (uc + &du + &sources).to_shared()
+            (uc + du + sources).to_shared()
         };
         runtime.spawn(u1).map(|u| u.unwrap())
     });
