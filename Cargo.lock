@@ -388,7 +388,7 @@ dependencies = [
 [[package]]
 name = "hydro-iso2d"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/hydro-iso2d#3016db4e7a1421825744928896abfb31e424641f"
+source = "git+https://github.com/clemson-cal/hydro-iso2d#a7d22acefa6878338c131110efdd25ffec4182ee"
 
 [[package]]
 name = "indexmap"
