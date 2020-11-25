@@ -10,11 +10,14 @@ CDC is written and maintained by the [Computational Astrophysics Lab](https://jz
 - Ryan Westernacher-Schneider (Clemson)
 - Jack Hu (Clemson)
 
+
 # Publications
+
 - [Gas-driven inspiral of binaries in thin accretion disks (Tiede+ 2020)](https://ui.adsabs.harvard.edu/abs/2020ApJ...900...43T/abstract)
 - [Equilibrium eccentricity of accreting binaries (Zrake+ 2020)](https://ui.adsabs.harvard.edu/abs/2020arXiv201009707Z/abstract)
 
 <sub>Simulations for these publications were run with the [Mara3 implementation](https://github.com/jzrake/Mara3) of this setup. Simulations in forthcoming papers will use the Rust version. The hydrodynamic algorithms are identical.<sub>
+
 
 # Quick start
 
@@ -32,11 +35,10 @@ This will install an executable at `.cargo/bin/binary2d`, which should be in you
 
 ```Bash
 > cd
-> mkdir binary-code-project; cd binary-code-project
 > binary2d --help
 ```
 
-This will print a list of _command line options_ for things like the data output directory and the execution strategy. You also have a list of _model parameters_, which control things like the physical setup, the mesh parameters, and the output cadence. When run without anything on the command line, the code will print the model parameters default values and brief description:
+This will print a list of _flags_ for things like the data output directory and the execution strategy. You also have a list of _model parameters_, which control things like the physical setup, the mesh parameters, and the output cadence. When run without anything on the command line, the code will print the model parameters default values and brief description:
 
 ```
 > binary2d
@@ -68,7 +70,7 @@ write checkpoint data/chkpt.0000.h5
 You can inspect the output file `data/chkpt.0000.h5`, which is simply the simulation initial condition, using the provided plotting script:
 
 ```Bash
-> python3 plot.py data/chkpt.0000h5
+> python3 plot.py data/chkpt.0000.h5
 ```
 
 The model parameters are specified as `key=value` pairs on the command line (no dashes), possibly mixed in with the command line options (which control execution, and do have dashes). For example, to run a simulation for 500 binary orbits, and output the data to a directory called `my-run`, you would type
@@ -114,6 +116,16 @@ Runs can be restarted from HDF5 checkpoint files. These files contain a complete
 
 All the model parameters are stored in the checkpoint file. Any model parameters you do provide on the command line will supercede those in the checkpoint. Be careful how you use this feature -- superceding model parameters sometimes makes sense, but can other times be confusing. For example, if the parameter is only used once to generate the initial condition, then superceding it would have no effect, other than obscuring the parameters used to start the simulation. Other model parameters, such as the block size or domain radius, should never be superceded; doing so _should_ but is not guaranteed to cause a runtime error. Superceding certain physical conditions (e.g. disk Mach number or viscosity) or solver parameters (CFL, etc) can be very useful, for example if you want to see how an already well-evolved run responds to these changes.
 
+__Restarting at higher resolution__
+
+It may be useful to evolve a simulation to a quasi-steady state at low resolution to save time, and then restart it at a higher resolution. You can do this with the `upsample.py` script in the `tools` directory, for example
+
+```Bash
+tools/upsample.py low-res/chkpt.0012.h5 --output high-res/chkpt.0012.h5
+```
+
+This script will generate a valid checkpoint file, with the same number of grid blocks, but where the grid spacing on each block is cut in half. The script is thanks to Jack Hu. It uses piecewise-constant prolongation, which means your new checkpoint will have the same level of pixelization as the original, even though it has more zones. However once you restart from the new checkpoint file, the solution will develop a higher level of detail and accuracy.
+
 
 # Performance and parallelization
 
@@ -133,10 +145,9 @@ The performance characteristics with `--tokio` are different from the message-pa
 - Parallel execution with blocks ~ threads is as bad as 50% slower
 - Parallel execution with blocks >> threads is as much as 2x faster
 
-The last configuration with `--tokio` approaches ~70% scaling on a single node. On a 28-core Mac Pro workstation, it tops 90 million zone-updates per second, per RK step (Mzps), with the block size set to 64. For comparison, message passing with blocks ~ physical cores tops out at ~100 Mzps with message passing.
+The last configuration with `--tokio` approaches ~70% scaling on a single node. On a 28-core Mac Pro workstation, it tops 90 million zone-updates per second, per RK step (Mzps), with the block size set to 64. For comparison, message passing with blocks comparable to physical cores tops out at ~100 Mzps with message passing.
 
 Since the optimal mode depends on the mesh configuration, we are tentatively planning to maintain both parallelization strategies. That may not mean that all runtime configurations are supported in both parallelization modes. For example runs with tracer particles may require `--tokio`.
-
 
 
 # Developer guidelines
