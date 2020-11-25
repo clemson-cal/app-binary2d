@@ -118,13 +118,13 @@ All the model parameters are stored in the checkpoint file. Any model parameters
 
 __Restarting at higher resolution__
 
-It may be useful to evolve a simulation to a quasi-steady state at low resolution to save time, and then restart it at a higher resolution. You can do this with the `upsample.py` script in the `tools` directory, for example
+It may be useful to evolve a simulation to a quasi-steady state at low resolution to save time, and then restart it at a higher resolution. You can do this with the [`upsample.py`](tools/upsample.py) script in the `tools` directory, for example
 
 ```Bash
 tools/upsample.py low-res/chkpt.0012.h5 --output high-res/chkpt.0012.h5
 ```
 
-This script will generate a valid checkpoint file, with the same number of grid blocks, but where the grid spacing on each block is cut in half. The script is thanks to Jack Hu. It uses piecewise-constant prolongation, which means your new checkpoint will have the same level of pixelization as the original, even though it has more zones. However once you restart from the new checkpoint file, the solution will develop a higher level of detail and accuracy.
+This script will generate a valid checkpoint file, with the same number of grid blocks, but where the grid spacing on each block is cut in half. The script is thanks to [Jack Hu](https://github.com/Javk5pakfa). It uses piecewise-constant prolongation, which means your new checkpoint will have the same level of pixelization as the original, even though it has more zones. However once you restart from the new checkpoint file, the solution will develop a higher level of detail and accuracy.
 
 
 # Performance and parallelization
