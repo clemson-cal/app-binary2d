@@ -6,35 +6,26 @@ use io_logical::verified;
 
 
 // ============================================================================
-fn write_group<E: H5Type, T: Into<Vec<(String, E)>>>(group: &Group, tasks: T) -> Result<(), hdf5::Error>
+fn write_as_keyed_vec<E: H5Type, T: Into<Vec<(String, E)>>>(item: T, group: &Group, name: &str) -> Result<(), hdf5::Error>
 {
-    let task_vec: Vec<_> = tasks.into();
+    let task_vec: Vec<_> = item.into();
+    let target_group = group.create_group(name)?;
     for (name, task) in task_vec {
-        group.new_dataset::<E>().create(&name, ())?.write_scalar(&task)?;
+        target_group.new_dataset::<E>().create(&name, ())?.write_scalar(&task)?;
     }
     Ok(())
 }
 
-fn read_group<E: H5Type, T: From<Vec<(String, E)>>>(group: &Group) -> Result<T, hdf5::Error>
+fn read_as_keyed_vec<E: H5Type, T: From<Vec<(String, E)>>>(group: &Group, name: &str) -> Result<T, hdf5::Error>
 {
-    let task_vec: Vec<_> = group.member_names()?
+    let task_vec: Vec<_> = group
+        .group(name)?
+        .member_names()?
         .into_iter()
         .map(|name| group.dataset(&name)?.read_scalar::<E>().map(|task| (name, task)))
         .filter_map(Result::ok)
         .collect();
     Ok(task_vec.into())
-}
-
-
-
-
-/**
- * This trait enables types which are not themselves H5Type, but are Into<T>
- * where T: H5Type to be read and written transparently.
- */
-trait IntoH5Type
-{
-    type TargetType: H5Type;
 }
 
 
@@ -72,39 +63,135 @@ impl Dimension for ndarray::Ix3
 
 
 // ============================================================================
-impl IntoH5Type for hydro_iso2d::Conserved
+trait H5Write
 {
-    type TargetType = [f64; 3];
+    fn write(&self, group: &Group, name: &str) -> Result<(), hdf5::Error>;
+}
+
+trait H5Read: Sized
+{
+    fn read(group: &Group, name: &str) -> Result<Self, hdf5::Error>;
 }
 
 
 
 
 // ============================================================================
-fn write_array<P, T, U, I>(group: &Group, name: &str, data: &ndarray::ArrayBase<P, I>) -> Result<(), hdf5::Error>
+impl H5Write for f64
+{
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
+    {
+        group.new_dataset::<Self>().create(name, ())?.write_scalar(self)
+    }
+}
+impl H5Write for i64
+{
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
+    {
+        group.new_dataset::<Self>().create(name, ())?.write_scalar(self)
+    }
+}
+impl<T> H5Write for num::rational::Ratio<T> where T: num::Integer + H5Type + Copy
+{
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
+    {
+        group.new_dataset::<[T; 2]>().create(name, ())?.write_scalar(&[*self.numer(), *self.denom()])
+    }
+}
+impl<P, T, I> H5Write for ndarray::ArrayBase<P, I>
     where
     P: ndarray::RawData<Elem=T> + ndarray::Data,
-    T: Clone + IntoH5Type<TargetType=U>,
-    U: H5Type + From<T>,
-    I: ndarray::Dimension + Dimension,
+    T: H5Type,
+    I: Dimension,
 {
-    group.new_dataset::<U>().create(name, I::hdf5_shape(data))?.write(&data.mapv(U::from))?;
-    Ok(())
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
+    {
+        group.new_dataset::<T>().create(name, I::hdf5_shape(self))?.write(self)
+    }
+}
+impl<T> H5Write for Vec<T>
+    where
+    T: H5Type,
+{
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
+    {
+        group.new_dataset::<T>().create(name, self.len())?.write_raw(self)
+    }
 }
 
 
 
 
 // ============================================================================
-fn read_array<T, U, I: ndarray::Dimension>(group: &Group, name: &str) -> Result<ndarray::Array<T, I>, hdf5::Error>
-    where
-    T: IntoH5Type<TargetType=U>,
-    U: Clone + H5Type + Into<T>
+impl H5Read for f64
 {
-    Ok(group.dataset(name)?
-        .read_dyn::<U>()?
-        .into_dimensionality::<I>()?
-        .mapv(Into::<T>::into))
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    {
+        group.dataset(name)?.read_scalar::<Self>()
+    }
+}
+impl H5Read for i64
+{
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    {
+        group.dataset(name)?.read_scalar::<Self>()
+    }
+}
+impl<T> H5Read for num::rational::Ratio<T> where T: num::Integer + H5Type + Copy
+{
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    {
+        let nd = group.dataset(name)?.read_scalar::<[T; 2]>()?;
+        Ok(Self::new(nd[0], nd[1]))
+    }
+}
+impl<T, I> H5Read for ndarray::Array<T, I>
+    where
+    T: H5Type,
+    I: Dimension,
+{
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    {
+        Ok(group.dataset(name)?.read_dyn::<T>()?.into_dimensionality::<I>()?)
+    }
+}
+impl<T, I> H5Read for ndarray::ArcArray<T, I>
+    where
+    T: H5Type + Clone,
+    I: Dimension,
+{
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    {
+        Ok(ndarray::Array::<T, I>::read(group, name)?.to_shared())
+    }
+}
+impl<T> H5Read for Vec<T>
+    where
+    T: H5Type,
+{
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    {
+        group.dataset(name)?.read_raw()
+    }
+}
+
+
+
+
+// ============================================================================
+impl H5Read for crate::Tasks
+{
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    {
+        read_as_keyed_vec(group, name)
+    }    
+}
+impl H5Write for crate::Tasks
+{
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
+    {
+        write_as_keyed_vec(self.clone(), group, name)
+    }
 }
 
 
@@ -117,11 +204,11 @@ fn write_state(group: &Group, state: &crate::State, block_data: &Vec<crate::Bloc
 
     for (b, u) in block_data.iter().zip(&state.conserved)
     {
-        write_array(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1), &u)?;
+        u.mapv(<[f64; 3]>::from).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
     }
 
-    group.new_dataset::<i64>().create("iteration", ())?.write_scalar(&state.iteration.to_integer())?;
-    group.new_dataset::<f64>().create("time",      ())?.write_scalar(&state.time)?;
+    state.time.write(group, "time")?;
+    state.iteration.write(group, "iteration")?;
     Ok(())
 }
 
@@ -133,17 +220,17 @@ pub fn read_state(file: verified::File) -> Result<crate::State, hdf5::Error>
 
     for key in cons.member_names()?
     {
-        let u = read_array::<hydro_iso2d::Conserved, [f64; 3], ndarray::Ix2>(&cons, &key)?;
-        conserved.push(u.to_shared());
+        let u = ndarray::Array2::<[f64; 3]>::read(&cons, &key)?;
+        conserved.push(u.mapv(hydro_iso2d::Conserved::from).to_shared());
     }
 
-    let time      = file.dataset("time")     ?.read_scalar::<f64>()?;
-    let iteration = file.dataset("iteration")?.read_scalar::<usize>()?;
+    let time      = f64::read(&file, "time")?;
+    let iteration = num::rational::Ratio::<i64>::read(&file, "iteration")?;
 
     let result = crate::State{
         conserved: conserved,
         time: time,
-        iteration: (iteration as i64).into(),
+        iteration: iteration,
     };
     Ok(result)
 }
@@ -154,12 +241,13 @@ pub fn read_state(file: verified::File) -> Result<crate::State, hdf5::Error>
 // ============================================================================
 fn write_tasks(group: &Group, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
 {
-    write_group(group, tasks.clone())
+    tasks.write(group, "tasks")
 }
 
 pub fn read_tasks(file: verified::File) -> Result<crate::Tasks, hdf5::Error>
 {
-    read_group(&File::open(file.to_string())?.group("tasks")?)
+    let file = File::open(file.to_string())?;
+    crate::Tasks::read(&file, "tasks")
 }
 
 
