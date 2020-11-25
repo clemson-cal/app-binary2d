@@ -16,12 +16,24 @@ use num::rational::Rational64;
 use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
+use io_logical::verified;
 use scheme::{State, BlockIndex, BlockData};
 use hydro_iso2d::*;
 
 mod io;
 mod scheme;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+
+
+
+
+// ============================================================================
+#[derive(hdf5::H5Type)]
+#[repr(C)]
+pub struct TimeSeriesSample
+{
+    pub time: f64,
+}
 
 
 
@@ -51,72 +63,43 @@ struct App
 
 impl App
 {
-
-    /**
-     * Return the last filename matching chkpt.*.h5 in the given directory, or
-     * an error if the directory was empty.
-     */
-    fn last_checkpoint_in_directory(&self, path: std::path::PathBuf) -> anyhow::Result<String>
+    fn restart_file(&self) -> anyhow::Result<Option<verified::File>>
     {
-        let path_dir = path.clone();
-        let mut path_with_chkpt = path.clone();
-
-        path_with_chkpt.push("chkpt.*.h5");
-
-        let mut checkpoints: Vec<_> = glob::glob(path_with_chkpt.to_str().unwrap())
-            .unwrap()
-            .map(|x| x.unwrap().to_str().unwrap().to_string())
-            .collect();
-
-        checkpoints.sort();
-
-        if let Some(checkpoint) = checkpoints.last() {
-            Ok(checkpoint.to_string().into())
-        } else {
-            Err(anyhow::anyhow!("the restart directory '{}' has no checkpoints", path_dir.to_str().unwrap()))
-        }
-    }
-
-    /**
-     * Determine the name of a restart file, if the --restart option had been
-     * given, failing if the checkpoint file cannot be found. If no restart
-     * file was requested, then return None.
-     */
-    fn restart_file(&self) -> anyhow::Result<Option<String>>
-    {
-        if let Some(restart) = &self.restart {
-            let path = std::path::PathBuf::from(&restart);
-            if path.is_file() {
-                Ok(Some(restart.into()))
-            } else if path.is_dir() {
-                Ok(Some(self.last_checkpoint_in_directory(path)?))
-            } else {
-                Err(anyhow::anyhow!("missing restart file '{}'", restart))
-            }
+        if let Some(restart) = self.restart.clone() {
+            Ok(Some(verified::file_or_most_recent_matching_in_directory(restart, "chkpt.????.h5")?))
         } else {
             Ok(None)
         }
     }
 
-    /**
-     * Return the requested data output directory, or an error if it was
-     * supposed to be inferred from the restart file and the restart file could
-     * not be found.
-     */
-    fn output_directory(&self) -> anyhow::Result<String>
+    fn restart_rundir(&self) -> anyhow::Result<Option<verified::Directory>>
     {
-        if let Some(outdir) = &self.outdir {
-            Ok(outdir.into())
-        } else if let Some(restart) = &self.restart_file()? {
-            Ok(std::path::Path::new(restart).parent().unwrap().to_str().unwrap().into())
+        Ok(self.restart_file()?.map(|f| f.parent()))
+    }
+
+    fn restart_rundir_child(&self, filename: &str) -> anyhow::Result<Option<verified::File>>
+    {
+        if let Some(restart_rundir) = self.restart_rundir()? {
+            Ok(Some(restart_rundir.existing_child(filename)?))
         } else {
-            Ok("data".into())
+            Ok(None)
+        }
+    }
+
+    fn output_directory(&self) -> anyhow::Result<verified::Directory>
+    {
+        if let Some(outdir) = self.outdir.clone() {
+            Ok(verified::Directory::require(outdir)?)
+        } else if let Some(restart) = &self.restart_file()? {
+            Ok(restart.parent())
+        } else {
+            Ok(verified::Directory::require("data".into())?)
         }
     }
 
     fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
-        if let Some(restart) = &self.restart_file()? {
+        if let Some(restart) = self.restart_file()? {
             Ok(io::read_model(restart)?)
         } else {
             Ok(HashMap::new())
@@ -137,33 +120,114 @@ impl App
 
 
 // ============================================================================
+#[derive(Clone, hdf5::H5Type)]
+#[repr(C)]
+pub struct RecurringTask
+{
+    count: usize,
+    next_time: f64,
+}
+
+impl RecurringTask
+{
+    pub fn new() -> RecurringTask
+    {
+        RecurringTask{
+            count: 0,
+            next_time: 0.0,
+        }        
+    }
+    pub fn advance(&mut self, interval: f64)
+    {
+        self.count += 1;
+        self.next_time += interval;
+    }
+}
+
+
+
+
+// ============================================================================
+#[derive(Clone)]
 pub struct Tasks
 {
-    pub checkpoint_next_time: f64,
-    pub checkpoint_count: usize,
+    pub write_checkpoint: RecurringTask,
+    pub record_time_sample: RecurringTask,
+
     pub call_count_this_run: usize,
     pub tasks_last_performed: Instant,
 }
 
+
+
+
+// ============================================================================
+impl From<Tasks> for Vec<(String, RecurringTask)>
+{
+    fn from(tasks: Tasks) -> Self {
+        vec![
+            ("write_checkpoint".into(), tasks.write_checkpoint),
+            ("record_time_sample".into(), tasks.record_time_sample),
+        ]
+    }
+}
+
+impl From<Vec<(String, RecurringTask)>> for Tasks
+{
+    fn from(a: Vec<(String, RecurringTask)>) -> Tasks {
+        let task_map: HashMap<_, _> = a.into_iter().collect();
+        Tasks {
+            write_checkpoint:   task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
+            record_time_sample: task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
+            call_count_this_run: 0,
+            tasks_last_performed: Instant::now(),
+        }
+    }
+}
+
+
+
+
+// ============================================================================
 impl Tasks
 {
-    fn write_checkpoint(&mut self, state: &State, block_data: &Vec<BlockData>, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
+    fn write_checkpoint(&mut self,
+        state: &State,
+        time_series: &Vec<TimeSeriesSample>,
+        block_data: &Vec<BlockData>,
+        model: &kind_config::Form,
+        app: &App) -> anyhow::Result<()>
     {
-        let checkpoint_interval: f64 = model.get("cpi").into();
         let outdir = app.output_directory()?;
-        let fname = format!("{}/chkpt.{:04}.h5", outdir, self.checkpoint_count);
+        let fname_chkpt       = outdir.child(&format!("chkpt.{:04}.h5", self.write_checkpoint.count));
+        let fname_time_series = outdir.child("time_series.h5");
 
-        std::fs::create_dir_all(outdir).unwrap();
+        self.write_checkpoint.advance(model.get("cpi").into());
 
-        self.checkpoint_count += 1;
-        self.checkpoint_next_time += checkpoint_interval;
+        println!("write checkpoint {}", fname_chkpt);
+        io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
+        io::write_time_series(&fname_time_series, time_series)?;
 
-        println!("write checkpoint {}", fname);
-        io::write_checkpoint(&fname, &state, &block_data, &model.value_map(), &self).unwrap();
         Ok(())
     }
 
-    fn perform(&mut self, state: &State, block_data: &Vec<BlockData>, mesh: &scheme::Mesh, model: &kind_config::Form, app: &App) -> anyhow::Result<()>
+    fn record_time_sample(&mut self,
+        state: &State,
+        time_series: &mut Vec<TimeSeriesSample>,
+        model: &kind_config::Form)
+    {
+        self.record_time_sample.advance(model.get("tsi").into());
+        time_series.push(TimeSeriesSample{time: state.time});
+    }
+
+    fn perform(
+        &mut self,
+        state: &State,
+        time_series: &mut Vec<TimeSeriesSample>,
+        block_data: &Vec<BlockData>,
+        mesh: &scheme::Mesh,
+        model: &kind_config::Form,
+        app: &App) -> anyhow::Result<()>
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
@@ -175,10 +239,17 @@ impl Tasks
         {
             println!("[{:05}] orbit={:.3} Mzps={:.2} (per cu-rk={:.2})", state.iteration, state.time / ORBITAL_PERIOD, mzps, mzps_per_cu);
         }
-        if state.time / ORBITAL_PERIOD >= self.checkpoint_next_time
+
+        if state.time / ORBITAL_PERIOD >= self.record_time_sample.next_time
         {
-            self.write_checkpoint(state, block_data, model, app)?;
+            self.record_time_sample(state, time_series, model);
         }
+
+        if state.time / ORBITAL_PERIOD >= self.write_checkpoint.next_time
+        {
+            self.write_checkpoint(state, time_series, block_data, model, app)?;
+        }
+
         self.call_count_this_run += 1;
         Ok(())
     }
@@ -219,11 +290,16 @@ fn initial_state(mesh: &scheme::Mesh) -> State
 fn initial_tasks() -> Tasks
 {
     Tasks{
-        checkpoint_next_time: 0.0,
-        checkpoint_count: 0,
+        write_checkpoint: RecurringTask::new(),
+        record_time_sample: RecurringTask::new(),
         call_count_this_run: 0,
         tasks_last_performed: Instant::now(),
     }
+}
+
+fn initial_time_series() -> Vec<TimeSeriesSample>
+{
+    Vec::new()
 }
 
 fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
@@ -289,6 +365,7 @@ fn main() -> anyhow::Result<()>
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("cfl"             , 0.4    , "CFL parameter")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
+        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
         .item("domain_radius"   , 24.0   , "Half-size of the domain")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
@@ -307,27 +384,27 @@ fn main() -> anyhow::Result<()>
     let block_data = create_block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file()?.map(|r| io::read_state(&r)).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
-    let mut tasks  = app.restart_file()?.map(|r| io::read_tasks(&r)).unwrap_or_else(|| Ok(initial_tasks()))?;
+    let mut state  = app.restart_file()?.map(io::read_state).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
+    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(initial_tasks()))?;
+    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
+
+    time_series.retain(|s| s.time < state.time);
 
     println!();
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
     }
     println!();
-    println!("\trestart file            = {}",      app.restart_file()?.unwrap_or("none".to_string()));
+    println!("\trestart file            = {}",      app.restart_file()?.map(|f|f.to_string()).unwrap_or("none".to_string()));
     println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
-    tasks.perform(&state, &block_data, &mesh, &model, &app)?;
+    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
     use tokio::runtime::Builder;
-    let runtime = Builder::new_multi_thread()
-            .worker_threads(app.threads)
-            .build()
-            .unwrap();
+    let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
@@ -336,7 +413,7 @@ fn main() -> anyhow::Result<()>
         } else {
             scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
         }
-        tasks.perform(&state, &block_data, &mesh, &model, &app)?;
+        tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
     Ok(())
 }
