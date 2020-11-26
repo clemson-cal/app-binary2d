@@ -302,6 +302,7 @@ pub trait Hydrodynamics: Sync
     fn stress_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64;
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
 
     fn source_terms(
         &self,
@@ -374,6 +375,11 @@ impl Hydrodynamics for Isothermal
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive
     {
         u.to_primitive()
+    }
+
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
+    {
+        p.to_conserved()
     }
 
     fn source_terms(
@@ -463,6 +469,11 @@ impl Hydrodynamics for Euler
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive
     {
         conserved.to_primitive(self.gamma_law_index)
+    }
+
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
+    {
+        p.to_conserved(self.gamma_law_index)
     }
 
     fn source_terms(

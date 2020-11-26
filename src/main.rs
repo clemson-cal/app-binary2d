@@ -19,7 +19,7 @@ use clap::Clap;
 use kind_config;
 use io_logical::verified;
 use scheme_v2::{State, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics};
-use hydro_iso2d::{Conserved, Primitive};
+// use hydro_iso2d::{Conserved, Primitive};
 
 // mod io;
 // mod scheme;
@@ -196,9 +196,9 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
 impl Tasks
 {
     fn write_checkpoint(&mut self,
-        state: &State<Conserved>,
+        state: &State<hydro_iso2d::Conserved>,
         time_series: &Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData<Conserved>>,
+        block_data: &Vec<BlockData<hydro_iso2d::Conserved>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
     {
@@ -218,7 +218,7 @@ impl Tasks
     }
 
     fn record_time_sample(&mut self,
-        state: &State<Conserved>,
+        state: &State<hydro_iso2d::Conserved>,
         time_series: &mut Vec<TimeSeriesSample>,
         model: &kind_config::Form)
     {
@@ -228,9 +228,9 @@ impl Tasks
 
     fn perform(
         &mut self,
-        state: &State<Conserved>,
+        state: &State<hydro_iso2d::Conserved>,
         time_series: &mut Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData<Conserved>>,
+        block_data: &Vec<BlockData<hydro_iso2d::Conserved>>,
         mesh: &Mesh,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
@@ -264,8 +264,32 @@ impl Tasks
 
 
 
+
+trait DiskModel
+{
+    type System: Hydrodynamics;
+    fn primitive_at(&self, xy: (f64, f64)) -> <Self::System as Hydrodynamics>::Primitive;
+}
+
+
+
+
+fn initial_conserved_v2<D, H>(model: &D, hydro: &H, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<H::Conserved, Ix2>
+    where
+    D: DiskModel<System=H>,
+    H: Hydrodynamics,
+{
+    mesh.cell_centers(block_index)
+        .mapv(|x| model.primitive_at(x))
+        .mapv(|p| hydro.to_conserved(p))
+        .to_shared()
+}
+
+
+
+
 // ============================================================================
-fn disk_model(xy: (f64, f64)) -> Primitive
+fn disk_model(xy: (f64, f64)) -> hydro_iso2d::Primitive
 {
     let (x, y) = xy;
     let r0 = f64::sqrt(x * x + y * y);
@@ -273,18 +297,18 @@ fn disk_model(xy: (f64, f64)) -> Primitive
     let vp = f64::sqrt(ph);
     let vx = vp * (-y / r0);
     let vy = vp * ( x / r0);
-    return Primitive(1.0, vx, vy);
+    return hydro_iso2d::Primitive(1.0, vx, vy);
 }
 
-fn initial_conserved(block_index: BlockIndex, mesh: &Mesh) -> ArcArray<Conserved, Ix2>
+fn initial_conserved(block_index: BlockIndex, mesh: &Mesh) -> ArcArray<hydro_iso2d::Conserved, Ix2>
 {
     mesh.cell_centers(block_index)
         .mapv(disk_model)
-        .mapv(Primitive::to_conserved)
+        .mapv(hydro_iso2d::Primitive::to_conserved)
         .to_shared()
 }
 
-fn initial_state(mesh: &Mesh) -> State<Conserved>
+fn initial_state(mesh: &Mesh) -> State<hydro_iso2d::Conserved>
 {
     State{
         time: 0.0,
@@ -308,7 +332,7 @@ fn initial_time_series() -> Vec<TimeSeriesSample>
     Vec::new()
 }
 
-fn block_data(block_index: BlockIndex, mesh: &Mesh) -> BlockData<Conserved>
+fn block_data(block_index: BlockIndex, mesh: &Mesh) -> BlockData<hydro_iso2d::Conserved>
 {
     BlockData{
         cell_centers:    mesh.cell_centers(block_index).to_shared(),
@@ -349,7 +373,7 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
     }
 }
 
-fn create_block_data(mesh: &Mesh) -> Vec<BlockData<Conserved>>
+fn create_block_data(mesh: &Mesh) -> Vec<BlockData<hydro_iso2d::Conserved>>
 {
     mesh.block_indexes().iter().map(|&i| block_data(i, &mesh)).collect()
 }
