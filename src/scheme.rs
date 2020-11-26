@@ -540,7 +540,7 @@ pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh,
 // ============================================================================
 fn advance_channels_internal_block(
     state:      BlockState,
-    block_data: &crate::BlockData,
+    block_data: &BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
@@ -632,7 +632,7 @@ fn advance_channels_internal_block(
 // ============================================================================
 fn advance_channels_internal(
     conserved:  &mut ArcArray<Conserved, Ix2>,
-    block_data: &crate::BlockData,
+    block_data: &BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
     sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,

@@ -1,3 +1,4 @@
+#![allow(unused)]
 /**
  * @brief      Code to solve gas-driven binary evolution
  *             
@@ -17,11 +18,11 @@ use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
-use scheme::{State, BlockIndex, BlockData};
-use hydro_iso2d::*;
+use scheme_v2::{State, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics};
+use hydro_iso2d::{Conserved, Primitive};
 
-mod io;
-mod scheme;
+// mod io;
+// mod scheme;
 mod scheme_v2;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
@@ -100,8 +101,10 @@ impl App
 
     fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
-        if let Some(restart) = self.restart_file()? {
-            Ok(io::read_model(restart)?)
+        if let Some(_restart) = self.restart_file()? {
+            // TODO
+            Ok(HashMap::new())
+            // Ok(io::read_model(restart)?)
         } else {
             Ok(HashMap::new())
         }
@@ -193,9 +196,9 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
 impl Tasks
 {
     fn write_checkpoint(&mut self,
-        state: &State,
+        state: &State<Conserved>,
         time_series: &Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData>,
+        block_data: &Vec<BlockData<Conserved>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
     {
@@ -206,14 +209,16 @@ impl Tasks
         self.write_checkpoint.advance(model.get("cpi").into());
 
         println!("write checkpoint {}", fname_chkpt);
-        io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
-        io::write_time_series(&fname_time_series, time_series)?;
+
+        // TODO
+        // io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
+        // io::write_time_series(&fname_time_series, time_series)?;
 
         Ok(())
     }
 
     fn record_time_sample(&mut self,
-        state: &State,
+        state: &State<Conserved>,
         time_series: &mut Vec<TimeSeriesSample>,
         model: &kind_config::Form)
     {
@@ -223,10 +228,10 @@ impl Tasks
 
     fn perform(
         &mut self,
-        state: &State,
+        state: &State<Conserved>,
         time_series: &mut Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData>,
-        mesh: &scheme::Mesh,
+        block_data: &Vec<BlockData<Conserved>>,
+        mesh: &Mesh,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
     {
@@ -271,7 +276,7 @@ fn disk_model(xy: (f64, f64)) -> Primitive
     return Primitive(1.0, vx, vy);
 }
 
-fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> ArcArray<Conserved, Ix2>
+fn initial_conserved(block_index: BlockIndex, mesh: &Mesh) -> ArcArray<Conserved, Ix2>
 {
     mesh.cell_centers(block_index)
         .mapv(disk_model)
@@ -279,7 +284,7 @@ fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> ArcArray<C
         .to_shared()
 }
 
-fn initial_state(mesh: &scheme::Mesh) -> State
+fn initial_state(mesh: &Mesh) -> State<Conserved>
 {
     State{
         time: 0.0,
@@ -303,7 +308,7 @@ fn initial_time_series() -> Vec<TimeSeriesSample>
     Vec::new()
 }
 
-fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
+fn block_data(block_index: BlockIndex, mesh: &Mesh) -> BlockData<Conserved>
 {
     BlockData{
         cell_centers:    mesh.cell_centers(block_index).to_shared(),
@@ -314,11 +319,11 @@ fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
     }
 }
 
-fn create_solver(model: &kind_config::Form) -> scheme::Solver
+fn create_solver(model: &kind_config::Form) -> Solver
 {
     let one_body: bool = model.get("one_body").into();
 
-    scheme::Solver{
+    Solver{
         buffer_rate:      model.get("buffer_rate").into(),
         buffer_scale:     model.get("buffer_scale").into(),
         cfl:              model.get("cfl").into(),
@@ -330,21 +335,21 @@ fn create_solver(model: &kind_config::Form) -> scheme::Solver
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
-        stress_dim:       model.get("stress_dim").into(),
+        // stress_dim:       model.get("stress_dim").into(),
         orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
     }
 }
 
-fn create_mesh(model: &kind_config::Form) -> scheme::Mesh
+fn create_mesh(model: &kind_config::Form) -> Mesh
 {
-    scheme::Mesh{
+    Mesh{
         num_blocks: i64::from(model.get("num_blocks")) as usize,
         block_size: i64::from(model.get("block_size")) as usize,
         domain_radius: model.get("domain_radius").into(),
     }
 }
 
-fn create_block_data(mesh: &scheme::Mesh) -> Vec<BlockData>
+fn create_block_data(mesh: &Mesh) -> Vec<BlockData<Conserved>>
 {
     mesh.block_indexes().iter().map(|&i| block_data(i, &mesh)).collect()
 }
@@ -380,16 +385,21 @@ fn main() -> anyhow::Result<()>
         .merge_value_map(&app.restart_model_parameters()?)?
         .merge_string_args(&app.model_parameters)?;
 
+    let hydro      = scheme_v2::Isothermal{};
     let solver     = create_solver(&model);
     let mesh       = create_mesh(&model);
     let block_data = create_block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file()?.map(io::read_state).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
-    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(initial_tasks()))?;
-    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
+    // let mut state  = app.restart_file()?.map(io::read_state).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
+    // let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(initial_tasks()))?;
+    // let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
+    // time_series.retain(|s| s.time < state.time);
 
-    time_series.retain(|s| s.time < state.time);
+    let mut state = initial_state(&mesh);
+    let mut tasks = initial_tasks();
+    let mut time_series = initial_time_series();
+
 
     println!();
     for key in &model.sorted_keys() {
@@ -404,16 +414,17 @@ fn main() -> anyhow::Result<()>
 
     tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
-    use tokio::runtime::Builder;
-    let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
+    // use tokio::runtime::Builder;
+    // let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        if app.tokio {
-            state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
-        } else {
-            scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
-        }
+        scheme_v2::advance(&mut state, &hydro, &block_data, &mesh, &solver, dt, app.fold);
+        // if app.tokio {
+            // state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
+        // } else {
+        //     scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+        // }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
     Ok(())

@@ -13,7 +13,7 @@ use godunov_core::{solution_states, runge_kutta};
 
 // ============================================================================
 type NeighborPrimitiveBlock<Primitive> = [[ArcArray<Primitive, Ix2>; 3]; 3];
-type BlockState<Conserved> = solution_states::SolutionStateArray<Conserved, Ix2>;
+type BlockState<Conserved> = solution_states::SolutionStateArcArray<Conserved, Ix2>;
 pub type BlockIndex = (usize, usize);
 
 #[derive(Copy, Clone)]
@@ -38,10 +38,10 @@ impl Primitive for hydro_euler::euler_2d::Primitive {}
 // ============================================================================
 pub struct BlockData<C: Conserved>
 {
-    pub initial_conserved: Array<C, Ix2>,
-    pub cell_centers:      Array<(f64, f64), Ix2>,
-    pub face_centers_x:    Array<(f64, f64), Ix2>,
-    pub face_centers_y:    Array<(f64, f64), Ix2>,
+    pub initial_conserved: ArcArray<C, Ix2>,
+    pub cell_centers:      ArcArray<(f64, f64), Ix2>,
+    pub face_centers_x:    ArcArray<(f64, f64), Ix2>,
+    pub face_centers_y:    ArcArray<(f64, f64), Ix2>,
     pub index:             BlockIndex,
 }
 
@@ -53,7 +53,7 @@ pub struct State<C: Conserved>
 {
     pub time: f64,
     pub iteration: Rational64,
-    pub conserved: Vec<Array<C, Ix2>>,
+    pub conserved: Vec<ArcArray<C, Ix2>>,
 }
 
 
@@ -323,11 +323,10 @@ pub trait Hydrodynamics: Sync
         axis: Direction) -> Self::Conserved;
 }
 
-struct Isothermal {
-
+pub struct Isothermal {
 }
 
-struct Euler {
+pub struct Euler {
     gamma_law_index: f64,
 }
 
@@ -448,7 +447,6 @@ impl Hydrodynamics for Euler
             (X, Y) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
             (Y, X) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
             (Y, Y) =>-cell_data.gx.velocity_1() + cell_data.gy.velocity_2(),
-            (_, _) => panic!(),     
         }
     }
 
@@ -586,7 +584,7 @@ fn advance_internal<H: Hydrodynamics>(
 
 // ============================================================================
 fn advance_internal_rk<H: Hydrodynamics>(
-    conserved:  &mut Array<H::Conserved, Ix2>,
+    conserved:  &mut ArcArray<H::Conserved, Ix2>,
     hydro:      &H,
     block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
