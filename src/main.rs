@@ -264,25 +264,88 @@ impl Tasks
 
 
 
-
-trait DiskModel
+/**
+ * This trait provides all functions needed to construct critical simulation
+ * data structures. It is parametererized around the a type System:
+ * Hydrodynamics. Implementors only need to define the primitive_at method; the
+ * other initial conditions functions are defined in terms of it.
+ */
+trait Driver
 {
     type System: Hydrodynamics;
+    fn hydrodynamics(&self) -> Self::System;
     fn primitive_at(&self, xy: (f64, f64)) -> <Self::System as Hydrodynamics>::Primitive;
+    fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<<Self::System as Hydrodynamics>::Conserved, Ix2>
+    {
+        let model = self;
+        let hydro = self.hydrodynamics();
+        mesh.cell_centers(block_index)
+            .mapv(|x| model.primitive_at(x))
+            .mapv(|p| hydro.to_conserved(p))
+            .to_shared()
+    }
+    fn initial_state(&self, mesh: &Mesh) -> State<<Self::System as Hydrodynamics>::Conserved>
+    {
+        State{
+            time: 0.0,
+            iteration: Rational64::new(0, 1),
+            conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect()
+        } 
+    }
+    fn initial_tasks(&self) -> Tasks
+    {
+        Tasks{
+            write_checkpoint: RecurringTask::new(),
+            record_time_sample: RecurringTask::new(),
+            call_count_this_run: 0,
+            tasks_last_performed: Instant::now(),
+        }
+    }
+    fn initial_time_series() -> Vec<TimeSeriesSample>
+    {
+        Vec::new()
+    }
+    fn block_data(&self, block_index: BlockIndex, mesh: &Mesh) -> BlockData<<Self::System as Hydrodynamics>::Conserved>
+    {
+        BlockData{
+            cell_centers:      mesh.cell_centers(block_index).to_shared(),
+            face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
+            face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
+            initial_conserved: self.initial_conserved(block_index, &mesh).to_shared(),
+            index: block_index,
+        }
+    }
+    fn block_data_vec(&self, mesh: &Mesh) -> Vec<BlockData<<Self::System as Hydrodynamics>::Conserved>>
+    {
+        mesh.block_indexes().iter().map(|&i| self.block_data(i, &mesh)).collect()
+    }
 }
 
 
 
 
-fn initial_conserved_v2<D, H>(model: &D, hydro: &H, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<H::Conserved, Ix2>
-    where
-    D: DiskModel<System=H>,
-    H: Hydrodynamics,
+// ============================================================================
+struct IsothermalDriver;
+
+impl Driver for IsothermalDriver
 {
-    mesh.cell_centers(block_index)
-        .mapv(|x| model.primitive_at(x))
-        .mapv(|p| hydro.to_conserved(p))
-        .to_shared()
+    type System = scheme_v2::Isothermal;
+
+    fn hydrodynamics(&self) -> Self::System
+    {
+        scheme_v2::Isothermal{}
+    }
+
+    fn primitive_at(&self, xy: (f64, f64)) -> hydro_iso2d::Primitive
+    {
+        let (x, y) = xy;
+        let r0 = f64::sqrt(x * x + y * y);
+        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
+        let vp = f64::sqrt(ph);
+        let vx = vp * (-y / r0);
+        let vy = vp * ( x / r0);
+        return hydro_iso2d::Primitive(1.0, vx, vy);
+    }
 }
 
 
@@ -410,6 +473,7 @@ fn main() -> anyhow::Result<()>
         .merge_string_args(&app.model_parameters)?;
 
     let hydro      = scheme_v2::Isothermal{};
+    let disk_model = IsothermalDiskModel{};
     let solver     = create_solver(&model);
     let mesh       = create_mesh(&model);
     let block_data = create_block_data(&mesh);
