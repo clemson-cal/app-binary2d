@@ -1,3 +1,7 @@
 target
 ndarray-ops/Cargo.lock
 *.h5
+*.ipynb
+*.pbs
+*.png
+*.txt
