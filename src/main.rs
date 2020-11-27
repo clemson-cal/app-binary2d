@@ -20,7 +20,7 @@ use kind_config;
 use io_logical::verified;
 use scheme_v2::{State, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics};
 
-// mod io;
+mod io;
 // mod scheme;
 mod scheme_v2;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
@@ -100,10 +100,8 @@ impl App
 
     fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
-        if let Some(_restart) = self.restart_file()? {
-            // TODO
-            Ok(HashMap::new())
-            // Ok(io::read_model(restart)?)
+        if let Some(restart) = self.restart_file()? {
+            Ok(io::read_model(restart)?)
         } else {
             Ok(HashMap::new())
         }
@@ -218,10 +216,8 @@ impl Tasks
         self.write_checkpoint.advance(model.get("cpi").into());
 
         println!("write checkpoint {}", fname_chkpt);
-
-        // TODO
-        // io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
-        // io::write_time_series(&fname_time_series, time_series)?;
+        io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
+        io::write_time_series(&fname_time_series, time_series)?;
 
         Ok(())
     }
@@ -274,10 +270,9 @@ impl Tasks
 
 
 
-trait InitialModel
+trait InitialModel: Hydrodynamics
 {
-    type System: Hydrodynamics;
-    fn primitive_at(&self, xy: (f64, f64)) -> <Self::System as Hydrodynamics>::Primitive;
+    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive;
 }
 
 
@@ -288,23 +283,22 @@ trait InitialModel
  * structures. It is parameterized around System: Hydrodynamics and a Model:
  * InitialModel.
  */
-struct Driver<System: Hydrodynamics, Model: InitialModel<System=System>>
+struct Driver<System: Hydrodynamics + InitialModel>
 {
-    hydro: System,
-    model: Model,
+    system: System,
 }
 
-impl<System: Hydrodynamics, Model: InitialModel<System=System>> Driver<System, Model>
+impl<System: Hydrodynamics + InitialModel> Driver<System>
 {
-    fn new(hydro: System, model: Model) -> Self
+    fn new(system: System) -> Self
     {
-        Self{hydro: hydro, model: model}
+        Self{system: system}
     }
     fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<System::Conserved, Ix2>
     {
         mesh.cell_centers(block_index)
-            .mapv(|x| self.model.primitive_at(x))
-            .mapv(|p| self.hydro.to_conserved(p))
+            .mapv(|x| self.system.primitive_at(x))
+            .mapv(|p| self.system.to_conserved(p))
             .to_shared()
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
@@ -337,20 +331,8 @@ impl<System: Hydrodynamics, Model: InitialModel<System=System>> Driver<System, M
 
 
 // ============================================================================
-struct IsothermalInitialModel;
-
-impl IsothermalInitialModel
+impl InitialModel for scheme_v2::Isothermal
 {
-    fn new() -> Self
-    {
-        Self{}
-    }
-}
-
-impl InitialModel for IsothermalInitialModel
-{
-    type System = scheme_v2::Isothermal;
-
     fn primitive_at(&self, xy: (f64, f64)) -> hydro_iso2d::Primitive
     {
         let (x, y) = xy;
@@ -427,23 +409,17 @@ fn main() -> anyhow::Result<()>
         .merge_value_map(&app.restart_model_parameters()?)?
         .merge_string_args(&app.model_parameters)?;
 
-    let hydro      = scheme_v2::Isothermal::new();
-    let initial    = IsothermalInitialModel::new();
-    let driver     = Driver::new(hydro, initial);
+    let driver     = Driver::new(scheme_v2::Isothermal::new());
     let solver     = create_solver(&model);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    // let mut state  = app.restart_file()?.map(io::read_state).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
-    // let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(initial_tasks()))?;
-    // let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
-    // time_series.retain(|s| s.time < state.time);
+    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh)))?;
+    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
+    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series::<TimeSeriesSample>).unwrap_or_else(|| Ok(Vec::new()))?;
 
-    let mut state = driver.initial_state(&mesh);
-    let mut tasks = Tasks::new();
-    let mut time_series: Vec<TimeSeriesSample> = Vec::new();
-
+    time_series.retain(|s| s.time < state.time);
 
     println!();
     for key in &model.sorted_keys() {
@@ -463,7 +439,7 @@ fn main() -> anyhow::Result<()>
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme_v2::advance(&mut state, &driver.hydro, &block_data, &mesh, &solver, dt, app.fold);
+        scheme_v2::advance(&mut state, &driver.system, &block_data, &mesh, &solver, dt, app.fold);
         // if app.tokio {
             // state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
         // } else {
