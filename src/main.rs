@@ -1,4 +1,3 @@
-#![allow(unused)]
 /**
  * @brief      Code to solve gas-driven binary evolution
  *             
@@ -375,7 +374,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
             conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect()
         } 
     }
-    fn initial_time_series() -> Vec<TimeSeriesSample>
+    fn initial_time_series(&self) -> Vec<TimeSeriesSample>
     {
         Vec::new()
     }
@@ -443,7 +442,7 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
     let dt         = solver.min_time_step(&mesh);
     let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh)))?;
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
-    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series::<TimeSeriesSample>).unwrap_or_else(|| Ok(Vec::new()))?;
+    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
     time_series.retain(|s| s.time < state.time);
 

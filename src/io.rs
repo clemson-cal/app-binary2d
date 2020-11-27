@@ -55,7 +55,7 @@ impl<C, T> nicer_hdf5::H5Read for State<C>
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        let state_group = group.group("state")?;
+        let state_group = group.group(name)?;
         let cons = state_group.group("conserved")?;
         let mut conserved = Vec::new();
 
@@ -102,7 +102,7 @@ fn write_state<C, T>(group: &Group, state: &State<C>, block_data: &Vec<BlockData
     Ok(())
 }
 
-pub fn read_state<C, T, H>(hydro: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
+pub fn read_state<C, T, H>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
     where
     C: H5Conserved<H5Type=T> + From<T>,
     T: H5Type + Clone,
