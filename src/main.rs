@@ -18,12 +18,52 @@ use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
-use scheme_v2::{State, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics};
+use scheme_v2::{State, Conserved, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics, Isothermal};
 
 mod io;
-// mod scheme;
 mod scheme_v2;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+
+
+
+
+// ============================================================================
+fn main() -> anyhow::Result<()>
+{
+    let _silence_hdf5_errors = hdf5::silence_errors();
+    let app = App::parse();
+
+    let model = kind_config::Form::new()
+        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
+        .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
+        .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
+        .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
+        .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
+        .item("cfl"             , 0.4    , "CFL parameter [~0.3-0.4]")
+        .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
+        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
+        .item("domain_radius"   , 24.0   , "Half-size of the domain [a]")
+        .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
+        .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
+        .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
+        .item("rk_order"        , 1      , "Runge-Kutta time integration order [1|2|3]")
+        .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
+        .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
+        .item("softening_length", 0.05   , "Gravitational softening length [a]")
+        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
+        .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
+        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
+        .merge_value_map(&app.restart_model_parameters()?)?
+        .merge_string_args(&app.model_parameters)?;
+
+    let hydro: String = model.get("hydro").into();
+
+    match hydro.as_str() {
+        "iso"   => run(Driver::new(Isothermal::new()), app, model),
+        "euler" => Err(anyhow::anyhow!("hydrodynamics mode 'euler' is not fully implemented")),
+        _       => Err(anyhow::anyhow!("no such hydrodynamics mode '{}'", hydro))
+    }
+}
 
 
 
@@ -202,12 +242,16 @@ impl Tasks
         }
     }
 
-    fn write_checkpoint(&mut self,
-        state: &State<hydro_iso2d::Conserved>,
+    fn write_checkpoint<C, T>(&mut self,
+        state: &State<C>,
         time_series: &Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData<hydro_iso2d::Conserved>>,
+        block_data: &Vec<BlockData<C>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
+
+        where
+        C: io::H5Conserved<H5Type=T>,
+        T: hdf5::H5Type + From<C>,
     {
         let outdir = app.output_directory()?;
         let fname_chkpt       = outdir.child(&format!("chkpt.{:04}.h5", self.write_checkpoint.count));
@@ -222,8 +266,8 @@ impl Tasks
         Ok(())
     }
 
-    fn record_time_sample(&mut self,
-        state: &State<hydro_iso2d::Conserved>,
+    fn record_time_sample<C: Conserved>(&mut self,
+        state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample>,
         model: &kind_config::Form)
     {
@@ -231,14 +275,18 @@ impl Tasks
         time_series.push(TimeSeriesSample{time: state.time});
     }
 
-    fn perform(
+    fn perform<C, T>(
         &mut self,
-        state: &State<hydro_iso2d::Conserved>,
+        state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData<hydro_iso2d::Conserved>>,
+        block_data: &Vec<BlockData<C>>,
         mesh: &Mesh,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
+
+        where
+        C: io::H5Conserved<H5Type=T>,
+        T: hdf5::H5Type + From<C>,
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
@@ -269,10 +317,28 @@ impl Tasks
 
 
 
-
+// ============================================================================
 trait InitialModel: Hydrodynamics
 {
     fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive;
+}
+
+
+
+
+// ============================================================================
+impl InitialModel for Isothermal
+{
+    fn primitive_at(&self, xy: (f64, f64)) -> hydro_iso2d::Primitive
+    {
+        let (x, y) = xy;
+        let r0 = f64::sqrt(x * x + y * y);
+        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
+        let vp = f64::sqrt(ph);
+        let vx = vp * (-y / r0);
+        let vy = vp * ( x / r0);
+        return hydro_iso2d::Primitive(1.0, vx, vy);
+    }
 }
 
 
@@ -331,24 +397,6 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
 
 
 // ============================================================================
-impl InitialModel for scheme_v2::Isothermal
-{
-    fn primitive_at(&self, xy: (f64, f64)) -> hydro_iso2d::Primitive
-    {
-        let (x, y) = xy;
-        let r0 = f64::sqrt(x * x + y * y);
-        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-        let vp = f64::sqrt(ph);
-        let vx = vp * (-y / r0);
-        let vy = vp * ( x / r0);
-        return hydro_iso2d::Primitive(1.0, vx, vy);
-    }
-}
-
-
-
-
-// ============================================================================
 fn create_solver(model: &kind_config::Form) -> Solver
 {
     let one_body: bool = model.get("one_body").into();
@@ -382,34 +430,12 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 
 
 // ============================================================================
-fn main() -> anyhow::Result<()>
+fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
+    where
+    S: Hydrodynamics<Conserved=C> + InitialModel,
+    C: io::H5Conserved<H5Type=T>  + Clone + From<T>,
+    T: hdf5::H5Type               + Clone + From<C>,
 {
-    let _silence_hdf5_errors = hdf5::silence_errors();
-    let app = App::parse();
-
-    let model = kind_config::Form::new()
-        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
-        .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
-        .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
-        .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region")
-        .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
-        .item("cfl"             , 0.4    , "CFL parameter")
-        .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
-        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
-        .item("domain_radius"   , 24.0   , "Half-size of the domain")
-        .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
-        .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
-        .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
-        .item("rk_order"        , 1      , "Runge-Kutta time integration order")
-        .item("sink_radius"     , 0.05   , "Radius of the sink region")
-        .item("sink_rate"       , 10.0   , "Sink rate to model accretion")
-        .item("softening_length", 0.05   , "Gravitational softening length")
-        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
-        .item("stress_dim"      , 2      , "The viscous stress tensor dimensionality [2: Farris14, 3: Corrected]")
-        .merge_value_map(&app.restart_model_parameters()?)?
-        .merge_string_args(&app.model_parameters)?;
-
-    let driver     = Driver::new(scheme_v2::Isothermal::new());
     let solver     = create_solver(&model);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh);
@@ -439,12 +465,13 @@ fn main() -> anyhow::Result<()>
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme_v2::advance(&mut state, &driver.system, &block_data, &mesh, &solver, dt, app.fold);
-        // if app.tokio {
+        if app.tokio {
             // state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
-        // } else {
-        //     scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
-        // }
+            return Err(anyhow::anyhow!("the tokio runtime is disabled on this branch"));
+        } else {
+            // scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+            scheme_v2::advance(&mut state, &driver.system, &block_data, &mesh, &solver, dt, app.fold);
+        }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
     Ok(())
