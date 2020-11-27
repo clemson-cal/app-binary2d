@@ -1,47 +1,50 @@
 use num::rational::Rational64;
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
-use hydro_iso2d::*;
 use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::solution_states;
 use godunov_core::runge_kutta;
+use hydro_iso2d::{Conserved, Primitive, Direction, riemann_hlle};
 
 
 
 
 // ============================================================================
 type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-type BlockState = solution_states::SolutionStateArray<Conserved, Ix2>;
+type BlockState = solution_states::SolutionStateArcArray<Conserved, Ix2>;
 pub type BlockIndex = (usize, usize);
 
 
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct BlockData
 {
-    pub initial_conserved: Array<Conserved, Ix2>,
-    pub cell_centers:   Array<(f64, f64), Ix2>,
-    pub face_centers_x: Array<(f64, f64), Ix2>,
-    pub face_centers_y: Array<(f64, f64), Ix2>,
-    pub index:          BlockIndex,
+    pub initial_conserved: ArcArray<Conserved, Ix2>,
+    pub cell_centers:      ArcArray<(f64, f64), Ix2>,
+    pub face_centers_x:    ArcArray<(f64, f64), Ix2>,
+    pub face_centers_y:    ArcArray<(f64, f64), Ix2>,
+    pub index:             BlockIndex,
 }
 
 
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct State
 {
     pub time: f64,
     pub iteration: Rational64,
-    pub conserved: Vec<Array<Conserved, Ix2>>,
+    pub conserved: Vec<ArcArray<Conserved, Ix2>>,
 }
 
 
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct Solver
 {
     pub buffer_rate: f64,
@@ -56,6 +59,7 @@ pub struct Solver
     pub sink_rate: f64,
     pub softening_length: f64,
     pub orbital_elements: OrbitalElements,
+    pub stress_dim: i64,
 }
 
 impl Solver
@@ -139,6 +143,7 @@ impl Solver
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct Mesh
 {
     pub num_blocks: usize,
@@ -209,11 +214,6 @@ impl Mesh
         self.num_blocks * self.num_blocks * self.block_size * self.block_size
     }
 
-    pub fn zones_per_block(&self) -> usize
-    {
-        self.block_size * self.block_size
-    }
-
     pub fn block_indexes(&self) -> Vec<BlockIndex>
     {
         (0..self.num_blocks)
@@ -259,21 +259,35 @@ impl<'a> CellData<'_>
         }
     }
 
-    fn strain_field(&self, row: Direction, col: Direction) -> f64
+    fn stress_field(&self, kinematic_viscosity: f64, dimensionality: i64, row: Direction, col: Direction) -> f64
     {
         use Direction::{X, Y};
-        match (row, col)
-        {
-            (X, X) => self.gx.velocity_x() - self.gy.velocity_y(),
-            (X, Y) => self.gx.velocity_y() + self.gy.velocity_x(),
-            (Y, X) => self.gx.velocity_y() + self.gy.velocity_x(),
-            (Y, Y) =>-self.gx.velocity_x() + self.gy.velocity_y(),
-        }
-    }
 
-    fn stress_field(&self, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
-    {
-        kinematic_viscosity * self.pc.density() * self.strain_field(row, col)
+        let stress = if dimensionality == 2 {
+            // This form of the stress tensor comes from Eqn. 7 in Farris+
+            // (2014). Formally it corresponds a "true" dimensionality of 2.
+            match (row, col)
+            {
+                (X, X) =>  self.gx.velocity_x() - self.gy.velocity_y(),
+                (X, Y) =>  self.gx.velocity_y() + self.gy.velocity_x(),
+                (Y, X) =>  self.gx.velocity_y() + self.gy.velocity_x(),
+                (Y, Y) => -self.gx.velocity_x() + self.gy.velocity_y(),
+            }
+        } else if dimensionality == 3 {
+            // This form of the stress tensor is the correct one for vertically
+            // averaged hydrodynamics, when the bulk viscosity is equal to zero.
+            match (row, col)
+            {
+                (X, X) => 4.0 / 3.0 * self.gx.velocity_x() - 2.0 / 3.0 * self.gy.velocity_y(),
+                (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
+                (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
+                (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() + 4.0 / 3.0 * self.gy.velocity_y(),
+            }
+        } else {
+            panic!("The true dimension must be 2 or 3")
+        };
+
+        kinematic_viscosity * self.pc.density() * stress
     }
 
     fn gradient_field(&self, axis: Direction) -> &Primitive
@@ -291,7 +305,240 @@ impl<'a> CellData<'_>
 
 
 // ============================================================================
-fn advance_internal(
+async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
+{
+    use std::collections::HashMap;
+    use ndarray::{s, azip};
+    use ndarray_ops::{map_stencil3};
+    use futures::future::{Future, FutureExt, join_all};
+    use godunov_core::piecewise_linear::plm_gradient3;
+    use Direction::{X, Y};
+
+
+    async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
+    {
+        [
+            [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
+            [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
+            [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
+        ]
+    }
+
+
+    let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    {
+        let uc = uc.clone();
+        let primitive = async move {
+            uc.mapv(Conserved::to_primitive).to_shared()
+        };
+        (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
+    }).collect();
+
+
+    let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    {
+        let solver = solver.clone();
+        let mesh   = mesh.clone();
+        let block  = block.clone();
+        let time   = state.time;
+        let pc_map = pc_map.clone();
+        let uc     = uc.clone();
+
+        let u1 = async move {
+
+            // ============================================================================
+            let dx = mesh.cell_spacing_x();
+            let dy = mesh.cell_spacing_y();
+            let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+            // ============================================================================
+            let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
+            {
+                let cs2 = solver.sound_speed_squared(f, &two_body_state);
+                let pl = *l.pc + *l.gradient_field(axis) * 0.5;
+                let pr = *r.pc - *r.gradient_field(axis) * 0.5;
+                let nu    = solver.nu;
+                let dim   = solver.stress_dim;
+                let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
+                let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
+                riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
+            };
+
+            let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+            // ============================================================================
+            let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
+
+            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
+            let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+            let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+            let xf = &block.face_centers_x;
+            let yf = &block.face_centers_y;
+
+            // ============================================================================
+            let sources = azip![
+                &uc,
+                &block.initial_conserved,
+                &block.cell_centers]
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+
+            // ============================================================================
+            let cell_data = azip![
+                pe.slice(s![1..-1,1..-1]),
+                gx.slice(s![ ..  ,1..-1]),
+                gy.slice(s![1..-1, ..  ])]
+            .apply_collect(CellData::new);
+
+            // ============================================================================
+            let fx = azip![
+                cell_data.slice(s![..-1,1..-1]),
+                cell_data.slice(s![ 1..,1..-1]),
+                xf]
+            .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
+
+            // ============================================================================
+            let fy = azip![
+                cell_data.slice(s![1..-1,..-1]),
+                cell_data.slice(s![1..-1, 1..]),
+                yf]
+            .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+
+            // ============================================================================
+            let du = azip![
+                fx.slice(s![..-1,..]),
+                fx.slice(s![ 1..,..]),
+                fy.slice(s![..,..-1]),
+                fy.slice(s![.., 1..])]
+            .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+            (uc + &du + &sources).to_shared()
+        };
+        runtime.spawn(u1).map(|u| u.unwrap())
+    });
+
+
+    State {
+        time: state.time + dt,
+        iteration: state.iteration + 1,
+        conserved: join_all(u1_vec).await,
+    }
+}
+
+
+
+
+// ============================================================================
+impl State
+{
+    async fn weighted_average(self, br: Rational64, s0: &State, runtime: &tokio::runtime::Runtime) -> State
+    {
+        use num::ToPrimitive;
+        use futures::future::FutureExt;
+        use futures::future::join_all;
+
+        let bf = br.to_f64().unwrap();
+
+        let u_avg = self.conserved
+            .iter()
+            .zip(&s0.conserved)
+            .map(|(u1, u2)| {
+                let u1 = u1.clone();
+                let u2 = u2.clone();
+                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
+            });
+
+        State{
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
+            conserved: join_all(u_avg).await,
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk1<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, _runtime: &tokio::runtime::Runtime) -> State
+where
+    FutureState: std::future::Future<Output=State>
+{
+    update(state).await
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk2<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, runtime: &tokio::runtime::Runtime) -> State
+where
+    FutureState: std::future::Future<Output=State>
+{
+    let b1 = Rational64::new(1, 2);
+
+    let s1 = state.clone();
+    let s1 = update(s1).await;
+    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
+    s1
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk3<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, runtime: &tokio::runtime::Runtime) -> State
+where
+    FutureState: std::future::Future<Output=State>
+{
+    let b1 = Rational64::new(3, 4);
+    let b2 = Rational64::new(1, 3);
+
+    let s1 = state.clone();
+    let s1 = update(s1).await;
+    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
+    let s1 = update(s1).await.weighted_average(b2, &state, runtime).await;
+    s1
+}
+
+
+
+
+// ============================================================================
+pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize, runtime: &tokio::runtime::Runtime) -> State
+{
+    let update = |state| advance_tokio_rk(state, block_data, mesh, solver, dt, runtime);
+
+    for _ in 0..fold {
+        state = match solver.rk_order {
+            1 => runtime.block_on(advance_rk1(state, update, runtime)),
+            2 => runtime.block_on(advance_rk2(state, update, runtime)),
+            3 => runtime.block_on(advance_rk3(state, update, runtime)),
+            _ => panic!("illegal RK order {}", solver.rk_order),
+        }
+    }
+    return state;
+}
+
+
+
+
+
+
+
+
+/**
+ * The code below advances the state using the old message-passing
+ * parallelization strategy based on channels. I would prefer to either
+ * deprecate it, since it duplicates msot of the update scheme, and will
+ * thus need to be kept in sync manually as the scheme evolves. The only
+ * reason to retain it is for benchmarking purposes.
+ */
+
+
+
+
+// ============================================================================
+fn advance_channels_internal_block(
     state:      BlockState,
     block_data: &crate::BlockData,
     solver:     &Solver,
@@ -314,12 +561,13 @@ fn advance_internal(
     // ============================================================================
     let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
     {
-        let cs2 = solver.sound_speed_squared(f, &two_body_state);
-        let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-        let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-        let nu = solver.nu;
-        let tau_x = 0.5 * (l.stress_field(nu, axis, X) + r.stress_field(nu, axis, X));
-        let tau_y = 0.5 * (l.stress_field(nu, axis, Y) + r.stress_field(nu, axis, Y));
+        let cs2   = solver.sound_speed_squared(f, &two_body_state);
+        let pl    = *l.pc + *l.gradient_field(axis) * 0.5;
+        let pr    = *r.pc - *r.gradient_field(axis) * 0.5;
+        let nu    = solver.nu;
+        let dim   = solver.stress_dim;
+        let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
+        let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
         riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
     };
 
@@ -374,7 +622,7 @@ fn advance_internal(
     BlockState{
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: state.conserved + du + sources,
+        conserved: (state.conserved + du + sources).to_shared(),
     }
 }
 
@@ -382,8 +630,8 @@ fn advance_internal(
 
 
 // ============================================================================
-fn advance_internal_rk(
-    conserved:  &mut Array<Conserved, Ix2>,
+fn advance_channels_internal(
+    conserved:  &mut ArcArray<Conserved, Ix2>,
     block_data: &crate::BlockData,
     solver:     &Solver,
     mesh:       &Mesh,
@@ -395,7 +643,7 @@ fn advance_internal_rk(
 {
     use std::convert::TryFrom;
 
-    let update = |state| advance_internal(state, block_data, solver, mesh, sender, receiver, dt);
+    let update = |state| advance_channels_internal_block(state, block_data, solver, mesh, sender, receiver, dt);
     let mut state = BlockState {
         time: time,
         iteration: Rational64::new(0, 1),
@@ -414,7 +662,7 @@ fn advance_internal_rk(
 
 
 // ============================================================================
-pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
+pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
 {
     crossbeam::scope(|scope|
     {
@@ -433,7 +681,7 @@ pub fn advance(state: &mut crate::State, block_data: &Vec<crate::BlockData>, mes
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_internal_rk(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+            scope.spawn(move |_| advance_channels_internal(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
         }
 
         for _ in 0..fold

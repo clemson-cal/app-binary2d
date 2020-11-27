@@ -1,9 +1,16 @@
 target
 ndarray-ops/Cargo.lock
 *.h5
+<<<<<<< HEAD
 *.pbs
 *.txt
 logfile_parse.py
 output_parse.py
 *.ipynb
 *.png
+=======
+*.ipynb
+*.pbs
+*.png
+*.txt
+>>>>>>> master
