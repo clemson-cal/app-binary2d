@@ -335,6 +335,14 @@ pub struct Euler {
 
 
 // ============================================================================
+impl Isothermal
+{
+    pub fn new() -> Self
+    {
+        Self{}
+    }
+}
+
 impl Hydrodynamics for Isothermal
 {
     type Conserved = hydro_iso2d::Conserved;

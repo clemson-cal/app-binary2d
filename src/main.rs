@@ -19,7 +19,6 @@ use clap::Clap;
 use kind_config;
 use io_logical::verified;
 use scheme_v2::{State, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics};
-// use hydro_iso2d::{Conserved, Primitive};
 
 // mod io;
 // mod scheme;
@@ -134,9 +133,9 @@ pub struct RecurringTask
 
 impl RecurringTask
 {
-    pub fn new() -> RecurringTask
+    pub fn new() -> Self
     {
-        RecurringTask{
+        Self{
             count: 0,
             next_time: 0.0,
         }        
@@ -195,6 +194,16 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
 // ============================================================================
 impl Tasks
 {
+    fn new() -> Self
+    {
+        Self{
+            write_checkpoint: RecurringTask::new(),
+            record_time_sample: RecurringTask::new(),
+            call_count_this_run: 0,
+            tasks_last_performed: Instant::now(),
+        }
+    }
+
     fn write_checkpoint(&mut self,
         state: &State<hydro_iso2d::Conserved>,
         time_series: &Vec<TimeSeriesSample>,
@@ -264,27 +273,41 @@ impl Tasks
 
 
 
-/**
- * This trait provides all functions needed to construct critical simulation
- * data structures. It is parametererized around the a type System:
- * Hydrodynamics. Implementors only need to define the primitive_at method; the
- * other initial conditions functions are defined in terms of it.
- */
-trait Driver
+
+trait InitialModel
 {
     type System: Hydrodynamics;
-    fn hydrodynamics(&self) -> Self::System;
     fn primitive_at(&self, xy: (f64, f64)) -> <Self::System as Hydrodynamics>::Primitive;
-    fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<<Self::System as Hydrodynamics>::Conserved, Ix2>
+}
+
+
+
+
+/**
+ * This struct provides functions to construct the core simulation data
+ * structures. It is parameterized around System: Hydrodynamics and a Model:
+ * InitialModel.
+ */
+struct Driver<System: Hydrodynamics, Model: InitialModel<System=System>>
+{
+    hydro: System,
+    model: Model,
+}
+
+impl<System: Hydrodynamics, Model: InitialModel<System=System>> Driver<System, Model>
+{
+    fn new(hydro: System, model: Model) -> Self
     {
-        let model = self;
-        let hydro = self.hydrodynamics();
+        Self{hydro: hydro, model: model}
+    }
+    fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<System::Conserved, Ix2>
+    {
         mesh.cell_centers(block_index)
-            .mapv(|x| model.primitive_at(x))
-            .mapv(|p| hydro.to_conserved(p))
+            .mapv(|x| self.model.primitive_at(x))
+            .mapv(|p| self.hydro.to_conserved(p))
             .to_shared()
     }
-    fn initial_state(&self, mesh: &Mesh) -> State<<Self::System as Hydrodynamics>::Conserved>
+    fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
     {
         State{
             time: 0.0,
@@ -292,32 +315,21 @@ trait Driver
             conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect()
         } 
     }
-    fn initial_tasks(&self) -> Tasks
-    {
-        Tasks{
-            write_checkpoint: RecurringTask::new(),
-            record_time_sample: RecurringTask::new(),
-            call_count_this_run: 0,
-            tasks_last_performed: Instant::now(),
-        }
-    }
     fn initial_time_series() -> Vec<TimeSeriesSample>
     {
         Vec::new()
     }
-    fn block_data(&self, block_index: BlockIndex, mesh: &Mesh) -> BlockData<<Self::System as Hydrodynamics>::Conserved>
+    fn block_data(&self, mesh: &Mesh) -> Vec<BlockData<System::Conserved>>
     {
-        BlockData{
-            cell_centers:      mesh.cell_centers(block_index).to_shared(),
-            face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
-            face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
-            initial_conserved: self.initial_conserved(block_index, &mesh).to_shared(),
-            index: block_index,
-        }
-    }
-    fn block_data_vec(&self, mesh: &Mesh) -> Vec<BlockData<<Self::System as Hydrodynamics>::Conserved>>
-    {
-        mesh.block_indexes().iter().map(|&i| self.block_data(i, &mesh)).collect()
+        mesh.block_indexes().iter().map(|&block_index| {
+            BlockData{
+                cell_centers:      mesh.cell_centers(block_index).to_shared(),
+                face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
+                face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
+                initial_conserved: self.initial_conserved(block_index, &mesh).to_shared(),
+                index: block_index,
+            }
+        }).collect()
     }
 }
 
@@ -325,16 +337,19 @@ trait Driver
 
 
 // ============================================================================
-struct IsothermalDriver;
+struct IsothermalInitialModel;
 
-impl Driver for IsothermalDriver
+impl IsothermalInitialModel
+{
+    fn new() -> Self
+    {
+        Self{}
+    }
+}
+
+impl InitialModel for IsothermalInitialModel
 {
     type System = scheme_v2::Isothermal;
-
-    fn hydrodynamics(&self) -> Self::System
-    {
-        scheme_v2::Isothermal{}
-    }
 
     fn primitive_at(&self, xy: (f64, f64)) -> hydro_iso2d::Primitive
     {
@@ -352,60 +367,6 @@ impl Driver for IsothermalDriver
 
 
 // ============================================================================
-fn disk_model(xy: (f64, f64)) -> hydro_iso2d::Primitive
-{
-    let (x, y) = xy;
-    let r0 = f64::sqrt(x * x + y * y);
-    let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-    let vp = f64::sqrt(ph);
-    let vx = vp * (-y / r0);
-    let vy = vp * ( x / r0);
-    return hydro_iso2d::Primitive(1.0, vx, vy);
-}
-
-fn initial_conserved(block_index: BlockIndex, mesh: &Mesh) -> ArcArray<hydro_iso2d::Conserved, Ix2>
-{
-    mesh.cell_centers(block_index)
-        .mapv(disk_model)
-        .mapv(hydro_iso2d::Primitive::to_conserved)
-        .to_shared()
-}
-
-fn initial_state(mesh: &Mesh) -> State<hydro_iso2d::Conserved>
-{
-    State{
-        time: 0.0,
-        iteration: Rational64::new(0, 1),
-        conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect()
-    } 
-}
-
-fn initial_tasks() -> Tasks
-{
-    Tasks{
-        write_checkpoint: RecurringTask::new(),
-        record_time_sample: RecurringTask::new(),
-        call_count_this_run: 0,
-        tasks_last_performed: Instant::now(),
-    }
-}
-
-fn initial_time_series() -> Vec<TimeSeriesSample>
-{
-    Vec::new()
-}
-
-fn block_data(block_index: BlockIndex, mesh: &Mesh) -> BlockData<hydro_iso2d::Conserved>
-{
-    BlockData{
-        cell_centers:    mesh.cell_centers(block_index).to_shared(),
-        face_centers_x:  mesh.face_centers_x(block_index).to_shared(),
-        face_centers_y:  mesh.face_centers_y(block_index).to_shared(),
-        initial_conserved: initial_conserved(block_index, &mesh).to_shared(),
-        index: block_index,
-    }
-}
-
 fn create_solver(model: &kind_config::Form) -> Solver
 {
     let one_body: bool = model.get("one_body").into();
@@ -422,7 +383,6 @@ fn create_solver(model: &kind_config::Form) -> Solver
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
-        // stress_dim:       model.get("stress_dim").into(),
         orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
     }
 }
@@ -434,11 +394,6 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
         block_size: i64::from(model.get("block_size")) as usize,
         domain_radius: model.get("domain_radius").into(),
     }
-}
-
-fn create_block_data(mesh: &Mesh) -> Vec<BlockData<hydro_iso2d::Conserved>>
-{
-    mesh.block_indexes().iter().map(|&i| block_data(i, &mesh)).collect()
 }
 
 
@@ -472,11 +427,12 @@ fn main() -> anyhow::Result<()>
         .merge_value_map(&app.restart_model_parameters()?)?
         .merge_string_args(&app.model_parameters)?;
 
-    let hydro      = scheme_v2::Isothermal{};
-    let disk_model = IsothermalDiskModel{};
+    let hydro      = scheme_v2::Isothermal::new();
+    let initial    = IsothermalInitialModel::new();
+    let driver     = Driver::new(hydro, initial);
     let solver     = create_solver(&model);
     let mesh       = create_mesh(&model);
-    let block_data = create_block_data(&mesh);
+    let block_data = driver.block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
     // let mut state  = app.restart_file()?.map(io::read_state).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
@@ -484,9 +440,9 @@ fn main() -> anyhow::Result<()>
     // let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
     // time_series.retain(|s| s.time < state.time);
 
-    let mut state = initial_state(&mesh);
-    let mut tasks = initial_tasks();
-    let mut time_series = initial_time_series();
+    let mut state = driver.initial_state(&mesh);
+    let mut tasks = Tasks::new();
+    let mut time_series: Vec<TimeSeriesSample> = Vec::new();
 
 
     println!();
@@ -507,7 +463,7 @@ fn main() -> anyhow::Result<()>
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        scheme_v2::advance(&mut state, &hydro, &block_data, &mesh, &solver, dt, app.fold);
+        scheme_v2::advance(&mut state, &driver.hydro, &block_data, &mesh, &solver, dt, app.fold);
         // if app.tokio {
             // state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
         // } else {
