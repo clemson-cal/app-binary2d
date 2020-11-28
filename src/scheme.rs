@@ -1,27 +1,47 @@
-use num::rational::Rational64;
+// ============================================================================
+use std::ops::{Add, Sub, Mul, Div};
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
+use num::rational::Rational64;
 use kepler_two_body::{OrbitalElements, OrbitalState};
-use godunov_core::solution_states;
-use godunov_core::runge_kutta;
-use hydro_iso2d::{Conserved, Primitive, Direction, riemann_hlle};
+use godunov_core::{solution_states, runge_kutta};
 
 
 
 
 // ============================================================================
-type NeighborPrimitiveBlock = [[ArcArray<Primitive, Ix2>; 3]; 3];
-type BlockState = solution_states::SolutionStateArcArray<Conserved, Ix2>;
+type NeighborPrimitiveBlock<Primitive> = [[ArcArray<Primitive, Ix2>; 3]; 3];
+type BlockState<Conserved> = solution_states::SolutionStateArcArray<Conserved, Ix2>;
 pub type BlockIndex = (usize, usize);
+
+#[derive(Copy, Clone)]
+pub enum Direction { X, Y }
+
+
+
+
+// ============================================================================
+pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
+pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic {}
+pub trait Primitive: Clone + Copy + Send + Sync {}
+
+impl Arithmetic for hydro_iso2d::Conserved {}
+impl Arithmetic for hydro_euler::euler_2d::Conserved {}
+
+impl Conserved for hydro_iso2d::Conserved {}
+impl Conserved for hydro_euler::euler_2d::Conserved {}
+
+impl Primitive for hydro_iso2d::Primitive {}
+impl Primitive for hydro_euler::euler_2d::Primitive {}
 
 
 
 
 // ============================================================================
 #[derive(Clone)]
-pub struct BlockData
+pub struct BlockData<C: Conserved>
 {
-    pub initial_conserved: ArcArray<Conserved, Ix2>,
+    pub initial_conserved: ArcArray<C, Ix2>,
     pub cell_centers:      ArcArray<(f64, f64), Ix2>,
     pub face_centers_x:    ArcArray<(f64, f64), Ix2>,
     pub face_centers_y:    ArcArray<(f64, f64), Ix2>,
@@ -33,11 +53,50 @@ pub struct BlockData
 
 // ============================================================================
 #[derive(Clone)]
-pub struct State
+pub struct State<C: Conserved>
 {
     pub time: f64,
     pub iteration: Rational64,
-    pub conserved: Vec<ArcArray<Conserved, Ix2>>,
+    pub conserved: Vec<ArcArray<C, Ix2>>,
+}
+
+
+
+
+// ============================================================================
+#[derive(Copy, Clone)]
+pub struct CellData<'a, P: Primitive>
+{
+    pc: &'a P,
+    gx: &'a P,
+    gy: &'a P,
+}
+
+impl<'a, P: Primitive> CellData<'_, P>
+{
+    fn new(pc: &'a P, gx: &'a P, gy: &'a P) -> CellData<'a, P>
+    {
+        CellData{
+            pc: pc,
+            gx: gx,
+            gy: gy,
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+struct SourceTerms
+{
+    fx1: f64,
+    fy1: f64,
+    fx2: f64,
+    fy2: f64,
+    sink_rate1: f64,
+    sink_rate2: f64,
+    buffer_rate: f64,
 }
 
 
@@ -59,63 +118,10 @@ pub struct Solver
     pub sink_rate: f64,
     pub softening_length: f64,
     pub orbital_elements: OrbitalElements,
-    pub stress_dim: i64,
 }
 
 impl Solver
 {
-    fn source_terms(&self,
-        conserved: Conserved,
-        background_conserved: Conserved,
-        x: f64,
-        y: f64,
-        dt: f64,
-        two_body_state: &OrbitalState) -> [Conserved; 5]
-    {
-        let p1 = two_body_state.0;
-        let p2 = two_body_state.1;
-
-        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length);
-        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length);
-
-        let rho = conserved.density();
-        let fx1 = rho * ax1;
-        let fy1 = rho * ay1;
-        let fx2 = rho * ax2;
-        let fy2 = rho * ay2;
-
-        let x1 = p1.position_x();
-        let y1 = p1.position_y();
-        let x2 = p2.position_x();
-        let y2 = p2.position_y();
-
-        let sink_rate1 = self.sink_kernel(x - x1, y - y1);
-        let sink_rate2 = self.sink_kernel(x - x2, y - y2);
-
-        let r = (x * x + y * y).sqrt();
-        let y = (r - self.domain_radius) / self.buffer_scale;
-        let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
-        let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
-
-        return [
-            Conserved(0.0, fx1, fy1) * dt,
-            Conserved(0.0, fx2, fy2) * dt,
-            conserved * (-sink_rate1 * dt),
-            conserved * (-sink_rate2 * dt),
-            (conserved - background_conserved) * (-dt * buffer_rate),
-        ];
-    }
-
-    fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64
-    {
-        -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number.powi(2)
-    }
-
-    fn maximum_orbital_velocity(&self) -> f64
-    {
-        1.0 / self.softening_length.sqrt()
-    }
-
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64
     {
         f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
@@ -135,6 +141,53 @@ impl Solver
             self.sink_rate * f64::exp(-(r2 / s2).powi(3))
         } else {
             0.0
+        }
+    }
+
+    fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64
+    {
+        -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number.powi(2)
+    }
+
+    fn maximum_orbital_velocity(&self) -> f64
+    {
+        1.0 / self.softening_length.sqrt()
+    }
+
+    fn source_terms(&self, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms
+    {
+        let p1 = two_body_state.0;
+        let p2 = two_body_state.1;
+
+        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length);
+        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length);
+
+        let fx1 = surface_density * ax1;
+        let fy1 = surface_density * ay1;
+        let fx2 = surface_density * ax2;
+        let fy2 = surface_density * ay2;
+
+        let x1 = p1.position_x();
+        let y1 = p1.position_y();
+        let x2 = p2.position_x();
+        let y2 = p2.position_y();
+
+        let sink_rate1 = self.sink_kernel(x - x1, y - y1);
+        let sink_rate2 = self.sink_kernel(x - x2, y - y2);
+
+        let r = (x * x + y * y).sqrt();
+        let y = (r - self.domain_radius) / self.buffer_scale;
+        let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
+        let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
+
+        SourceTerms{
+            fx1: fx1,
+            fy1: fy1,
+            fx2: fx2,
+            fy2: fy2,
+            sink_rate1: sink_rate1,
+            sink_rate2: sink_rate2,
+            buffer_rate: buffer_rate,
         }
     }
 }
@@ -240,64 +293,231 @@ impl Mesh
 
 
 // ============================================================================
-#[derive(Copy, Clone)]
-struct CellData<'a>
+pub trait Hydrodynamics: Copy + Send
 {
-    pc: &'a Primitive,
-    gx: &'a Primitive,
-    gy: &'a Primitive,
+    type Conserved: Conserved;
+    type Primitive: Primitive;
+
+    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive;
+    fn strain_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64;
+    fn stress_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64;
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
+    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
+
+    fn source_terms(
+        &self,
+        solver: &Solver,
+        conserved: Self::Conserved,
+        background_conserved: Self::Conserved,
+        x: f64,
+        y: f64,
+        dt: f64,
+        two_body_state: &OrbitalState) -> [Self::Conserved; 5];
+
+    fn intercell_flux<'a>(
+        &self,
+        solver: &Solver,
+        l: &CellData<'a, Self::Primitive>, 
+        r: &CellData<'a, Self::Primitive>, 
+        f: &(f64, f64), 
+        two_body_state: &kepler_two_body::OrbitalState,
+        axis: Direction) -> Self::Conserved;
 }
 
-impl<'a> CellData<'_>
+#[derive(Clone, Copy)]
+pub struct Isothermal {
+}
+
+#[derive(Clone, Copy)]
+pub struct Euler {
+    gamma_law_index: f64,
+}
+
+
+
+
+// ============================================================================
+impl Isothermal
 {
-    fn new(pc: &'a Primitive, gx: &'a Primitive, gy: &'a Primitive) -> CellData<'a>
+    pub fn new() -> Self
     {
-        CellData{
-            pc: pc,
-            gx: gx,
-            gy: gy,
-        }
+        Self{}
     }
+}
 
-    fn stress_field(&self, kinematic_viscosity: f64, dimensionality: i64, row: Direction, col: Direction) -> f64
+impl Hydrodynamics for Isothermal
+{
+    type Conserved = hydro_iso2d::Conserved;
+    type Primitive = hydro_iso2d::Primitive;
+
+    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
     {
-        use Direction::{X, Y};
-
-        let stress = if dimensionality == 2 {
-            // This form of the stress tensor comes from Eqn. 7 in Farris+
-            // (2014). Formally it corresponds a "true" dimensionality of 2.
-            match (row, col)
-            {
-                (X, X) =>  self.gx.velocity_x() - self.gy.velocity_y(),
-                (X, Y) =>  self.gx.velocity_y() + self.gy.velocity_x(),
-                (Y, X) =>  self.gx.velocity_y() + self.gy.velocity_x(),
-                (Y, Y) => -self.gx.velocity_x() + self.gy.velocity_y(),
-            }
-        } else if dimensionality == 3 {
-            // This form of the stress tensor is the correct one for vertically
-            // averaged hydrodynamics, when the bulk viscosity is equal to zero.
-            match (row, col)
-            {
-                (X, X) => 4.0 / 3.0 * self.gx.velocity_x() - 2.0 / 3.0 * self.gy.velocity_y(),
-                (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
-                (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
-                (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() + 4.0 / 3.0 * self.gy.velocity_y(),
-            }
-        } else {
-            panic!("The true dimension must be 2 or 3")
-        };
-
-        kinematic_viscosity * self.pc.density() * stress
-    }
-
-    fn gradient_field(&self, axis: Direction) -> &Primitive
-    {
-        use Direction::{X, Y};
         match axis
         {
-            X => self.gx,
-            Y => self.gy,
+            Direction::X => cell_data.gx,
+            Direction::Y => cell_data.gy,
         }
+    }
+
+    fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64
+    {
+        use Direction::{X, Y};
+
+        match (row, col)
+        {
+            (X, X) => cell_data.gx.velocity_x() - cell_data.gy.velocity_y(),
+            (X, Y) => cell_data.gx.velocity_y() + cell_data.gy.velocity_x(),
+            (Y, X) => cell_data.gx.velocity_y() + cell_data.gy.velocity_x(),
+            (Y, Y) =>-cell_data.gx.velocity_x() + cell_data.gy.velocity_y(),
+        }
+    }
+
+    fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
+    {
+        kinematic_viscosity * cell_data.pc.density() * self.strain_field(cell_data, row, col)
+    }
+
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
+    {
+        godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
+    }
+
+    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive
+    {
+        u.to_primitive()
+    }
+
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
+    {
+        p.to_conserved()
+    }
+
+    fn source_terms(
+        &self,
+        solver: &Solver,
+        conserved: Self::Conserved,
+        background_conserved: Self::Conserved,
+        x: f64,
+        y: f64,
+        dt: f64,
+        two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
+    {
+        let st = solver.source_terms(two_body_state, x, y, conserved.density());
+        return [
+            hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
+            hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
+            conserved * (-st.sink_rate1 * dt),
+            conserved * (-st.sink_rate2 * dt),
+            (conserved - background_conserved) * (-dt * st.buffer_rate),
+        ];
+    }
+
+    fn intercell_flux<'a>(
+        &self,
+        solver: &Solver,
+        l: &CellData<'a, hydro_iso2d::Primitive>, 
+        r: &CellData<'a, hydro_iso2d::Primitive>, 
+        f: &(f64, f64), 
+        two_body_state: &kepler_two_body::OrbitalState,
+        axis: Direction) -> hydro_iso2d::Conserved
+    {
+        let cs2 = solver.sound_speed_squared(f, &two_body_state);
+        let pl = *l.pc + *self.gradient_field(l, axis) * 0.5;
+        let pr = *r.pc - *self.gradient_field(r, axis) * 0.5;
+        let nu = solver.nu;
+        let tau_x = 0.5 * (self.stress_field(l, nu, axis, Direction::X) + self.stress_field(r, nu, axis, Direction::X));
+        let tau_y = 0.5 * (self.stress_field(l, nu, axis, Direction::Y) + self.stress_field(r, nu, axis, Direction::Y));
+        let iso2d_axis = match axis {
+            Direction::X => hydro_iso2d::Direction::X,
+            Direction::Y => hydro_iso2d::Direction::Y,
+        };
+        hydro_iso2d::riemann_hlle(pl, pr, iso2d_axis, cs2) + hydro_iso2d::Conserved(0.0, -tau_x, -tau_y)
+    }
+}
+
+
+
+
+// ============================================================================   
+impl Euler
+{
+    pub fn new() -> Self
+    {
+        Self{gamma_law_index: 5.0 / 3.0}
+    }
+}
+
+impl Hydrodynamics for Euler
+{
+    type Conserved = hydro_euler::euler_2d::Conserved;
+    type Primitive = hydro_euler::euler_2d::Primitive;
+
+    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
+    {
+        match axis
+        {
+            Direction::X => cell_data.gx,
+            Direction::Y => cell_data.gy,
+        }
+    }
+
+    fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64
+    {
+        use Direction::{X, Y};
+
+        match (row, col)
+        {
+            (X, X) => cell_data.gx.velocity_1() - cell_data.gy.velocity_2(),
+            (X, Y) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
+            (Y, X) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
+            (Y, Y) =>-cell_data.gx.velocity_1() + cell_data.gy.velocity_2(),
+        }
+    }
+
+    fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
+    {
+        kinematic_viscosity * cell_data.pc.mass_density() * self.strain_field(cell_data, row, col)
+    }
+
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
+    {
+        godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
+    }
+
+    fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive
+    {
+        conserved.to_primitive(self.gamma_law_index)
+    }
+
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
+    {
+        p.to_conserved(self.gamma_law_index)
+    }
+
+    fn source_terms(
+        &self,
+        _solver: &Solver,
+        _conserved: Self::Conserved,
+        _background_conserved: Self::Conserved,
+        _x: f64,
+        _y: f64,
+        _dt: f64,
+        _two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
+    {
+        todo!("Energy source term due to gravity")
+    }
+
+    fn intercell_flux<'a>(
+        &self,
+        _solver: &Solver,
+        _l: &CellData<'a, Self::Primitive>, 
+        _r: &CellData<'a, Self::Primitive>, 
+        _f: &(f64, f64), 
+        _two_body_state: &kepler_two_body::OrbitalState,
+        _axis: Direction) -> Self::Conserved
+    {
+        todo!("Intercell flux function for Euler; viscous energy flux")
     }
 }
 
@@ -305,14 +525,19 @@ impl<'a> CellData<'_>
 
 
 // ============================================================================
-async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, runtime: &tokio::runtime::Runtime) -> State
+async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
+    state: State<H::Conserved>,
+    hydro: H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh: &Mesh,
+    solver: &Solver,
+    dt: f64,
+    runtime: &tokio::runtime::Runtime) -> State<H::Conserved>
 {
     use std::collections::HashMap;
     use ndarray::{s, azip};
     use ndarray_ops::{map_stencil3};
     use futures::future::{Future, FutureExt, join_all};
-    use godunov_core::piecewise_linear::plm_gradient3;
-    use Direction::{X, Y};
 
 
     async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
@@ -329,7 +554,7 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
     {
         let uc = uc.clone();
         let primitive = async move {
-            uc.mapv(Conserved::to_primitive).to_shared()
+            uc.mapv(|u| hydro.to_primitive(u)).to_shared()
         };
         (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
     }).collect();
@@ -351,27 +576,14 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
             let dy = mesh.cell_spacing_y();
             let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
 
-            // ============================================================================
-            let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
-            {
-                let cs2 = solver.sound_speed_squared(f, &two_body_state);
-                let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-                let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-                let nu    = solver.nu;
-                let dim   = solver.stress_dim;
-                let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
-                let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
-                riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
-            };
-
-            let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+            let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
             // ============================================================================
             let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
 
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
-            let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+            let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
+            let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
             let xf = &block.face_centers_x;
             let yf = &block.face_centers_y;
 
@@ -380,7 +592,7 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
                 &uc,
                 &block.initial_conserved,
                 &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
 
             // ============================================================================
             let cell_data = azip![
@@ -394,14 +606,14 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
                 cell_data.slice(s![..-1,1..-1]),
                 cell_data.slice(s![ 1..,1..-1]),
                 xf]
-            .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
+            .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
 
             // ============================================================================
             let fy = azip![
                 cell_data.slice(s![1..-1,..-1]),
                 cell_data.slice(s![1..-1, 1..]),
                 yf]
-            .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+            .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
 
             // ============================================================================
             let du = azip![
@@ -428,9 +640,9 @@ async fn advance_tokio_rk(state: State, block_data: &Vec<BlockData>, mesh: &Mesh
 
 
 // ============================================================================
-impl State
+impl<C: 'static + Conserved> State<C>
 {
-    async fn weighted_average(self, br: Rational64, s0: &State, runtime: &tokio::runtime::Runtime) -> State
+    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
     {
         use num::ToPrimitive;
         use futures::future::FutureExt;
@@ -459,9 +671,11 @@ impl State
 
 
 // ============================================================================
-async fn advance_rk1<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, _runtime: &tokio::runtime::Runtime) -> State
-where
-    FutureState: std::future::Future<Output=State>
+async fn advance_rk1<C, F, U>(state: State<C>, update: U, _runtime: &tokio::runtime::Runtime) -> State<C>
+    where
+    C: Conserved,
+    U: Fn(State<C>) -> F,
+    F: std::future::Future<Output=State<C>>
 {
     update(state).await
 }
@@ -470,9 +684,11 @@ where
 
 
 // ============================================================================
-async fn advance_rk2<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, runtime: &tokio::runtime::Runtime) -> State
-where
-    FutureState: std::future::Future<Output=State>
+async fn advance_rk2<C, F, U>(state: State<C>, update: U, runtime: &tokio::runtime::Runtime) -> State<C>
+    where
+    C: 'static + Conserved,
+    U: Fn(State<C>) -> F,
+    F: std::future::Future<Output=State<C>>
 {
     let b1 = Rational64::new(1, 2);
 
@@ -486,9 +702,11 @@ where
 
 
 // ============================================================================
-async fn advance_rk3<FutureState, F: Fn(State) -> FutureState>(state: State, update: F, runtime: &tokio::runtime::Runtime) -> State
-where
-    FutureState: std::future::Future<Output=State>
+async fn advance_rk3<C, F, U>(state: State<C>, update: U, runtime: &tokio::runtime::Runtime) -> State<C>
+    where
+    C: 'static + Conserved,
+    U: Fn(State<C>) -> F,
+    F: std::future::Future<Output=State<C>>
 {
     let b1 = Rational64::new(3, 4);
     let b2 = Rational64::new(1, 3);
@@ -504,9 +722,17 @@ where
 
 
 // ============================================================================
-pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize, runtime: &tokio::runtime::Runtime) -> State
+pub fn advance_tokio<H: 'static + Hydrodynamics>(
+    mut state:  State<H::Conserved>,
+    hydro:      H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh:       &Mesh,
+    solver:     &Solver,
+    dt:         f64,
+    fold:       usize,
+    runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
 {
-    let update = |state| advance_tokio_rk(state, block_data, mesh, solver, dt, runtime);
+    let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
 
     for _ in 0..fold {
         state = match solver.rk_order {
@@ -538,54 +764,40 @@ pub fn advance_tokio(mut state: State, block_data: &Vec<BlockData>, mesh: &Mesh,
 
 
 // ============================================================================
-fn advance_channels_internal_block(
-    state:      BlockState,
-    block_data: &BlockData,
+fn advance_channels_internal_block<H: Hydrodynamics>(
+    state:      BlockState<H::Conserved>,
+    hydro:      H,
+    block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
-    dt:         f64) -> BlockState
+    sender:     &crossbeam::Sender<Array<H::Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock<H::Primitive>>,
+    dt:         f64) -> BlockState<H::Conserved>
 {
     // ============================================================================
     use ndarray::{s, azip};
-    use ndarray_ops::{map_stencil3};
-    use godunov_core::piecewise_linear::plm_gradient3;
-    use Direction::{X, Y};
+    use ndarray_ops::map_stencil3;
 
     // ============================================================================
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
     let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
 
-    // ============================================================================
-    let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
-    {
-        let cs2   = solver.sound_speed_squared(f, &two_body_state);
-        let pl    = *l.pc + *l.gradient_field(axis) * 0.5;
-        let pr    = *r.pc - *r.gradient_field(axis) * 0.5;
-        let nu    = solver.nu;
-        let dim   = solver.stress_dim;
-        let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
-        let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
-        riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
-    };
-
-    let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+    let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
     // ============================================================================
-    sender.send(state.conserved.mapv(Conserved::to_primitive)).unwrap();
+    sender.send(state.conserved.mapv(|u| hydro.to_primitive(u))).unwrap();
 
     // ============================================================================
     let sources = azip![
         &state.conserved,
         &block_data.initial_conserved,
         &block_data.cell_centers]
-    .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+    .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let gx = map_stencil3(&pe, Axis(0), |a, b, c| plm_gradient3(solver.plm, a, b, c));
-    let gy = map_stencil3(&pe, Axis(1), |a, b, c| plm_gradient3(solver.plm, a, b, c));
+    let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
+    let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
     let xf = &block_data.face_centers_x;
     let yf = &block_data.face_centers_y;
 
@@ -601,14 +813,14 @@ fn advance_channels_internal_block(
         cell_data.slice(s![..-1,1..-1]),
         cell_data.slice(s![ 1..,1..-1]),
         xf]
-    .apply_collect(|l, r, f| intercell_flux(l, r, f, X));
+    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
 
     // ============================================================================
     let fy = azip![
         cell_data.slice(s![1..-1,..-1]),
         cell_data.slice(s![1..-1, 1..]),
         yf]
-    .apply_collect(|l, r, f| intercell_flux(l, r, f, Y));
+    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
 
     // ============================================================================
     let du = azip![
@@ -619,10 +831,10 @@ fn advance_channels_internal_block(
     .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
     // ============================================================================
-    BlockState{
+    BlockState::<H::Conserved>{
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: (state.conserved + du + sources).to_shared(),
+        conserved: state.conserved + du + sources,
     }
 }
 
@@ -630,20 +842,21 @@ fn advance_channels_internal_block(
 
 
 // ============================================================================
-fn advance_channels_internal(
-    conserved:  &mut ArcArray<Conserved, Ix2>,
-    block_data: &BlockData,
+fn advance_channels_internal<H: Hydrodynamics>(
+    conserved:  &mut ArcArray<H::Conserved, Ix2>,
+    hydro:      H,
+    block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
     mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock>,
+    sender:     &crossbeam::Sender<Array<H::Primitive, Ix2>>,
+    receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock<H::Primitive>>,
     time:       f64,
     dt:         f64,
     fold:       usize)
 {
     use std::convert::TryFrom;
 
-    let update = |state| advance_channels_internal_block(state, block_data, solver, mesh, sender, receiver, dt);
+    let update = |state| advance_channels_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
     let mut state = BlockState {
         time: time,
         iteration: Rational64::new(0, 1),
@@ -662,7 +875,14 @@ fn advance_channels_internal(
 
 
 // ============================================================================
-pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &Mesh, solver: &Solver, dt: f64, fold: usize)
+pub fn advance_channels<H: Hydrodynamics>(
+    state: &mut State<H::Conserved>,
+    hydro: H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh: &Mesh,
+    solver: &Solver,
+    dt: f64,
+    fold: usize)
 {
     crossbeam::scope(|scope|
     {
@@ -681,7 +901,7 @@ pub fn advance_channels(state: &mut State, block_data: &Vec<BlockData>, mesh: &M
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_channels_internal(u, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+            scope.spawn(move |_| advance_channels_internal(u, hydro, b, solver, mesh, &their_s, &their_r, time, dt, fold));
         }
 
         for _ in 0..fold

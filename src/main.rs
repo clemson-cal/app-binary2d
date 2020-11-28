@@ -10,6 +10,10 @@
 
 
 // ============================================================================
+mod io;
+mod scheme;
+static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
@@ -17,11 +21,17 @@ use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
-use scheme_v2::{State, Conserved, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics, Isothermal, Euler};
-
-mod io;
-mod scheme_v2;
-static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+use scheme::{
+    State,
+    Conserved,
+    BlockIndex,
+    BlockData,
+    Mesh,
+    Solver,
+    Hydrodynamics,
+    Isothermal,
+    Euler
+};
 
 
 
@@ -59,23 +69,9 @@ fn main() -> anyhow::Result<()>
 
     match hydro.as_str() {
         "iso"   => run(Driver::new(Isothermal::new()), app, model),
-        "euler" => {
-            // Err(anyhow::anyhow!("hydrodynamics mode 'euler' is not fully implemented"))
-            run(Driver::new(Euler::new()), app, model)
-        }
+        "euler" => run(Driver::new(Euler::new()), app, model),
         _       => Err(anyhow::anyhow!("no such hydrodynamics mode '{}'", hydro))
     }
-}
-
-
-
-
-// ============================================================================
-#[derive(hdf5::H5Type)]
-#[repr(C)]
-pub struct TimeSeriesSample
-{
-    pub time: f64,
 }
 
 
@@ -157,6 +153,17 @@ impl App
             num_cpus::get_physical().min(num_blocks)
         }
     }
+}
+
+
+
+
+// ============================================================================
+#[derive(hdf5::H5Type)]
+#[repr(C)]
+pub struct TimeSeriesSample
+{
+    pub time: f64,
 }
 
 
@@ -339,7 +346,7 @@ impl InitialModel for Euler
 {
     fn primitive_at(&self, _xy: (f64, f64)) -> Self::Primitive
     {
-        todo!();
+        todo!("InitialModel for Euler");
     }
 }
 
@@ -463,15 +470,19 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
     tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
     use tokio::runtime::Builder;
-    let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
+
+    let runtime = if app.tokio {
+        Some(Builder::new_multi_thread().worker_threads(app.threads).build()?)
+    } else {
+        None
+    };
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
         if app.tokio {
-            state = scheme_v2::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, &runtime);
-            // return Err(anyhow::anyhow!("the tokio runtime is disabled on this branch"));
+            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
         } else {
-            scheme_v2::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
+            scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
