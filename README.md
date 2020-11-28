@@ -43,26 +43,26 @@ This will print a list of _flags_ for things like the data output directory and 
 ```
 > binary2d
 
-	block_size............... 1024     Number of grid cells (per direction, per block)
-	buffer_rate.............. 1000     Rate of damping in the buffer region [orbital frequency @ domain radius]
-	buffer_scale............. 1        Length scale of the buffer transition region
-	cfl...................... 0.4      CFL parameter
-	cpi...................... 1        Checkpoint interval [Orbits]
-	domain_radius............ 6        Half-size of the domain
-	mach_number.............. 10       Orbital Mach number of the disk
-	nu....................... 0.1      Kinematic viscosity [Omega a^2]
-	num_blocks............... 1        Number of blocks per (per direction)
-	one_body................. false    Collapse the binary to a single body (validation of central potential)
-	plm...................... 1.5      PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)
-	rk_order................. 1        Runge-Kutta time integration order
-	sink_radius.............. 0.05     Radius of the sink region
-	sink_rate................ 10       Sink rate to model accretion
-	softening_length......... 0.05     Gravitational softening length
-	tfinal................... 0        Time at which to stop the simulation [Orbits]
+    block_size............... 1024     Number of grid cells (per direction, per block)
+    buffer_rate.............. 1000     Rate of damping in the buffer region [orbital frequency @ domain radius]
+    buffer_scale............. 1        Length scale of the buffer transition region
+    cfl...................... 0.4      CFL parameter
+    cpi...................... 1        Checkpoint interval [Orbits]
+    domain_radius............ 6        Half-size of the domain
+    mach_number.............. 10       Orbital Mach number of the disk
+    nu....................... 0.1      Kinematic viscosity [Omega a^2]
+    num_blocks............... 1        Number of blocks per (per direction)
+    one_body................. false    Collapse the binary to a single body (validation of central potential)
+    plm...................... 1.5      PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)
+    rk_order................. 1        Runge-Kutta time integration order
+    sink_radius.............. 0.05     Radius of the sink region
+    sink_rate................ 10       Sink rate to model accretion
+    softening_length......... 0.05     Gravitational softening length
+    tfinal................... 0        Time at which to stop the simulation [Orbits]
 
-	restart file            = none
-	effective grid spacing  = 0.0117a
-	sink radius / grid cell = 4.2667
+    restart file            = none
+    effective grid spacing  = 0.0117a
+    sink radius / grid cell = 4.2667
 
 write checkpoint data/chkpt.0000.h5
 ```
@@ -98,14 +98,15 @@ __Data outputs__
 
 The code's data products are a series of _checkpoint_ files in HDF5 format. Checkpoints are written at a cadence given by the `cpi` model parameter (for checkpoint interval), and will appear in the directory specified by the `--outdir` flag.
 
-Checkpoint files may be inspected either with the `h5ls` utility or with the `h5py` Python module. They have the following root-level group structure:
+Checkpoint files may be inspected either with the `h5ls` utility or with the `h5py` Python module. Checkpoints have the following group structure:
 
 ```
-iteration    Dataset {SCALAR}   # The iteration number
-time         Dataset {SCALAR}   # The simulation time
-conserved    Group              # 2D arrays of the conserved quantities, one for each block
-model        Group              # The model parameters
-tasks        Group              # Times when analysis and output tasks were last performed
+- model            Group              # The model parameters
+- tasks            Group              # Times when analysis and output tasks were last performed
+- state            Group              # Solution state
+    + iteration    Dataset {SCALAR}   # Iteration number
+    + time         Dataset {SCALAR}   # Simulation time
+    + conserved    Group              # 2D arrays of the conserved quantities, one for each block
 ```
 
 In isothermal mode, the 2D arrays of conserved quantities have element type `[f64; 3]`. The order of these floats is (surface density, x-momentum, y-momentum). When the energy equation is being solved, the type is `[f64; 4]` and the final element is the total energy.
