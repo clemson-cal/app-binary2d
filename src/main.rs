@@ -21,7 +21,6 @@ use scheme_v2::{State, Conserved, BlockIndex, BlockData, Mesh, Solver, Hydrodyna
 
 mod io;
 mod scheme_v2;
-mod test_io;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
@@ -461,8 +460,7 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
             // state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
             return Err(anyhow::anyhow!("the tokio runtime is disabled on this branch"));
         } else {
-            // scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
-            scheme_v2::advance(&mut state, &driver.system, &block_data, &mesh, &solver, dt, app.fold);
+            scheme_v2::advance_channels(&mut state, &driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }

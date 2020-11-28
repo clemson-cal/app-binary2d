@@ -522,8 +522,23 @@ impl Hydrodynamics for Euler
 
 
 
+
+
+
+
+/**
+ * The code below advances the state using the old message-passing
+ * parallelization strategy based on channels. I would prefer to either
+ * deprecate it, since it duplicates msot of the update scheme, and will
+ * thus need to be kept in sync manually as the scheme evolves. The only
+ * reason to retain it is for benchmarking purposes.
+ */
+
+
+
+
 // ============================================================================
-fn advance_internal<H: Hydrodynamics>(
+fn advance_channels_internal_block<H: Hydrodynamics>(
     state:      BlockState<H::Conserved>,
     hydro:      &H,
     block_data: &BlockData<H::Conserved>,
@@ -602,7 +617,7 @@ fn advance_internal<H: Hydrodynamics>(
 
 
 // ============================================================================
-fn advance_internal_rk<H: Hydrodynamics>(
+fn advance_channels_internal<H: Hydrodynamics>(
     conserved:  &mut ArcArray<H::Conserved, Ix2>,
     hydro:      &H,
     block_data: &BlockData<H::Conserved>,
@@ -616,8 +631,8 @@ fn advance_internal_rk<H: Hydrodynamics>(
 {
     use std::convert::TryFrom;
 
-    let update = |state| advance_internal(state, hydro, block_data, solver, mesh, sender, receiver, dt);
-    let mut state = BlockState::<H::Conserved> {
+    let update = |state| advance_channels_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
+    let mut state = BlockState {
         time: time,
         iteration: Rational64::new(0, 1),
         conserved: conserved.clone(),
@@ -635,7 +650,7 @@ fn advance_internal_rk<H: Hydrodynamics>(
 
 
 // ============================================================================
-pub fn advance<H: Hydrodynamics>(
+pub fn advance_channels<H: Hydrodynamics>(
     state: &mut State<H::Conserved>,
     hydro: &H,
     block_data: &Vec<BlockData<H::Conserved>>,
@@ -652,7 +667,6 @@ pub fn advance<H: Hydrodynamics>(
         let mut receivers       = Vec::new();
         let mut senders         = Vec::new();
         let mut block_primitive = HashMap::new();
-        let hydro = hydro.clone();
 
         for (u, b) in state.conserved.iter_mut().zip(block_data)
         {
@@ -662,7 +676,7 @@ pub fn advance<H: Hydrodynamics>(
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_internal_rk(u, hydro, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+            scope.spawn(move |_| advance_channels_internal(u, hydro, b, solver, mesh, &their_s, &their_r, time, dt, fold));
         }
 
         for _ in 0..fold
