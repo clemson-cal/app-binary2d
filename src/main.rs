@@ -21,6 +21,7 @@ use scheme_v2::{State, Conserved, BlockIndex, BlockData, Mesh, Solver, Hydrodyna
 
 mod io;
 mod scheme_v2;
+mod test_io;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
@@ -241,16 +242,21 @@ impl Tasks
         }
     }
 
-    fn write_checkpoint<C, T>(&mut self,
+    fn record_time_sample<C: Conserved>(&mut self,
+        state: &State<C>,
+        time_series: &mut Vec<TimeSeriesSample>,
+        model: &kind_config::Form)
+    {
+        self.record_time_sample.advance(model.get("tsi").into());
+        time_series.push(TimeSeriesSample{time: state.time});
+    }
+
+    fn write_checkpoint<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(&mut self,
         state: &State<C>,
         time_series: &Vec<TimeSeriesSample>,
         block_data: &Vec<BlockData<C>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
-
-        where
-        C: io::H5Conserved<H5Type=T>,
-        T: hdf5::H5Type + From<C>,
     {
         let outdir = app.output_directory()?;
         let fname_chkpt       = outdir.child(&format!("chkpt.{:04}.h5", self.write_checkpoint.count));
@@ -265,16 +271,7 @@ impl Tasks
         Ok(())
     }
 
-    fn record_time_sample<C: Conserved>(&mut self,
-        state: &State<C>,
-        time_series: &mut Vec<TimeSeriesSample>,
-        model: &kind_config::Form)
-    {
-        self.record_time_sample.advance(model.get("tsi").into());
-        time_series.push(TimeSeriesSample{time: state.time});
-    }
-
-    fn perform<C, T>(
+    fn perform<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(
         &mut self,
         state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample>,
@@ -282,10 +279,6 @@ impl Tasks
         mesh: &Mesh,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
-
-        where
-        C: io::H5Conserved<H5Type=T>,
-        T: hdf5::H5Type + From<C>,
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
@@ -432,8 +425,8 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
     where
     S: Hydrodynamics<Conserved=C> + InitialModel,
-    C: io::H5Conserved<H5Type=T>  + Clone + From<T>,
-    T: hdf5::H5Type               + Clone + From<C>,
+    C: io::H5Conserved<T>,
+    T: hdf5::H5Type + Clone
 {
     let solver     = create_solver(&model);
     let mesh       = create_mesh(&model);

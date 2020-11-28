@@ -10,20 +10,19 @@ use crate::Tasks;
 
 
 // ============================================================================
-pub trait H5Conserved: Conserved
-{
-    type H5Type: H5Type;
-}
+pub trait AssociatedH5Type { type H5Type: H5Type; }
+pub trait SynonymForH5Type<T: H5Type + Clone>: AssociatedH5Type<H5Type=T> + Into<T> + From<T> { }
+pub trait H5Conserved<T: H5Type + Clone>: Conserved + SynonymForH5Type<T> { }
 
-impl H5Conserved for hydro_iso2d::Conserved
-{
-    type H5Type = [f64; 3];
-}
 
-impl H5Conserved for hydro_euler::euler_2d::Conserved
-{
-    type H5Type = [f64; 4];
-}
+
+impl AssociatedH5Type for hydro_iso2d::Conserved { type H5Type = [f64; 3]; }
+impl SynonymForH5Type<[f64; 3]> for hydro_iso2d::Conserved {}
+impl H5Conserved<[f64; 3]> for hydro_iso2d::Conserved {}
+
+impl AssociatedH5Type for hydro_euler::euler_2d::Conserved { type H5Type = [f64; 4]; }
+impl SynonymForH5Type<[f64; 4]> for hydro_euler::euler_2d::Conserved {}
+impl H5Conserved<[f64; 4]> for hydro_euler::euler_2d::Conserved {}
 
 
 
@@ -48,23 +47,33 @@ impl nicer_hdf5::H5Write for Tasks
 
 
 // ============================================================================
-impl<C, T> nicer_hdf5::H5Read for State<C>
-    where
-    C: H5Conserved<H5Type=T> + From<T>,
-    T: H5Type + Clone
+fn write_state<C: H5Conserved<T>, T: H5Type + Clone>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
 {
-    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
+    let state_group = group.create_group("state")?;
+    let cons = state_group.create_group("conserved")?;
+
+    for (b, u) in block_data.iter().zip(&state.conserved)
     {
-        let state_group = group.group(name)?;
+        u.mapv(C::into).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
+    }
+    state.time.write(&state_group, "time")?;
+    state.iteration.write(&state_group, "iteration")?;
+    Ok(())
+}
+
+pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + Clone>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
+{
+    |file| {
+        let file = File::open(file.to_string())?;
+        let state_group = file.group("state")?;
         let cons = state_group.group("conserved")?;
         let mut conserved = Vec::new();
 
         for key in cons.member_names()?
         {
-            let u = ndarray::Array2::<T>::read(&cons, &key)?;
+            let u = ndarray::Array2::<C::H5Type>::read(&cons, &key)?;
             conserved.push(u.mapv(C::from).to_shared());
         }
-
         let time      = f64::read(&state_group, "time")?;
         let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
 
@@ -74,43 +83,6 @@ impl<C, T> nicer_hdf5::H5Read for State<C>
             iteration: iteration,
         };
         Ok(result)
-    }    
-}
-
-
-
-
-/**
- * Write a solution state into an HDF5 group. Note: we cannot implement
- * nicer_hdf5::Write yet, because the block_data instance is still required.
- * We'll deal with when we get to the FMR feature.
- */
-fn write_state<C, T>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
-    where
-    C: H5Conserved<H5Type=T>,
-    T: H5Type + From<C>,
-{
-    let state_group = group.create_group("state")?;
-    let cons = state_group.create_group("conserved")?;
-
-    for (b, u) in block_data.iter().zip(&state.conserved)
-    {
-        u.mapv(T::from).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
-    }
-    state.time.write(&state_group, "time")?;
-    state.iteration.write(&state_group, "iteration")?;
-    Ok(())
-}
-
-pub fn read_state<C, T, H>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
-    where
-    C: H5Conserved<H5Type=T> + From<T>,
-    T: H5Type + Clone,
-    H: Hydrodynamics<Conserved=C>,
-{
-    |file| {
-        let file = File::open(file.to_string())?;
-        State::<C>::read(&file, "state")
     }
 }
 
@@ -151,15 +123,12 @@ pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
 
 
 // ============================================================================
-pub fn write_checkpoint<C, T>(
+pub fn write_checkpoint<C: H5Conserved<T>, T: H5Type + Clone>(
     filename: &str,
     state: &State<C>,
     block_data: &Vec<BlockData<C>>,
     model: &HashMap::<String, kind_config::Value>,
     tasks: &Tasks) -> hdf5::Result<()>
-    where
-    C: H5Conserved<H5Type=T>,
-    T: H5Type + From<C>,
 {
     let file = File::create(filename)?;
 
