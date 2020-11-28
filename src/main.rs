@@ -17,7 +17,7 @@ use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
-use scheme_v2::{State, Conserved, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics, Isothermal};
+use scheme_v2::{State, Conserved, BlockIndex, BlockData, Mesh, Solver, Hydrodynamics, Isothermal, Euler};
 
 mod io;
 mod scheme_v2;
@@ -59,7 +59,10 @@ fn main() -> anyhow::Result<()>
 
     match hydro.as_str() {
         "iso"   => run(Driver::new(Isothermal::new()), app, model),
-        "euler" => Err(anyhow::anyhow!("hydrodynamics mode 'euler' is not fully implemented")),
+        "euler" => {
+            // Err(anyhow::anyhow!("hydrodynamics mode 'euler' is not fully implemented"))
+            run(Driver::new(Euler::new()), app, model)
+        }
         _       => Err(anyhow::anyhow!("no such hydrodynamics mode '{}'", hydro))
     }
 }
@@ -320,7 +323,7 @@ trait InitialModel: Hydrodynamics
 // ============================================================================
 impl InitialModel for Isothermal
 {
-    fn primitive_at(&self, xy: (f64, f64)) -> hydro_iso2d::Primitive
+    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
     {
         let (x, y) = xy;
         let r0 = f64::sqrt(x * x + y * y);
@@ -329,6 +332,14 @@ impl InitialModel for Isothermal
         let vx = vp * (-y / r0);
         let vy = vp * ( x / r0);
         return hydro_iso2d::Primitive(1.0, vx, vy);
+    }
+}
+
+impl InitialModel for Euler
+{
+    fn primitive_at(&self, _xy: (f64, f64)) -> Self::Primitive
+    {
+        todo!();
     }
 }
 
@@ -423,7 +434,7 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 // ============================================================================
 fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
     where
-    S: Hydrodynamics<Conserved=C> + InitialModel,
+    S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
     C: io::H5Conserved<T>,
     T: hdf5::H5Type + Clone
 {
@@ -451,16 +462,16 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
 
     tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
-    // use tokio::runtime::Builder;
-    // let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
+    use tokio::runtime::Builder;
+    let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
         if app.tokio {
-            // state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
-            return Err(anyhow::anyhow!("the tokio runtime is disabled on this branch"));
+            state = scheme_v2::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, &runtime);
+            // return Err(anyhow::anyhow!("the tokio runtime is disabled on this branch"));
         } else {
-            scheme_v2::advance_channels(&mut state, &driver.system, &block_data, &mesh, &solver, dt, app.fold);
+            scheme_v2::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }

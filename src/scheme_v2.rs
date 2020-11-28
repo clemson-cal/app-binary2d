@@ -23,8 +23,12 @@ pub enum Direction { X, Y }
 
 
 // ============================================================================
-pub trait Conserved: Copy + Send + Sync + Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> {}
-pub trait Primitive: Copy + Send + Sync {}
+pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
+pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic {}
+pub trait Primitive: Clone + Copy + Send + Sync {}
+
+impl Arithmetic for hydro_iso2d::Conserved {}
+impl Arithmetic for hydro_euler::euler_2d::Conserved {}
 
 impl Conserved for hydro_iso2d::Conserved {}
 impl Conserved for hydro_euler::euler_2d::Conserved {}
@@ -36,6 +40,7 @@ impl Primitive for hydro_euler::euler_2d::Primitive {}
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct BlockData<C: Conserved>
 {
     pub initial_conserved: ArcArray<C, Ix2>,
@@ -49,6 +54,7 @@ pub struct BlockData<C: Conserved>
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct State<C: Conserved>
 {
     pub time: f64,
@@ -99,6 +105,7 @@ struct SourceTerms
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct Solver
 {
     pub buffer_rate: f64,
@@ -191,6 +198,7 @@ impl Solver
 
 
 // ============================================================================
+#[derive(Clone)]
 pub struct Mesh
 {
     pub num_blocks: usize,
@@ -292,7 +300,7 @@ impl Mesh
 
 
 // ============================================================================
-pub trait Hydrodynamics: Sync
+pub trait Hydrodynamics: Copy + Send
 {
     type Conserved: Conserved;
     type Primitive: Primitive;
@@ -324,9 +332,11 @@ pub trait Hydrodynamics: Sync
         axis: Direction) -> Self::Conserved;
 }
 
+#[derive(Clone, Copy)]
 pub struct Isothermal {
 }
 
+#[derive(Clone, Copy)]
 pub struct Euler {
     gamma_law_index: f64,
 }
@@ -437,6 +447,14 @@ impl Hydrodynamics for Isothermal
 
 
 // ============================================================================   
+impl Euler
+{
+    pub fn new() -> Self
+    {
+        Self{gamma_law_index: 5.0 / 3.0}
+    }
+}
+
 impl Hydrodynamics for Euler
 {
     type Conserved = hydro_euler::euler_2d::Conserved;
@@ -522,6 +540,232 @@ impl Hydrodynamics for Euler
 
 
 
+// ============================================================================
+async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
+    state: State<H::Conserved>,
+    hydro: H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh: &Mesh,
+    solver: &Solver,
+    dt: f64,
+    runtime: &tokio::runtime::Runtime) -> State<H::Conserved>
+{
+    use std::collections::HashMap;
+    use ndarray::{s, azip};
+    use ndarray_ops::{map_stencil3};
+    use futures::future::{Future, FutureExt, join_all};
+    use godunov_core::piecewise_linear::plm_gradient3;
+    use Direction::{X, Y};
+
+
+    async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
+    {
+        [
+            [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
+            [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
+            [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
+        ]
+    }
+
+
+    let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    {
+        let uc = uc.clone();
+        let primitive = async move {
+            uc.mapv(|u| hydro.to_primitive(u)).to_shared()
+        };
+        (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
+    }).collect();
+
+
+    let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    {
+        let solver = solver.clone();
+        let mesh   = mesh.clone();
+        let block  = block.clone();
+        let time   = state.time;
+        let pc_map = pc_map.clone();
+        let uc     = uc.clone();
+
+        let u1 = async move {
+
+            // ============================================================================
+            let dx = mesh.cell_spacing_x();
+            let dy = mesh.cell_spacing_y();
+            let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+            let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+            // ============================================================================
+            let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
+
+            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
+            let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
+            let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
+            let xf = &block.face_centers_x;
+            let yf = &block.face_centers_y;
+
+            // ============================================================================
+            let sources = azip![
+                &uc,
+                &block.initial_conserved,
+                &block.cell_centers]
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
+
+            // ============================================================================
+            let cell_data = azip![
+                pe.slice(s![1..-1,1..-1]),
+                gx.slice(s![ ..  ,1..-1]),
+                gy.slice(s![1..-1, ..  ])]
+            .apply_collect(CellData::new);
+
+            // ============================================================================
+            let fx = azip![
+                cell_data.slice(s![..-1,1..-1]),
+                cell_data.slice(s![ 1..,1..-1]),
+                xf]
+            .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
+
+            // ============================================================================
+            let fy = azip![
+                cell_data.slice(s![1..-1,..-1]),
+                cell_data.slice(s![1..-1, 1..]),
+                yf]
+            .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
+
+            // ============================================================================
+            let du = azip![
+                fx.slice(s![..-1,..]),
+                fx.slice(s![ 1..,..]),
+                fy.slice(s![..,..-1]),
+                fy.slice(s![.., 1..])]
+            .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+            (uc + &du + &sources).to_shared()
+        };
+        runtime.spawn(u1).map(|u| u.unwrap())
+    });
+
+
+    State {
+        time: state.time + dt,
+        iteration: state.iteration + 1,
+        conserved: join_all(u1_vec).await,
+    }
+}
+
+
+
+
+// ============================================================================
+impl<C: 'static + Conserved> State<C>
+{
+    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
+    {
+        use num::ToPrimitive;
+        use futures::future::FutureExt;
+        use futures::future::join_all;
+
+        let bf = br.to_f64().unwrap();
+
+        let u_avg = self.conserved
+            .iter()
+            .zip(&s0.conserved)
+            .map(|(u1, u2)| {
+                let u1 = u1.clone();
+                let u2 = u2.clone();
+                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
+            });
+
+        State{
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
+            conserved: join_all(u_avg).await,
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk1<C, F, U>(state: State<C>, update: U, _runtime: &tokio::runtime::Runtime) -> State<C>
+    where
+    C: Conserved,
+    U: Fn(State<C>) -> F,
+    F: std::future::Future<Output=State<C>>
+{
+    update(state).await
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk2<C, F, U>(state: State<C>, update: U, runtime: &tokio::runtime::Runtime) -> State<C>
+    where
+    C: 'static + Conserved,
+    U: Fn(State<C>) -> F,
+    F: std::future::Future<Output=State<C>>
+{
+    let b1 = Rational64::new(1, 2);
+
+    let s1 = state.clone();
+    let s1 = update(s1).await;
+    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
+    s1
+}
+
+
+
+
+// ============================================================================
+async fn advance_rk3<C, F, U>(state: State<C>, update: U, runtime: &tokio::runtime::Runtime) -> State<C>
+    where
+    C: 'static + Conserved,
+    U: Fn(State<C>) -> F,
+    F: std::future::Future<Output=State<C>>
+{
+    let b1 = Rational64::new(3, 4);
+    let b2 = Rational64::new(1, 3);
+
+    let s1 = state.clone();
+    let s1 = update(s1).await;
+    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
+    let s1 = update(s1).await.weighted_average(b2, &state, runtime).await;
+    s1
+}
+
+
+
+
+// ============================================================================
+pub fn advance_tokio<H: 'static + Hydrodynamics>(
+    mut state:  State<H::Conserved>,
+    hydro:      H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh:       &Mesh,
+    solver:     &Solver,
+    dt:         f64,
+    fold:       usize,
+    runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
+{
+    let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
+
+    for _ in 0..fold {
+        state = match solver.rk_order {
+            1 => runtime.block_on(advance_rk1(state, update, runtime)),
+            2 => runtime.block_on(advance_rk2(state, update, runtime)),
+            3 => runtime.block_on(advance_rk3(state, update, runtime)),
+            _ => panic!("illegal RK order {}", solver.rk_order),
+        }
+    }
+    return state;
+}
+
+
+
+
 
 
 
@@ -540,7 +784,7 @@ impl Hydrodynamics for Euler
 // ============================================================================
 fn advance_channels_internal_block<H: Hydrodynamics>(
     state:      BlockState<H::Conserved>,
-    hydro:      &H,
+    hydro:      H,
     block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
     mesh:       &Mesh,
@@ -619,7 +863,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 // ============================================================================
 fn advance_channels_internal<H: Hydrodynamics>(
     conserved:  &mut ArcArray<H::Conserved, Ix2>,
-    hydro:      &H,
+    hydro:      H,
     block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
     mesh:       &Mesh,
@@ -652,7 +896,7 @@ fn advance_channels_internal<H: Hydrodynamics>(
 // ============================================================================
 pub fn advance_channels<H: Hydrodynamics>(
     state: &mut State<H::Conserved>,
-    hydro: &H,
+    hydro: H,
     block_data: &Vec<BlockData<H::Conserved>>,
     mesh: &Mesh,
     solver: &Solver,
