@@ -376,7 +376,7 @@ fn main() -> anyhow::Result<()>
         .item("softening_length", 0.05   , "Gravitational softening length")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("stress_dim"      , 2      , "The viscous stress tensor dimensionality [2: Farris14, 3: Corrected]")
-        .merge_value_map(&app.restart_model_parameters()?)?
+        .merge_value_map_freezing(&app.restart_model_parameters()?, &vec!["num_blocks", "block_size", "one_body", "domain_radius"])?
         .merge_string_args(&app.model_parameters)?;
 
     let solver     = create_solver(&model);
