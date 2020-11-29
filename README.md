@@ -115,27 +115,27 @@ __Restarting runs__
 
 Runs can be restarted from HDF5 checkpoint files. These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that ran uninterrupted. A run can be restarted by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`. Alternatively, setting the flag `--restart=my-run` will find the most recent checkpoint file in that directory, and continue from it. In a restarted run, subsequent outputs are placed in the same directory as the checkpoint file, unless a different directory is given with the `--outdir` flag.
 
-All the model parameters are stored in the checkpoint file. Any model parameters you do provide on the command line will supercede those in the checkpoint. Be careful how you use this feature -- superceding model parameters sometimes makes sense, but can other times be confusing. For example, if the parameter is only used once to generate the initial condition, then superceding it would have no effect, other than obscuring the parameters used to start the simulation. Other model parameters, such as the block size or domain radius, should never be superceded; doing so _should_ but is not guaranteed to cause a runtime error. Superceding certain physical conditions (e.g. disk Mach number or viscosity) or solver parameters (CFL, etc) can be very useful, for example if you want to see how an already well-evolved run responds to these changes.
+All the model parameters are stored in the checkpoint file. Model parameters you provide on the command line when restarting a run will supercede those in the checkpoint, although some, such as the block size and domain radius, can only be specified when a new initial condition is being generated. You'll see an error message if you try to supercede those on a restart. Superceding physical conditions (e.g. disk Mach number or viscosity) or solver parameters (CFL, etc) can be very useful, for example if you want to see how an already well-evolved run responds to these changes.
 
 __Restarting at higher resolution__
 
-It may be useful to evolve a simulation to a quasi-steady state at low resolution to save time, and then restart it at a higher resolution. You can do this with the `upsample.py` script in the `tools` directory, for example
+It may be useful to evolve a simulation to a quasi-steady state at low resolution to save time, and then restart it at a higher resolution. You can do this with the [`upsample.py`](tools/upsample.py) script in the `tools` directory, for example
 
 ```Bash
 tools/upsample.py low-res/chkpt.0012.h5 --output high-res/chkpt.0012.h5
 ```
 
-This script will generate a valid checkpoint file, with the same number of grid blocks, but where the grid spacing on each block is cut in half. The script is thanks to Jack Hu. It uses piecewise-constant prolongation, which means your new checkpoint will have the same level of pixelization as the original, even though it has more zones. However once you restart from the new checkpoint file, the solution will develop a higher level of detail and accuracy.
+This script will generate a valid checkpoint file, with the same number of grid blocks, but where the grid spacing on each block is cut in half. The script is thanks to [Jack Hu](https://github.com/Javk5pakfa). It uses piecewise-constant prolongation, which means your new checkpoint will have the same level of pixelization as the original, even though it has more zones. However once you restart from the new checkpoint file, the solution will develop a higher level of detail and accuracy.
 
 
 # Performance and parallelization
 
-CDC uses a simple block-based domain decomposition to facilitate parallel processing of the solution update. At present, only shared memory parallelization is supported (although distributed memory parallelization using MPI is planned). There are two shared memory parallelization strategies: _message-passing_ and _task-based_. The message-passing mode assigns each block of the domain to its own worker thread, and utilizes channels from the [Crossbeam](https://github.com/crossbeam-rs/crossbeam) crate to pass messages between the workers. The task-based mode assigns a computation on each block to its own _task_, and then spawns those tasks into a [Tokio](https://github.com/tokio-rs/tokio) runtime, which in turn delegates those tasks to a user-specified number of worker threads.
+CDC uses a simple block-based domain decomposition to facilitate parallel processing of the solution update. At present, only shared memory parallelization is supported (although a hybrid shared/distributed scheme based on MPI is planned). There are two shared memory parallelization strategies: _message-passing_ and _task-based_. The message-passing mode assigns each block of the domain to its own worker thread, and utilizes channels from the [Crossbeam](https://github.com/crossbeam-rs/crossbeam) crate to pass messages between the workers. The task-based mode assigns a computation on each block to its own _task_, and then spawns those tasks into a [Tokio](https://github.com/tokio-rs/tokio) runtime, which in turn delegates the tasks to a user-specified number of worker threads.
 
 
 __Using the Tokio runtime__
 
-To use task-based parallism, pass `--tokio` flag on the command line. The `--threads` flag will then specify the number of worker threads in the Tokio runtime. This is 1 by default, and setting it to the number of physical cores on your machine should be optimal. `--threads` is ignored in message-passing mode, because message passing only works with one thread per block.
+To use task-based parallelism, pass the `--tokio` flag on the command line. The `--threads` flag will then specify the number of worker threads in the Tokio runtime. This is 1 by default, and setting it to the number of physical cores on your machine should be optimal. `--threads` is ignored in message-passing mode, because message passing requires a single thread per block.
 
 
 __Performance characteristics__

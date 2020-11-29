@@ -1,6 +1,6 @@
 /**
  * @brief      Code to solve gas-driven binary evolution
- *             
+ *
  *
  * @copyright  Jonathan Zrake, Clemson University (2020)
  *
@@ -43,26 +43,26 @@ fn main() -> anyhow::Result<()>
     let app = App::parse();
 
     let model = kind_config::Form::new()
-        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
-        .item("block_size"      , 100    , "Number of grid cells (per direction, per block)")
+        .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
-        .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
-        .item("cfl"             , 0.4    , "CFL parameter [~0.3-0.4]")
+        .item("cfl"             , 0.5    , "CFL parameter [~0.4-0.7]")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
-        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
-        .item("domain_radius"   , 24.0   , "Half-size of the domain [a]")
+        .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
+        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
+        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
+        .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
-        .item("rk_order"        , 1      , "Runge-Kutta time integration order [1|2|3]")
+        .item("rk_order"        , 2      , "Runge-Kutta time integration order [1|2|3]")
         .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
         .item("softening_length", 0.05   , "Gravitational softening length [a]")
-        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
-        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
-        .merge_value_map(&app.restart_model_parameters()?)?
+        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
+        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
+        .merge_value_map_freezing(&app.restart_model_parameters()?, &vec!["num_blocks", "block_size", "one_body", "domain_radius"])?
         .merge_string_args(&app.model_parameters)?;
 
     let hydro: String = model.get("hydro").into();
@@ -185,7 +185,7 @@ impl RecurringTask
         Self{
             count: 0,
             next_time: 0.0,
-        }        
+        }
     }
     pub fn advance(&mut self, interval: f64)
     {
