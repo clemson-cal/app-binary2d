@@ -475,6 +475,11 @@ impl Euler
     {
         Self{gamma_law_index: 5.0 / 3.0}
     }
+
+    //fn sound_speed_squared(&self, cell_data: &CellData<'a, Self::Primitive>) -> f64 //Not needed because riemann_hlle computes the speeds internally?
+    //{
+    //    cell_data.pc.gas_pressure() / cell_data.pc.mass_density() * self.gamma_law_index
+    //}
 }
 
 impl Hydrodynamics for Euler
@@ -499,18 +504,16 @@ impl Hydrodynamics for Euler
 
     fn source_terms(
         &self,
-        _solver: &Solver,
-        _conserved: Self::Conserved,
-        _background_conserved: Self::Conserved,
-        _x: f64,
-        _y: f64,
-        _dt: f64,
-        _two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
+        solver: &Solver,
+        conserved: Self::Conserved,
+        background_conserved: Self::Conserved,
+        x: f64,
+        y: f64,
+        dt: f64,
+        two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
     {
-        todo!("Energy source term due to gravity")
-        todo!("Code review")
-        let st        = solver.source_terms(two_body_state, x, y, conserved.density());
-        let primitive = conserved.to_primitive();
+        let st        = solver.source_terms(two_body_state, x, y, conserved.mass_density());
+        let primitive = conserved.to_primitive(self.gamma_law_index);
         let vx        = primitive.velocity_1();
         let vy        = primitive.velocity_2();
         return [
@@ -524,14 +527,24 @@ impl Hydrodynamics for Euler
 
     fn intercell_flux<'a>(
         &self,
-        _solver: &Solver,
-        _l: &CellData<'a, Self::Primitive>, 
-        _r: &CellData<'a, Self::Primitive>, 
+        solver: &Solver,
+        l: &CellData<'a, Self::Primitive>, 
+        r: &CellData<'a, Self::Primitive>, 
         _f: &(f64, f64), 
         _two_body_state: &kepler_two_body::OrbitalState,
-        _axis: Direction) -> Self::Conserved
+        axis: Direction) -> Self::Conserved
     {
-        todo!("Intercell flux function for Euler; viscous energy flux")
+        let pl    = *l.pc + *self.gradient_field(l, axis) * 0.5;
+        let pr    = *r.pc - *self.gradient_field(r, axis) * 0.5;
+        let nu    = solver.nu;
+        let tau_x = 0.5 * (self.stress_field(l, nu, axis, Direction::X) + self.stress_field(r, nu, axis, Direction::X));
+        let tau_y = 0.5 * (self.stress_field(l, nu, axis, Direction::Y) + self.stress_field(r, nu, axis, Direction::Y));
+        let euler_axis = match axis {
+            Direction::X => hydro_euler::geometry::Direction::X,
+            Direction::Y => hydro_euler::geometry::Direction::Y,
+            _ => panic!("Received invalid direction, need X or Y."),
+        };
+        hydro_euler::euler_2d::riemann_hlle(pl, pr, euler_axis, self.gamma_law_index) + hydro_euler::euler_2d::Conserved(0.0, -tau_x, -tau_y, 0.0) //todo: Need viscous terms in energy eqn
     }
 }
 
