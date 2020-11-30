@@ -540,10 +540,6 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
     use futures::future::{Future, FutureExt, join_all};
     use ndarray::{s, azip};
     use ndarray_ops::{map_stencil3};
-    // use godunov_core::piecewise_linear::plm_gradient3;
-    // use Direction::{X, Y};
-    // use futures::future::{Future, FutureExt, join_all};
-
 
     async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
     {
@@ -624,6 +620,10 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
         let uc       = uc.clone();
         let flux_map = flux_map.clone();
 
+        let flux_flag = false;
+        // if num_tracers > 0 or FMR is on:
+        //  flux_flag = true; [flux_flag --> mut flux_flag]
+
         let u1 = async move {
             // ============================================================================
             let dx = mesh.cell_spacing_x();
@@ -636,23 +636,38 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
                 &uc,
                 &block.initial_conserved,
                 &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver,u, u0, x, y, dt, &two_body_state)));
 
-            let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
-            let fx_n = flux_n.map(|f| f.clone().0);
-            let fy_n = flux_n.map(|f| f.clone().1);
-            let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
-            let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
+            if flux_flag == true {
+                let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
+                let fx_n = flux_n.map(|f| f.clone().0);
+                let fy_n = flux_n.map(|f| f.clone().1);
+                let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
+                let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
 
-            // ============================================================================
-            let du = azip![
-                fx_e.slice(s![1..-2, 1..-1]),
-                fx_e.slice(s![2..-1, 1..-1]),
-                fy_e.slice(s![1..-1, 1..-2]),
-                fy_e.slice(s![1..-1, 2..-1])]
-            .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+                // ============================================================================
+                let du = azip![
+                    fx_e.slice(s![1..-2, 1..-1]),
+                    fx_e.slice(s![2..-1, 1..-1]),
+                    fy_e.slice(s![1..-1, 1..-2]),
+                    fy_e.slice(s![1..-1, 2..-1])]
+                .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            (uc + du + sources).to_shared()
+                (uc + du + sources).to_shared()
+            }
+            else {
+                let (fx, fy) = &flux_map[&block.index].clone().await;
+
+                // ============================================================================
+                let du = azip![
+                    fx.slice(s![..-1,..]),
+                    fx.slice(s![ 1..,..]),
+                    fy.slice(s![..,..-1]),
+                    fy.slice(s![.., 1..])]
+                .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);   
+
+                (uc + du + sources).to_shared()
+            }
         };
         runtime.spawn(u1).map(|u| u.unwrap())
     });
