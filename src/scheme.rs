@@ -542,7 +542,7 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
     use ndarray_ops::{map_stencil3};
     // use godunov_core::piecewise_linear::plm_gradient3;
     // use Direction::{X, Y};
-    use futures::future::{Future, FutureExt, join_all};
+    // use futures::future::{Future, FutureExt, join_all};
 
 
     async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
@@ -579,19 +579,6 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
         let block_index = block.index;
 
         let flux = async move {
-            // ============================================================================
-            let intercell_flux = |l: &CellData, r: &CellData, f: &(f64, f64), axis: Direction| -> Conserved
-            {
-                let cs2 = solver.sound_speed_squared(f, &two_body_state);
-                let pl = *l.pc + *l.gradient_field(axis) * 0.5;
-                let pr = *r.pc - *r.gradient_field(axis) * 0.5;
-                let nu    = solver.nu;
-                let dim   = solver.stress_dim;
-                let tau_x = 0.5 * (l.stress_field(nu, dim, axis, X) + r.stress_field(nu, dim, axis, X));
-                let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Y) + r.stress_field(nu, dim, axis, Y));
-                riemann_hlle(pl, pr, axis, cs2) + Conserved(0.0, -tau_x, -tau_y)
-            };
-
             // ============================================================================
             let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
@@ -642,14 +629,14 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
             let dx = mesh.cell_spacing_x();
             let dy = mesh.cell_spacing_y();
 
-            let sum_sources = |s: [Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+            let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
             // ============================================================================
             let sources = azip![
                 &uc,
                 &block.initial_conserved,
                 &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| sum_sources(solver.source_terms(u, u0, x, y, dt, &two_body_state)));
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
 
             let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
             let fx_n = flux_n.map(|f| f.clone().0);
