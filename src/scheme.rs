@@ -23,7 +23,12 @@ pub enum Direction { X, Y }
 // ============================================================================
 pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
 pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic {}
-pub trait Primitive: Clone + Copy + Send + Sync {}
+pub trait Primitive: Clone + Copy + Send + Sync
+{
+    fn velocity_x(self) -> f64;
+    fn velocity_y(self) -> f64;
+    fn mass_density(self) -> f64;
+}
 
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
@@ -31,8 +36,19 @@ impl Arithmetic for hydro_euler::euler_2d::Conserved {}
 impl Conserved for hydro_iso2d::Conserved {}
 impl Conserved for hydro_euler::euler_2d::Conserved {}
 
-impl Primitive for hydro_iso2d::Primitive {}
-impl Primitive for hydro_euler::euler_2d::Primitive {}
+impl Primitive for hydro_iso2d::Primitive
+{
+    fn velocity_x(self) -> f64   { self.velocity_x() }
+    fn velocity_y(self) -> f64   { self.velocity_y() }
+    fn mass_density(self) -> f64 { self.density() }
+}
+
+impl Primitive for hydro_euler::euler_2d::Primitive
+{
+    fn velocity_x(self) -> f64 { self.velocity(hydro_euler::geometry::Direction::X) }
+    fn velocity_y(self) -> f64 { self.velocity(hydro_euler::geometry::Direction::Y) }
+    fn mass_density(self) -> f64 { self.mass_density() }
+}
 
 
 
@@ -82,6 +98,47 @@ impl<'a, P: Primitive> CellData<'_, P>
             gy: gy,
         }
     }
+
+    fn stress_field(&self, kinematic_viscosity: f64, dimensionality: i64, row: Direction, col: Direction) -> f64
+    {
+        use Direction::{X, Y};
+
+        let stress = if dimensionality == 2 {
+            // This form of the stress tensor comes from Eqn. 7 in Farris+
+            // (2014). Formally it corresponds a "true" dimensionality of 2.
+            match (row, col)
+            {
+                (X, X) =>  self.gx.velocity_x() - self.gy.velocity_y(),
+                (X, Y) =>  self.gx.velocity_y() + self.gy.velocity_x(),
+                (Y, X) =>  self.gx.velocity_y() + self.gy.velocity_x(),
+                (Y, Y) => -self.gx.velocity_x() + self.gy.velocity_y(),
+            }
+        } else if dimensionality == 3 {
+            // This form of the stress tensor is the correct one for vertically
+            // averaged hydrodynamics, when the bulk viscosity is equal to zero.
+            match (row, col)
+            {
+                (X, X) => 4.0 / 3.0 * self.gx.velocity_x() - 2.0 / 3.0 * self.gy.velocity_y(),
+                (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
+                (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() + 1.0 / 1.0 * self.gy.velocity_x(),
+                (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() + 4.0 / 3.0 * self.gy.velocity_y(),
+            }
+        } else {
+            panic!("The true dimension must be 2 or 3")
+        };
+
+        kinematic_viscosity * self.pc.mass_density() * stress
+    }
+
+    fn gradient_field(&self, axis: Direction) -> &P
+    {
+        use Direction::{X, Y};
+        match axis
+        {
+            X => self.gx,
+            Y => self.gy,
+        }
+    }
 }
 
 
@@ -117,6 +174,7 @@ pub struct Solver
     pub sink_radius: f64,
     pub sink_rate: f64,
     pub softening_length: f64,
+    pub stress_dim: i64,
     pub orbital_elements: OrbitalElements,
 }
 
@@ -298,9 +356,6 @@ pub trait Hydrodynamics: Copy + Send
     type Conserved: Conserved;
     type Primitive: Primitive;
 
-    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive;
-    fn strain_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64;
-    fn stress_field  <'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64;
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
@@ -351,33 +406,6 @@ impl Hydrodynamics for Isothermal
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
 
-    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
-    {
-        match axis
-        {
-            Direction::X => cell_data.gx,
-            Direction::Y => cell_data.gy,
-        }
-    }
-
-    fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64
-    {
-        use Direction::{X, Y};
-
-        match (row, col)
-        {
-            (X, X) => cell_data.gx.velocity_x() - cell_data.gy.velocity_y(),
-            (X, Y) => cell_data.gx.velocity_y() + cell_data.gy.velocity_x(),
-            (Y, X) => cell_data.gx.velocity_y() + cell_data.gy.velocity_x(),
-            (Y, Y) =>-cell_data.gx.velocity_x() + cell_data.gy.velocity_y(),
-        }
-    }
-
-    fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
-    {
-        kinematic_viscosity * cell_data.pc.density() * self.strain_field(cell_data, row, col)
-    }
-
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
     {
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
@@ -423,11 +451,12 @@ impl Hydrodynamics for Isothermal
         axis: Direction) -> hydro_iso2d::Conserved
     {
         let cs2 = solver.sound_speed_squared(f, &two_body_state);
-        let pl = *l.pc + *self.gradient_field(l, axis) * 0.5;
-        let pr = *r.pc - *self.gradient_field(r, axis) * 0.5;
-        let nu = solver.nu;
-        let tau_x = 0.5 * (self.stress_field(l, nu, axis, Direction::X) + self.stress_field(r, nu, axis, Direction::X));
-        let tau_y = 0.5 * (self.stress_field(l, nu, axis, Direction::Y) + self.stress_field(r, nu, axis, Direction::Y));
+        let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
+        let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
+        let nu  = solver.nu;
+        let dim = solver.stress_dim;
+        let tau_x = 0.5 * (l.stress_field(nu, dim, axis, Direction::X) + r.stress_field(nu, dim, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Direction::Y) + r.stress_field(nu, dim, axis, Direction::Y));
         let iso2d_axis = match axis {
             Direction::X => hydro_iso2d::Direction::X,
             Direction::Y => hydro_iso2d::Direction::Y,
@@ -452,33 +481,6 @@ impl Hydrodynamics for Euler
 {
     type Conserved = hydro_euler::euler_2d::Conserved;
     type Primitive = hydro_euler::euler_2d::Primitive;
-
-    fn gradient_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, axis: Direction) -> &'a Self::Primitive
-    {
-        match axis
-        {
-            Direction::X => cell_data.gx,
-            Direction::Y => cell_data.gy,
-        }
-    }
-
-    fn strain_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, row: Direction, col: Direction) -> f64
-    {
-        use Direction::{X, Y};
-
-        match (row, col)
-        {
-            (X, X) => cell_data.gx.velocity_1() - cell_data.gy.velocity_2(),
-            (X, Y) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
-            (Y, X) => cell_data.gx.velocity_2() + cell_data.gy.velocity_1(),
-            (Y, Y) =>-cell_data.gx.velocity_1() + cell_data.gy.velocity_2(),
-        }
-    }
-
-    fn stress_field<'a>(&self, cell_data: &CellData<'a, Self::Primitive>, kinematic_viscosity: f64, row: Direction, col: Direction) -> f64
-    {
-        kinematic_viscosity * cell_data.pc.mass_density() * self.strain_field(cell_data, row, col)
-    }
 
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
     {

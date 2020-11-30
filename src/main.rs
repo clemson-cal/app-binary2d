@@ -422,6 +422,7 @@ fn create_solver(model: &kind_config::Form) -> Solver
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
+        stress_dim:       model.get("stress_dim").into(),
         orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
     }
 }
