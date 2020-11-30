@@ -508,6 +508,18 @@ impl Hydrodynamics for Euler
         _two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
     {
         todo!("Energy source term due to gravity")
+        todo!("Code review")
+        let st        = solver.source_terms(two_body_state, x, y, conserved.density());
+        let primitive = conserved.to_primitive();
+        let vx        = primitive.velocity_1();
+        let vy        = primitive.velocity_2();
+        return [
+            hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
+            hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
+            conserved * (-st.sink_rate1 * dt),
+            conserved * (-st.sink_rate2 * dt),
+            (conserved - background_conserved) * (-dt * st.buffer_rate),
+        ];
     }
 
     fn intercell_flux<'a>(
