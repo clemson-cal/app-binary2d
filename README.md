@@ -43,26 +43,26 @@ This will print a list of _flags_ for things like the data output directory and 
 ```
 > binary2d
 
-	block_size............... 1024     Number of grid cells (per direction, per block)
-	buffer_rate.............. 1000     Rate of damping in the buffer region [orbital frequency @ domain radius]
-	buffer_scale............. 1        Length scale of the buffer transition region
-	cfl...................... 0.4      CFL parameter
-	cpi...................... 1        Checkpoint interval [Orbits]
-	domain_radius............ 6        Half-size of the domain
-	mach_number.............. 10       Orbital Mach number of the disk
-	nu....................... 0.1      Kinematic viscosity [Omega a^2]
-	num_blocks............... 1        Number of blocks per (per direction)
-	one_body................. false    Collapse the binary to a single body (validation of central potential)
-	plm...................... 1.5      PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)
-	rk_order................. 1        Runge-Kutta time integration order
-	sink_radius.............. 0.05     Radius of the sink region
-	sink_rate................ 10       Sink rate to model accretion
-	softening_length......... 0.05     Gravitational softening length
-	tfinal................... 0        Time at which to stop the simulation [Orbits]
+    block_size............... 1024     Number of grid cells (per direction, per block)
+    buffer_rate.............. 1000     Rate of damping in the buffer region [orbital frequency @ domain radius]
+    buffer_scale............. 1        Length scale of the buffer transition region
+    cfl...................... 0.4      CFL parameter
+    cpi...................... 1        Checkpoint interval [Orbits]
+    domain_radius............ 6        Half-size of the domain
+    mach_number.............. 10       Orbital Mach number of the disk
+    nu....................... 0.1      Kinematic viscosity [Omega a^2]
+    num_blocks............... 1        Number of blocks per (per direction)
+    one_body................. false    Collapse the binary to a single body (validation of central potential)
+    plm...................... 1.5      PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)
+    rk_order................. 1        Runge-Kutta time integration order
+    sink_radius.............. 0.05     Radius of the sink region
+    sink_rate................ 10       Sink rate to model accretion
+    softening_length......... 0.05     Gravitational softening length
+    tfinal................... 0        Time at which to stop the simulation [Orbits]
 
-	restart file            = none
-	effective grid spacing  = 0.0117a
-	sink radius / grid cell = 4.2667
+    restart file            = none
+    effective grid spacing  = 0.0117a
+    sink radius / grid cell = 4.2667
 
 write checkpoint data/chkpt.0000.h5
 ```
@@ -98,14 +98,15 @@ __Data outputs__
 
 The code's data products are a series of _checkpoint_ files in HDF5 format. Checkpoints are written at a cadence given by the `cpi` model parameter (for checkpoint interval), and will appear in the directory specified by the `--outdir` flag.
 
-Checkpoint files may be inspected either with the `h5ls` utility or with the `h5py` Python module. They have the following root-level group structure:
+Checkpoint files may be inspected either with the `h5ls` utility or with the `h5py` Python module. Checkpoints have the following group structure:
 
 ```
-iteration    Dataset {SCALAR}   # The iteration number
-time         Dataset {SCALAR}   # The simulation time
-conserved    Group              # 2D arrays of the conserved quantities, one for each block
-model        Group              # The model parameters
-tasks        Group              # Times when analysis and output tasks were last performed
+- model            Group              # The model parameters
+- tasks            Group              # Times when analysis and output tasks were last performed
+- state            Group              # Solution state
+    + iteration    Dataset {SCALAR}   # Iteration number
+    + time         Dataset {SCALAR}   # Simulation time
+    + conserved    Group              # 2D arrays of the conserved quantities, one for each block
 ```
 
 In isothermal mode, the 2D arrays of conserved quantities have element type `[f64; 3]`. The order of these floats is (surface density, x-momentum, y-momentum). When the energy equation is being solved, the type is `[f64; 4]` and the final element is the total energy.
@@ -114,27 +115,27 @@ __Restarting runs__
 
 Runs can be restarted from HDF5 checkpoint files. These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that ran uninterrupted. A run can be restarted by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`. Alternatively, setting the flag `--restart=my-run` will find the most recent checkpoint file in that directory, and continue from it. In a restarted run, subsequent outputs are placed in the same directory as the checkpoint file, unless a different directory is given with the `--outdir` flag.
 
-All the model parameters are stored in the checkpoint file. Any model parameters you do provide on the command line will supercede those in the checkpoint. Be careful how you use this feature -- superceding model parameters sometimes makes sense, but can other times be confusing. For example, if the parameter is only used once to generate the initial condition, then superceding it would have no effect, other than obscuring the parameters used to start the simulation. Other model parameters, such as the block size or domain radius, should never be superceded; doing so _should_ but is not guaranteed to cause a runtime error. Superceding certain physical conditions (e.g. disk Mach number or viscosity) or solver parameters (CFL, etc) can be very useful, for example if you want to see how an already well-evolved run responds to these changes.
+All the model parameters are stored in the checkpoint file. Model parameters you provide on the command line when restarting a run will supercede those in the checkpoint, although some, such as the block size and domain radius, can only be specified when a new initial condition is being generated. You'll see an error message if you try to supercede those on a restart. Superceding physical conditions (e.g. disk Mach number or viscosity) or solver parameters (CFL, etc) can be very useful, for example if you want to see how an already well-evolved run responds to these changes.
 
 __Restarting at higher resolution__
 
-It may be useful to evolve a simulation to a quasi-steady state at low resolution to save time, and then restart it at a higher resolution. You can do this with the `upsample.py` script in the `tools` directory, for example
+It may be useful to evolve a simulation to a quasi-steady state at low resolution to save time, and then restart it at a higher resolution. You can do this with the [`upsample.py`](tools/upsample.py) script in the `tools` directory, for example
 
 ```Bash
 tools/upsample.py low-res/chkpt.0012.h5 --output high-res/chkpt.0012.h5
 ```
 
-This script will generate a valid checkpoint file, with the same number of grid blocks, but where the grid spacing on each block is cut in half. The script is thanks to Jack Hu. It uses piecewise-constant prolongation, which means your new checkpoint will have the same level of pixelization as the original, even though it has more zones. However once you restart from the new checkpoint file, the solution will develop a higher level of detail and accuracy.
+This script will generate a valid checkpoint file, with the same number of grid blocks, but where the grid spacing on each block is cut in half. The script is thanks to [Jack Hu](https://github.com/Javk5pakfa). It uses piecewise-constant prolongation, which means your new checkpoint will have the same level of pixelization as the original, even though it has more zones. However once you restart from the new checkpoint file, the solution will develop a higher level of detail and accuracy.
 
 
 # Performance and parallelization
 
-CDC uses a simple block-based domain decomposition to facilitate parallel processing of the solution update. At present, only shared memory parallelization is supported (although distributed memory parallelization using MPI is planned). There are two shared memory parallelization strategies: _message-passing_ and _task-based_. The message-passing mode assigns each block of the domain to its own worker thread, and utilizes channels from the [Crossbeam](https://github.com/crossbeam-rs/crossbeam) crate to pass messages between the workers. The task-based mode assigns a computation on each block to its own _task_, and then spawns those tasks into a [Tokio](https://github.com/tokio-rs/tokio) runtime, which in turn delegates those tasks to a user-specified number of worker threads.
+CDC uses a simple block-based domain decomposition to facilitate parallel processing of the solution update. At present, only shared memory parallelization is supported (although a hybrid shared/distributed scheme based on MPI is planned). There are two shared memory parallelization strategies: _message-passing_ and _task-based_. The message-passing mode assigns each block of the domain to its own worker thread, and utilizes channels from the [Crossbeam](https://github.com/crossbeam-rs/crossbeam) crate to pass messages between the workers. The task-based mode assigns a computation on each block to its own _task_, and then spawns those tasks into a [Tokio](https://github.com/tokio-rs/tokio) runtime, which in turn delegates the tasks to a user-specified number of worker threads.
 
 
 __Using the Tokio runtime__
 
-To use task-based parallism, pass `--tokio` flag on the command line. The `--threads` flag will then specify the number of worker threads in the Tokio runtime. This is 1 by default, and setting it to the number of physical cores on your machine should be optimal. `--threads` is ignored in message-passing mode, because message passing only works with one thread per block.
+To use task-based parallelism, pass the `--tokio` flag on the command line. The `--threads` flag will then specify the number of worker threads in the Tokio runtime. This is 1 by default, and setting it to the number of physical cores on your machine should be optimal. `--threads` is ignored in message-passing mode, because message passing requires a single thread per block.
 
 
 __Performance characteristics__
