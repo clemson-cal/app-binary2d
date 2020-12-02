@@ -912,13 +912,13 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
 
 
-#[allow(unused)]
+
+// ============================================================================
 struct UpdateScheme<H: Hydrodynamics>
 {
     hydro: H,
 }
 
-#[allow(unused)]
 impl<H: Hydrodynamics> UpdateScheme<H>
 {
     fn compute_block_primitive(
@@ -933,7 +933,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         pe:     &Array<H::Primitive, Ix2>,
         block:  &BlockData<H::Conserved>,
         solver: &Solver,
-        mesh:   &Mesh,
         time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
     {
         use ndarray::{s, azip};
@@ -1051,7 +1050,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
     sender.send(scheme.compute_block_primitive(state.conserved.clone())).unwrap();
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, mesh, state.time);
+    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
     let u1 = scheme.compute_block_updated_conserved(state.conserved, fx, fy, block_data, solver, mesh, state.time, dt);
 
     BlockState::<H::Conserved>{
