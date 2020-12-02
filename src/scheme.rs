@@ -663,7 +663,7 @@ async fn block_update<H: 'static + Hydrodynamics, F: Clone + Future<Output=ArcAr
 
 
 // ============================================================================
-async fn block_update_extend_fluxes<H: 'static + Hydrodynamics, F: Clone + Future<Output=(ArcArray<H::Conserved, Ix2>, ArcArray<H::Conserved, Ix2>)>>(
+async fn block_update_flux_extend<H: 'static + Hydrodynamics, F: Clone + Future<Output=(ArcArray<H::Conserved, Ix2>, ArcArray<H::Conserved, Ix2>)>>(
     uc:       ArcArray<H::Conserved, Ix2>,
     flux_map: HashMap<BlockIndex, F>,
     block:    BlockData<H::Conserved>,
@@ -777,7 +777,7 @@ async fn advance_tokio_rk_fluxcomms<H: 'static + Hydrodynamics>(
     // ============================================================================
     let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
     {
-        let u1 = block_update_extend_fluxes(uc.clone(), flux_map.clone(), block.clone(), solver.clone(), mesh.clone(), hydro, time, dt);
+        let u1 = block_update_flux_extend(uc.clone(), flux_map.clone(), block.clone(), solver.clone(), mesh.clone(), hydro, time, dt);
         runtime.spawn(u1).map(|u| u.unwrap())
     });
 
@@ -885,13 +885,33 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
 {
     let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
-    
-    /*
-     * if num_tracers > 0 or using FMR: [update -> mut update] [Won't work -- need better switch]
-     * 
-     *      update = |state| advance_tokio_flux_comms_rk(state, hydro, block_data, mesh, solver, dt, runtime);
-     *      
-     */      
+
+    for _ in 0..fold {
+        state = match solver.rk_order {
+            1 => runtime.block_on(advance_rk1(state, update, runtime)),
+            2 => runtime.block_on(advance_rk2(state, update, runtime)),
+            3 => runtime.block_on(advance_rk3(state, update, runtime)),
+            _ => panic!("illegal RK order {}", solver.rk_order),
+        }
+    }
+    return state;
+}
+
+
+
+
+// ============================================================================
+pub fn advance_tokio_flux_comms<H: 'static + Hydrodynamics>(
+    mut state:  State<H::Conserved>,
+    hydro:      H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh:       &Mesh,
+    solver:     &Solver,
+    dt:         f64,
+    fold:       usize,
+    runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
+{
+    let update = |state| advance_tokio_rk_fluxcomms(state, hydro, block_data, mesh, solver, dt, runtime);
 
     for _ in 0..fold {
         state = match solver.rk_order {
