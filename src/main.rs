@@ -455,9 +455,6 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
-    // TODO: Update to switch depending on tracers or FMR
-    let flux_flag = false;
-
     time_series.retain(|s| s.time < state.time);
 
     println!();
@@ -484,10 +481,7 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
     while state.time < tfinal * ORBITAL_PERIOD
     {
         if app.tokio {
-            state = match flux_flag{
-                false => scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap()),
-                true  => scheme::advance_tokio_flux_comms(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap())
-            }
+            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
         } else {
             scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }

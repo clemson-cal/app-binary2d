@@ -182,6 +182,11 @@ pub struct Solver
 
 impl Solver
 {
+    pub fn need_flux_communication(&self) -> bool
+    {
+        false
+    }
+
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64
     {
         f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
@@ -747,7 +752,7 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
 
 
 // ============================================================================
-async fn advance_tokio_rk_fluxcomms<H: 'static + Hydrodynamics>(
+async fn advance_tokio_rk_with_flux_comm<H: 'static + Hydrodynamics>(
     state: State<H::Conserved>,
     hydro: H,
     block_data: &Vec<BlockData<H::Conserved>>,
@@ -884,7 +889,15 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     fold:       usize,
     runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
 {
-    let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
+    let update = |state| {
+        async {
+            if solver.need_flux_communication() {
+                advance_tokio_rk_with_flux_comm(state, hydro, block_data, mesh, solver, dt, runtime).await
+            } else {
+                advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime).await
+            }
+        }
+    };
 
     for _ in 0..fold {
         state = match solver.rk_order {
@@ -899,29 +912,109 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
 
 
-
-// ============================================================================
-pub fn advance_tokio_flux_comms<H: 'static + Hydrodynamics>(
-    mut state:  State<H::Conserved>,
-    hydro:      H,
-    block_data: &Vec<BlockData<H::Conserved>>,
-    mesh:       &Mesh,
-    solver:     &Solver,
-    dt:         f64,
-    fold:       usize,
-    runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
+#[allow(unused)]
+struct UpdateScheme<H: Hydrodynamics>
 {
-    let update = |state| advance_tokio_rk_fluxcomms(state, hydro, block_data, mesh, solver, dt, runtime);
+    hydro: H,
+}
 
-    for _ in 0..fold {
-        state = match solver.rk_order {
-            1 => runtime.block_on(advance_rk1(state, update, runtime)),
-            2 => runtime.block_on(advance_rk2(state, update, runtime)),
-            3 => runtime.block_on(advance_rk3(state, update, runtime)),
-            _ => panic!("illegal RK order {}", solver.rk_order),
-        }
+#[allow(unused)]
+impl<H: Hydrodynamics> UpdateScheme<H>
+{
+    fn compute_block_primitive(
+        &self,
+        conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
+    {
+        conserved.mapv(|u| self.hydro.to_primitive(u))
     }
-    return state;
+
+    fn compute_block_fluxes(
+        &self,
+        pe:     &Array<H::Primitive, Ix2>,
+        block:  &BlockData<H::Conserved>,
+        solver: &Solver,
+        mesh:   &Mesh,
+        time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
+    {
+        use ndarray::{s, azip};
+        use ndarray_ops::{map_stencil3};
+
+        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+        // ========================================================================
+        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
+        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
+        let xf = &block.face_centers_x;
+        let yf = &block.face_centers_y;
+
+        // ============================================================================
+        let cell_data = azip![
+            pe.slice(s![1..-1,1..-1]),
+            gx.slice(s![ ..  ,1..-1]),
+            gy.slice(s![1..-1, ..  ])]
+        .apply_collect(CellData::new);
+
+        // ============================================================================
+        let fx = azip![
+            cell_data.slice(s![..-1,1..-1]),
+            cell_data.slice(s![ 1..,1..-1]),
+            xf]
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
+
+        // ============================================================================
+        let fy = azip![
+            cell_data.slice(s![1..-1,..-1]),
+            cell_data.slice(s![1..-1, 1..]),
+            yf]
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
+
+        (fx, fy)
+    }
+
+    fn compute_block_updated_conserved(
+        &self,
+        uc:       ArcArray<H::Conserved, Ix2>,
+        fx:       Array<H::Conserved, Ix2>,
+        fy:       Array<H::Conserved, Ix2>,
+        block:    &BlockData<H::Conserved>,
+        solver:   &Solver,
+        mesh:     &Mesh,
+        time:     f64,
+        dt:       f64) -> Array<H::Conserved, Ix2>
+    {
+        use ndarray::{s, azip};
+
+        // ============================================================================
+        let dx = mesh.cell_spacing_x();
+        let dy = mesh.cell_spacing_y();
+        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+        let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+        // ============================================================================
+        let sources = azip![
+            &uc,
+            &block.initial_conserved,
+            &block.cell_centers]
+        .apply_collect(|&u, &u0, &(x, y)| sum_sources(self.hydro.source_terms(&solver,u, u0, x, y, dt, &two_body_state)));
+
+        // ============================================================================
+        let du = if solver.need_flux_communication() {
+            azip![
+                fx.slice(s![1..-2, 1..-1]),
+                fx.slice(s![2..-1, 1..-1]),
+                fy.slice(s![1..-1, 1..-2]),
+                fy.slice(s![1..-1, 2..-1])]
+        } else {
+            azip![
+                fx.slice(s![..-1,..]),
+                fx.slice(s![ 1..,..]),
+                fy.slice(s![..,..-1]),
+                fy.slice(s![.., 1..])]
+        }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+        (uc + du + sources).to_owned()
+    }
 }
 
 
@@ -953,67 +1046,18 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock<H::Primitive>>,
     dt:         f64) -> BlockState<H::Conserved>
 {
-    // ============================================================================
-    use ndarray::{s, azip};
-    use ndarray_ops::map_stencil3;
+    let scheme = UpdateScheme{hydro: hydro};
 
-    // ============================================================================
-    let dx = mesh.cell_spacing_x();
-    let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
-
-    let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-
-    // ============================================================================
-    sender.send(state.conserved.mapv(|u| hydro.to_primitive(u))).unwrap();
-
-    // ============================================================================
-    let sources = azip![
-        &state.conserved,
-        &block_data.initial_conserved,
-        &block_data.cell_centers]
-    .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
+    sender.send(scheme.compute_block_primitive(state.conserved.clone())).unwrap();
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let xf = &block_data.face_centers_x;
-    let yf = &block_data.face_centers_y;
+    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, mesh, state.time);
+    let u1 = scheme.compute_block_updated_conserved(state.conserved, fx, fy, block_data, solver, mesh, state.time, dt);
 
-    // ============================================================================
-    let cell_data = azip![
-        pe.slice(s![1..-1,1..-1]),
-        gx.slice(s![ ..  ,1..-1]),
-        gy.slice(s![1..-1, ..  ])]
-    .apply_collect(CellData::new);
-
-    // ============================================================================
-    let fx = azip![
-        cell_data.slice(s![..-1,1..-1]),
-        cell_data.slice(s![ 1..,1..-1]),
-        xf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
-
-    // ============================================================================
-    let fy = azip![
-        cell_data.slice(s![1..-1,..-1]),
-        cell_data.slice(s![1..-1, 1..]),
-        yf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
-
-    // ============================================================================
-    let du = azip![
-        fx.slice(s![..-1,..]),
-        fx.slice(s![ 1..,..]),
-        fy.slice(s![..,..-1]),
-        fy.slice(s![.., 1..])]
-    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-
-    // ============================================================================
     BlockState::<H::Conserved>{
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: state.conserved + du + sources,
+        conserved: u1.to_shared(),
     }
 }
 
