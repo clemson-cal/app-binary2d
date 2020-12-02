@@ -475,11 +475,6 @@ impl Euler
     {
         Self{gamma_law_index: 5.0 / 3.0}
     }
-
-    //fn sound_speed_squared(&self, cell_data: &CellData<'a, Self::Primitive>) -> f64 //Not needed because riemann_hlle computes the speeds internally?
-    //{
-    //    cell_data.pc.gas_pressure() / cell_data.pc.mass_density() * self.gamma_law_index
-    //}
 }
 
 impl Hydrodynamics for Euler
@@ -528,23 +523,32 @@ impl Hydrodynamics for Euler
     fn intercell_flux<'a>(
         &self,
         solver: &Solver,
-        l: &CellData<'a, Self::Primitive>, 
-        r: &CellData<'a, Self::Primitive>, 
-        _f: &(f64, f64), 
-        _two_body_state: &kepler_two_body::OrbitalState,
+        l: &CellData<'a, Self::Primitive>,
+        r: &CellData<'a, Self::Primitive>,
+        _: &(f64, f64),
+        _: &kepler_two_body::OrbitalState,
         axis: Direction) -> Self::Conserved
-    {
-        let pl    = *l.pc + *self.gradient_field(l, axis) * 0.5;
-        let pr    = *r.pc - *self.gradient_field(r, axis) * 0.5;
+    {       
+        let pl = *l.pc + *l.gradient_field(axis) * 0.5;
+        let pr = *r.pc - *r.gradient_field(axis) * 0.5;
+
+        if solver.nu != 0.0 {
+            todo!("viscous flux for the Euler equation");
+        }
+
         let nu    = solver.nu;
-        let tau_x = 0.5 * (self.stress_field(l, nu, axis, Direction::X) + self.stress_field(r, nu, axis, Direction::X));
-        let tau_y = 0.5 * (self.stress_field(l, nu, axis, Direction::Y) + self.stress_field(r, nu, axis, Direction::Y));
+        let dim   = solver.stress_dim;
+        let tau_x = 0.5 * (l.stress_field(nu, dim, axis, Direction::X) + r.stress_field(nu, dim, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Direction::Y) + r.stress_field(nu, dim, axis, Direction::Y));
+        let vx = l.pc.velocity_x();
+        let vy = l.pc.velocity_y();
+        let viscous_flux = hydro_euler::euler_2d::Conserved(0.0, -tau_x, -tau_y, -(tau_x * vx + tau_y * vy));
+
         let euler_axis = match axis {
             Direction::X => hydro_euler::geometry::Direction::X,
             Direction::Y => hydro_euler::geometry::Direction::Y,
-            _ => panic!("Received invalid direction, need X or Y."),
         };
-        hydro_euler::euler_2d::riemann_hlle(pl, pr, euler_axis, self.gamma_law_index) + hydro_euler::euler_2d::Conserved(0.0, -tau_x, -tau_y, 0.0) //todo: Need viscous terms in energy eqn
+        hydro_euler::euler_2d::riemann_hlle(pl, pr, euler_axis, self.gamma_law_index) + viscous_flux
     }
 }
 
