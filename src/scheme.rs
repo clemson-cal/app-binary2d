@@ -1,12 +1,12 @@
 // ============================================================================
 use std::ops::{Add, Sub, Mul, Div};
+use std::collections::HashMap;
+use num::rational::Rational64;
+use futures::future::{Future};
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
-use num::rational::Rational64;
 use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::{solution_states, runge_kutta};
-use futures::future::{Future};
-use std::collections::HashMap;
 
 
 
