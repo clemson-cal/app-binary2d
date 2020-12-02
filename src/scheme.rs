@@ -547,175 +547,7 @@ async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
 
 
 // ============================================================================
-async fn block_fluxes<H: 'static + Hydrodynamics, F: Clone + Future<Output=ArcArray<H::Primitive, Ix2>>>(
-    pc_map: HashMap<BlockIndex, F>,
-    block:  BlockData<H::Conserved>,
-    solver: Solver,
-    mesh:   Mesh,
-    hydro:  H,
-    time:   f64) -> (ArcArray<H::Conserved, Ix2>, ArcArray<H::Conserved, Ix2>)
-{
-    use ndarray::{s, azip};
-    use ndarray_ops::{map_stencil3};
-
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
-    let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
-    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-
-    // ========================================================================
-    let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let xf = &block.face_centers_x;
-    let yf = &block.face_centers_y;
-
-    // ============================================================================
-    let cell_data = azip![
-        pe.slice(s![1..-1,1..-1]),
-        gx.slice(s![ ..  ,1..-1]),
-        gy.slice(s![1..-1, ..  ])]
-    .apply_collect(CellData::new);
-
-    // ============================================================================
-    let fx = azip![
-        cell_data.slice(s![..-1,1..-1]),
-        cell_data.slice(s![ 1..,1..-1]),
-        xf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
-
-    // ============================================================================
-    let fy = azip![
-        cell_data.slice(s![1..-1,..-1]),
-        cell_data.slice(s![1..-1, 1..]),
-        yf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
-
-    (fx.to_shared(), fy.to_shared())
-}
-
-
-
-
-// ============================================================================
-async fn block_update<H: 'static + Hydrodynamics, F: Clone + Future<Output=ArcArray<H::Primitive, Ix2>>>(
-    uc:     ArcArray<H::Conserved, Ix2>,
-    pc_map: HashMap<BlockIndex, F>,
-    block:  BlockData<H::Conserved>,
-    solver: Solver,
-    mesh:   Mesh,
-    hydro:  H,
-    time:   f64,
-    dt:     f64) -> ArcArray<H::Conserved, Ix2>
-{
-    use ndarray::{s, azip};
-    use ndarray_ops::{map_stencil3};
-
-    let dx = mesh.cell_spacing_x();
-    let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
-    let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-
-    // ============================================================================
-    let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
-
-    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-    let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let xf = &block.face_centers_x;
-    let yf = &block.face_centers_y;
-
-    // ============================================================================
-    let sources = azip![
-        &uc,
-        &block.initial_conserved,
-        &block.cell_centers]
-    .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
-
-    // ============================================================================
-    let cell_data = azip![
-        pe.slice(s![1..-1,1..-1]),
-        gx.slice(s![ ..  ,1..-1]),
-        gy.slice(s![1..-1, ..  ])]
-    .apply_collect(CellData::new);
-
-    // ============================================================================
-    let fx = azip![
-        cell_data.slice(s![..-1,1..-1]),
-        cell_data.slice(s![ 1..,1..-1]),
-        xf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
-
-    // ============================================================================
-    let fy = azip![
-        cell_data.slice(s![1..-1,..-1]),
-        cell_data.slice(s![1..-1, 1..]),
-        yf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
-
-    // ============================================================================
-    let du = azip![
-        fx.slice(s![..-1,..]),
-        fx.slice(s![ 1..,..]),
-        fy.slice(s![..,..-1]),
-        fy.slice(s![.., 1..])]
-    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-
-    (uc + &du + &sources).to_shared()
-}
-
-
-
-
-// ============================================================================
-async fn block_update_flux_extend<H: 'static + Hydrodynamics, F: Clone + Future<Output=(ArcArray<H::Conserved, Ix2>, ArcArray<H::Conserved, Ix2>)>>(
-    uc:       ArcArray<H::Conserved, Ix2>,
-    flux_map: HashMap<BlockIndex, F>,
-    block:    BlockData<H::Conserved>,
-    solver:   Solver,
-    mesh:     Mesh,
-    hydro:    H,
-    time:     f64,
-    dt:       f64) -> ArcArray<H::Conserved, Ix2> 
-{
-    use ndarray::{s, azip};
-
-    // ============================================================================
-    let dx = mesh.cell_spacing_x();
-    let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
-    let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-
-    // ============================================================================
-    let sources = azip![
-        &uc,
-        &block.initial_conserved,
-        &block.cell_centers]
-    .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver,u, u0, x, y, dt, &two_body_state)));
-
-    let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
-    let fx_n = flux_n.map(|f| f.clone().0);
-    let fy_n = flux_n.map(|f| f.clone().1);
-    let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
-    let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
-
-    // ============================================================================
-    let du = azip![
-        fx_e.slice(s![1..-2, 1..-1]),
-        fx_e.slice(s![2..-1, 1..-1]),
-        fy_e.slice(s![1..-1, 1..-2]),
-        fy_e.slice(s![1..-1, 2..-1])]
-    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-
-    (uc + du + sources).to_shared()
-}
-
-
-
-
-// ============================================================================
-async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
+async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
     state: State<H::Conserved>,
     hydro: H,
     block_data: &Vec<BlockData<H::Conserved>>,
@@ -725,102 +557,55 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
     runtime: &tokio::runtime::Runtime) -> State<H::Conserved>
 {
     use futures::future::{FutureExt, join_all};
+
+    let scheme = UpdateScheme::new(hydro);
     let time = state.time;
 
-    // ============================================================================
     let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
     {
         let uc = uc.clone();
-        let primitive = async move { uc.mapv(|u| hydro.to_primitive(u)).to_shared() };
+        let primitive = async move {
+            scheme.compute_block_primitive(uc).to_shared()
+        };
         (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
     }).collect();
 
-    let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
-    {
-        let u1 = block_update(uc.clone(), pc_map.clone(), block.clone(), solver.clone(), mesh.clone(), hydro, time, dt);
-        runtime.spawn(u1).map(|u| u.unwrap())
-    });
-
-    return State {
-            time: state.time + dt,
-            iteration: state.iteration + 1,
-            conserved: join_all(u1_vec).await
-    };
-}
-
-
-
-
-// ============================================================================
-async fn advance_tokio_rk_with_flux_comm<H: 'static + Hydrodynamics>(
-    state: State<H::Conserved>,
-    hydro: H,
-    block_data: &Vec<BlockData<H::Conserved>>,
-    mesh: &Mesh,
-    solver: &Solver,
-    dt: f64,
-    runtime: &tokio::runtime::Runtime) -> State<H::Conserved>
-{
-    use futures::future::{FutureExt, join_all};
-    let time = state.time;
-
-    // ============================================================================
-    let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
-    {
-        let uc = uc.clone();
-        let primitive = async move { uc.mapv(|u| hydro.to_primitive(u)).to_shared() };
-        (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
-    }).collect();
-
-    // ============================================================================
     let flux_map: HashMap<_, _> = block_data.iter().map(|block|
     {
-        let flux = block_fluxes(pc_map.clone(), block.clone(), solver.clone(), mesh.clone(), hydro, time);
-        (block.index, runtime.spawn(flux).map(|f| f.unwrap()).shared())
+        let solver      = solver.clone();
+        let mesh        = mesh.clone();
+        let pc_map      = pc_map.clone();
+        let block       = block.clone();
+        let block_index = block.index;
+
+        let flux = async move {
+            let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map(|i| &pc_map[i])).await;
+            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
+            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
+            (fx.to_shared(), fy.to_shared())
+        };
+        (block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared())
     }).collect();
 
-    // ============================================================================
     let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
     {
-        let u1 = block_update_flux_extend(uc.clone(), flux_map.clone(), block.clone(), solver.clone(), mesh.clone(), hydro, time, dt);
-        runtime.spawn(u1).map(|u| u.unwrap())
+        let solver   = solver.clone();
+        let mesh     = mesh.clone();
+        let flux_map = flux_map.clone();
+        let block    = block.clone();
+        let uc       = uc.clone();
+
+        let u1 = async move {
+            let (fx, fy) = flux_map[&block.index].clone().await;
+            scheme.compute_block_updated_conserved(uc, fx.to_owned(), fy.to_owned(), &block, &solver, &mesh, time, dt).to_shared()
+        };
+        runtime.spawn(u1).map(|u| u.unwrap()).shared()
     });
 
-    return State {
-            time: state.time + dt,
-            iteration: state.iteration + 1,
-            conserved: join_all(u1_vec).await
-    };
-}
-
-
-
-
-// ============================================================================
-impl<C: 'static + Conserved> State<C>
-{
-    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
-    {
-        use num::ToPrimitive;
-        use futures::future::FutureExt;
-        use futures::future::join_all;
-
-        let bf = br.to_f64().unwrap();
-
-        let u_avg = self.conserved
-            .iter()
-            .zip(&s0.conserved)
-            .map(|(u1, u2)| {
-                let u1 = u1.clone();
-                let u2 = u2.clone();
-                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
-            });
-
-        State{
-            time:      self.time      * (-bf + 1.) + s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
-            conserved: join_all(u_avg).await,
-        }
+    State {
+        time: state.time + dt,
+        iteration: state.iteration + 1,
+        conserved: join_all(u1_vec).await
     }
 }
 
@@ -889,15 +674,7 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     fold:       usize,
     runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
 {
-    let update = |state| {
-        async {
-            if solver.need_flux_communication() {
-                advance_tokio_rk_with_flux_comm(state, hydro, block_data, mesh, solver, dt, runtime).await
-            } else {
-                advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime).await
-            }
-        }
-    };
+    let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
 
     for _ in 0..fold {
         state = match solver.rk_order {
@@ -914,6 +691,38 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
 
 // ============================================================================
+impl<C: 'static + Conserved> State<C>
+{
+    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
+    {
+        use num::ToPrimitive;
+        use futures::future::FutureExt;
+        use futures::future::join_all;
+
+        let bf = br.to_f64().unwrap();
+
+        let u_avg = self.conserved
+            .iter()
+            .zip(&s0.conserved)
+            .map(|(u1, u2)| {
+                let u1 = u1.clone();
+                let u2 = u2.clone();
+                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
+            });
+
+        State{
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
+            conserved: join_all(u_avg).await,
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+#[derive(Copy, Clone)]
 struct UpdateScheme<H: Hydrodynamics>
 {
     hydro: H,
@@ -921,9 +730,12 @@ struct UpdateScheme<H: Hydrodynamics>
 
 impl<H: Hydrodynamics> UpdateScheme<H>
 {
-    fn compute_block_primitive(
-        &self,
-        conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
+    fn new(hydro: H) -> Self
+    {
+        Self{hydro: hydro}
+    }
+
+    fn compute_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
     {
         conserved.mapv(|u| self.hydro.to_primitive(u))
     }
@@ -1045,7 +857,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock<H::Primitive>>,
     dt:         f64) -> BlockState<H::Conserved>
 {
-    let scheme = UpdateScheme{hydro: hydro};
+    let scheme = UpdateScheme::new(hydro);
 
     sender.send(scheme.compute_block_primitive(state.conserved.clone())).unwrap();
 
