@@ -177,6 +177,7 @@ pub struct Solver
     pub sink_rate: f64,
     pub softening_length: f64,
     pub stress_dim: i64,
+    pub force_flux_comm: bool,
     pub orbital_elements: OrbitalElements,
 }
 
@@ -184,7 +185,7 @@ impl Solver
 {
     pub fn need_flux_communication(&self) -> bool
     {
-        false
+        self.force_flux_comm
     }
 
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64
@@ -918,6 +919,10 @@ pub fn advance_channels<H: Hydrodynamics>(
     dt: f64,
     fold: usize)
 {
+    if solver.need_flux_communication() {
+        panic!("the message-passing parallelization strategy does not support flux communication");
+    }
+
     crossbeam::scope(|scope|
     {
         let time = state.time;
