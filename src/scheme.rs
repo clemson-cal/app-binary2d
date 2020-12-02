@@ -1,8 +1,10 @@
 // ============================================================================
 use std::ops::{Add, Sub, Mul, Div};
+use std::collections::HashMap;
+use num::rational::Rational64;
+use futures::future::{Future};
 use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
 use ndarray_ops::MapArray3by3;
-use num::rational::Rational64;
 use kepler_two_body::{OrbitalElements, OrbitalState};
 use godunov_core::{solution_states, runge_kutta};
 
@@ -175,11 +177,17 @@ pub struct Solver
     pub sink_rate: f64,
     pub softening_length: f64,
     pub stress_dim: i64,
+    pub force_flux_comm: bool,
     pub orbital_elements: OrbitalElements,
 }
 
 impl Solver
 {
+    pub fn need_flux_communication(&self) -> bool
+    {
+        self.force_flux_comm
+    }
+
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64
     {
         f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
@@ -556,7 +564,20 @@ impl Hydrodynamics for Euler
 
 
 // ============================================================================
-async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
+async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
+{
+    [
+        [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
+        [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
+        [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
+    ]
+}
+
+
+
+
+// ============================================================================
+async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
     state: State<H::Conserved>,
     hydro: H,
     block_data: &Vec<BlockData<H::Conserved>>,
@@ -565,136 +586,56 @@ async fn advance_tokio_rk<H: 'static +  Hydrodynamics>(
     dt: f64,
     runtime: &tokio::runtime::Runtime) -> State<H::Conserved>
 {
-    use std::collections::HashMap;
-    use ndarray::{s, azip};
-    use ndarray_ops::{map_stencil3};
-    use futures::future::{Future, FutureExt, join_all};
+    use futures::future::{FutureExt, join_all};
 
-
-    async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
-    {
-        [
-            [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
-            [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
-            [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
-        ]
-    }
-
+    let scheme = UpdateScheme::new(hydro);
+    let time = state.time;
 
     let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
     {
         let uc = uc.clone();
         let primitive = async move {
-            uc.mapv(|u| hydro.to_primitive(u)).to_shared()
+            scheme.compute_block_primitive(uc).to_shared()
         };
         (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
     }).collect();
 
+    let flux_map: HashMap<_, _> = block_data.iter().map(|block|
+    {
+        let solver      = solver.clone();
+        let mesh        = mesh.clone();
+        let pc_map      = pc_map.clone();
+        let block       = block.clone();
+        let block_index = block.index;
+
+        let flux = async move {
+            let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map(|i| &pc_map[i])).await;
+            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
+            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
+            (fx.to_shared(), fy.to_shared())
+        };
+        (block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared())
+    }).collect();
 
     let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
     {
-        let solver = solver.clone();
-        let mesh   = mesh.clone();
-        let block  = block.clone();
-        let time   = state.time;
-        let pc_map = pc_map.clone();
-        let uc     = uc.clone();
+        let solver   = solver.clone();
+        let mesh     = mesh.clone();
+        let flux_map = flux_map.clone();
+        let block    = block.clone();
+        let uc       = uc.clone();
 
         let u1 = async move {
-
-            // ============================================================================
-            let dx = mesh.cell_spacing_x();
-            let dy = mesh.cell_spacing_y();
-            let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
-            let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-
-            // ============================================================================
-            let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &pc_map[i])).await;
-
-            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-            let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-            let xf = &block.face_centers_x;
-            let yf = &block.face_centers_y;
-
-            // ============================================================================
-            let sources = azip![
-                &uc,
-                &block.initial_conserved,
-                &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
-
-            // ============================================================================
-            let cell_data = azip![
-                pe.slice(s![1..-1,1..-1]),
-                gx.slice(s![ ..  ,1..-1]),
-                gy.slice(s![1..-1, ..  ])]
-            .apply_collect(CellData::new);
-
-            // ============================================================================
-            let fx = azip![
-                cell_data.slice(s![..-1,1..-1]),
-                cell_data.slice(s![ 1..,1..-1]),
-                xf]
-            .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
-
-            // ============================================================================
-            let fy = azip![
-                cell_data.slice(s![1..-1,..-1]),
-                cell_data.slice(s![1..-1, 1..]),
-                yf]
-            .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
-
-            // ============================================================================
-            let du = azip![
-                fx.slice(s![..-1,..]),
-                fx.slice(s![ 1..,..]),
-                fy.slice(s![..,..-1]),
-                fy.slice(s![.., 1..])]
-            .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-
-            (uc + &du + &sources).to_shared()
+            let (fx, fy) = flux_map[&block.index].clone().await;
+            scheme.compute_block_updated_conserved(uc, fx.to_owned(), fy.to_owned(), &block, &solver, &mesh, time, dt).to_shared()
         };
-        runtime.spawn(u1).map(|u| u.unwrap())
+        runtime.spawn(u1).map(|u| u.unwrap()).shared()
     });
-
 
     State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: join_all(u1_vec).await,
-    }
-}
-
-
-
-
-// ============================================================================
-impl<C: 'static + Conserved> State<C>
-{
-    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
-    {
-        use num::ToPrimitive;
-        use futures::future::FutureExt;
-        use futures::future::join_all;
-
-        let bf = br.to_f64().unwrap();
-
-        let u_avg = self.conserved
-            .iter()
-            .zip(&s0.conserved)
-            .map(|(u1, u2)| {
-                let u1 = u1.clone();
-                let u2 = u2.clone();
-                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
-            });
-
-        State{
-            time:      self.time      * (-bf + 1.) + s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
-            conserved: join_all(u_avg).await,
-        }
+        conserved: join_all(u1_vec).await
     }
 }
 
@@ -779,6 +720,147 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
 
 
+// ============================================================================
+impl<C: 'static + Conserved> State<C>
+{
+    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
+    {
+        use num::ToPrimitive;
+        use futures::future::FutureExt;
+        use futures::future::join_all;
+
+        let bf = br.to_f64().unwrap();
+
+        let u_avg = self.conserved
+            .iter()
+            .zip(&s0.conserved)
+            .map(|(u1, u2)| {
+                let u1 = u1.clone();
+                let u2 = u2.clone();
+                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
+            });
+
+        State{
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
+            conserved: join_all(u_avg).await,
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+#[derive(Copy, Clone)]
+struct UpdateScheme<H: Hydrodynamics>
+{
+    hydro: H,
+}
+
+impl<H: Hydrodynamics> UpdateScheme<H>
+{
+    fn new(hydro: H) -> Self
+    {
+        Self{hydro: hydro}
+    }
+
+    fn compute_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
+    {
+        conserved.mapv(|u| self.hydro.to_primitive(u))
+    }
+
+    fn compute_block_fluxes(
+        &self,
+        pe:     &Array<H::Primitive, Ix2>,
+        block:  &BlockData<H::Conserved>,
+        solver: &Solver,
+        time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
+    {
+        use ndarray::{s, azip};
+        use ndarray_ops::{map_stencil3};
+
+        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+        // ========================================================================
+        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
+        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
+        let xf = &block.face_centers_x;
+        let yf = &block.face_centers_y;
+
+        // ============================================================================
+        let cell_data = azip![
+            pe.slice(s![1..-1,1..-1]),
+            gx.slice(s![ ..  ,1..-1]),
+            gy.slice(s![1..-1, ..  ])]
+        .apply_collect(CellData::new);
+
+        // ============================================================================
+        let fx = azip![
+            cell_data.slice(s![..-1,1..-1]),
+            cell_data.slice(s![ 1..,1..-1]),
+            xf]
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
+
+        // ============================================================================
+        let fy = azip![
+            cell_data.slice(s![1..-1,..-1]),
+            cell_data.slice(s![1..-1, 1..]),
+            yf]
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
+
+        (fx, fy)
+    }
+
+    fn compute_block_updated_conserved(
+        &self,
+        uc:       ArcArray<H::Conserved, Ix2>,
+        fx:       Array<H::Conserved, Ix2>,
+        fy:       Array<H::Conserved, Ix2>,
+        block:    &BlockData<H::Conserved>,
+        solver:   &Solver,
+        mesh:     &Mesh,
+        time:     f64,
+        dt:       f64) -> Array<H::Conserved, Ix2>
+    {
+        use ndarray::{s, azip};
+
+        // ============================================================================
+        let dx = mesh.cell_spacing_x();
+        let dy = mesh.cell_spacing_y();
+        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+        let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
+
+        // ============================================================================
+        let sources = azip![
+            &uc,
+            &block.initial_conserved,
+            &block.cell_centers]
+        .apply_collect(|&u, &u0, &(x, y)| sum_sources(self.hydro.source_terms(&solver,u, u0, x, y, dt, &two_body_state)));
+
+        // ============================================================================
+        let du = if solver.need_flux_communication() {
+            azip![
+                fx.slice(s![1..-2, 1..-1]),
+                fx.slice(s![2..-1, 1..-1]),
+                fy.slice(s![1..-1, 1..-2]),
+                fy.slice(s![1..-1, 2..-1])]
+        } else {
+            azip![
+                fx.slice(s![..-1,..]),
+                fx.slice(s![ 1..,..]),
+                fy.slice(s![..,..-1]),
+                fy.slice(s![.., 1..])]
+        }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+        (uc + du + sources).to_owned()
+    }
+}
+
+
+
+
 
 
 
@@ -805,67 +887,18 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
     receiver:   &crossbeam::Receiver<NeighborPrimitiveBlock<H::Primitive>>,
     dt:         f64) -> BlockState<H::Conserved>
 {
-    // ============================================================================
-    use ndarray::{s, azip};
-    use ndarray_ops::map_stencil3;
+    let scheme = UpdateScheme::new(hydro);
 
-    // ============================================================================
-    let dx = mesh.cell_spacing_x();
-    let dy = mesh.cell_spacing_y();
-    let two_body_state = solver.orbital_elements.orbital_state_from_time(state.time);
-
-    let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
-
-    // ============================================================================
-    sender.send(state.conserved.mapv(|u| hydro.to_primitive(u))).unwrap();
-
-    // ============================================================================
-    let sources = azip![
-        &state.conserved,
-        &block_data.initial_conserved,
-        &block_data.cell_centers]
-    .apply_collect(|&u, &u0, &(x, y)| sum_sources(hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
+    sender.send(scheme.compute_block_primitive(state.conserved.clone())).unwrap();
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let gx = map_stencil3(&pe, Axis(0), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let gy = map_stencil3(&pe, Axis(1), |a, b, c| hydro.plm_gradient(solver.plm, a, b, c));
-    let xf = &block_data.face_centers_x;
-    let yf = &block_data.face_centers_y;
+    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
+    let u1 = scheme.compute_block_updated_conserved(state.conserved, fx, fy, block_data, solver, mesh, state.time, dt);
 
-    // ============================================================================
-    let cell_data = azip![
-        pe.slice(s![1..-1,1..-1]),
-        gx.slice(s![ ..  ,1..-1]),
-        gy.slice(s![1..-1, ..  ])]
-    .apply_collect(CellData::new);
-
-    // ============================================================================
-    let fx = azip![
-        cell_data.slice(s![..-1,1..-1]),
-        cell_data.slice(s![ 1..,1..-1]),
-        xf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
-
-    // ============================================================================
-    let fy = azip![
-        cell_data.slice(s![1..-1,..-1]),
-        cell_data.slice(s![1..-1, 1..]),
-        yf]
-    .apply_collect(|l, r, f| hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
-
-    // ============================================================================
-    let du = azip![
-        fx.slice(s![..-1,..]),
-        fx.slice(s![ 1..,..]),
-        fy.slice(s![..,..-1]),
-        fy.slice(s![.., 1..])]
-    .apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-
-    // ============================================================================
     BlockState::<H::Conserved>{
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: state.conserved + du + sources,
+        conserved: u1.to_shared(),
     }
 }
 
@@ -915,10 +948,12 @@ pub fn advance_channels<H: Hydrodynamics>(
     dt: f64,
     fold: usize)
 {
+    if solver.need_flux_communication() {
+        panic!("the message-passing parallelization strategy does not support flux communication");
+    }
+
     crossbeam::scope(|scope|
     {
-        use std::collections::HashMap;
-
         let time = state.time;
         let mut receivers       = Vec::new();
         let mut senders         = Vec::new();

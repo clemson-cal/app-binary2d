@@ -96,8 +96,11 @@ struct App
     #[clap(long, default_value="1", about="Number of worker threads to use")]
     threads: usize,
 
-    #[clap(long, about="Whether to parallelize on the tokio runtime [default: message passing]")]
+    #[clap(long, about="Parallelize on the tokio runtime [default: message passing]")]
     tokio: bool,
+
+    #[clap(long, about="Do flux communication even if it's not needed [benchmarking]")]
+    flux_comm: bool,
 }
 
 impl App
@@ -412,7 +415,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
 
 
 // ============================================================================
-fn create_solver(model: &kind_config::Form) -> Solver
+fn create_solver(model: &kind_config::Form, app: &App) -> Solver
 {
     let one_body: bool = model.get("one_body").into();
 
@@ -429,6 +432,7 @@ fn create_solver(model: &kind_config::Form) -> Solver
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
         stress_dim:       model.get("stress_dim").into(),
+        force_flux_comm:  app.flux_comm,
         orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
     }
 }
@@ -452,7 +456,7 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
     C: io::H5Conserved<T>,
     T: hdf5::H5Type + Clone
 {
-    let solver     = create_solver(&model);
+    let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
