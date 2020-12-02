@@ -49,6 +49,7 @@ dependencies = [
  "glob",
  "godunov-core",
  "hdf5",
+ "hydro-euler",
  "hydro-iso2d",
  "io-logical",
  "kepler-two-body",
@@ -384,6 +385,11 @@ checksum = "5aca5565f760fb5b220e499d72710ed156fdb74e631659e99377d9ebfbd13ae8"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "hydro-euler"
+version = "0.1.0"
+source = "git+https://github.com/clemson-cal/hydro-euler#57a60c9b05ab4c8a1325367113cddc5f48b2e411"
 
 [[package]]
 name = "hydro-iso2d"

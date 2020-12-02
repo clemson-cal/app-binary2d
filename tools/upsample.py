@@ -38,14 +38,12 @@ except OSError as e:
     exit()
 
 for group in old_file:
-    if group != 'conserved':
-        new_file.copy(old_file[group], group)
+    new_file.copy(old_file[group], group, shallow=True)
 
 # Make sure the new block size is reflected in the model parameters
 new_file['model']['block_size'][()] = new_bs
-
-old_conserved = old_file['conserved']
-new_conserved = new_file.create_group('conserved')
+old_conserved = old_file['state']['conserved']
+new_conserved = new_file['state']['conserved']
 
 for group in old_conserved:
     dtype = old_conserved[group].dtype

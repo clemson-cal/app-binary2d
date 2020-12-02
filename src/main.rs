@@ -10,6 +10,10 @@
 
 
 // ============================================================================
+mod io;
+mod scheme;
+static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
@@ -17,22 +21,57 @@ use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
-use scheme::{State, BlockIndex, BlockData};
-use hydro_iso2d::*;
-
-mod io;
-mod scheme;
-static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+use scheme::{
+    State,
+    Conserved,
+    BlockIndex,
+    BlockData,
+    Mesh,
+    Solver,
+    Hydrodynamics,
+    Isothermal,
+    Euler
+};
 
 
 
 
 // ============================================================================
-#[derive(hdf5::H5Type)]
-#[repr(C)]
-pub struct TimeSeriesSample
+fn main() -> anyhow::Result<()>
 {
-    pub time: f64,
+    let _silence_hdf5_errors = hdf5::silence_errors();
+    let app = App::parse();
+
+    let model = kind_config::Form::new()
+        .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
+        .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
+        .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
+        .item("cfl"             , 0.5    , "CFL parameter [~0.4-0.7]")
+        .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
+        .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
+        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
+        .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
+        .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
+        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
+        .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
+        .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
+        .item("rk_order"        , 2      , "Runge-Kutta time integration order [1|2|3]")
+        .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
+        .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
+        .item("softening_length", 0.05   , "Gravitational softening length [a]")
+        .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
+        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
+        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
+        .merge_value_map_freezing(&app.restart_model_parameters()?, &vec!["num_blocks", "block_size", "one_body", "domain_radius"])?
+        .merge_string_args(&app.model_parameters)?;
+
+    let hydro: String = model.get("hydro").into();
+
+    match hydro.as_str() {
+        "iso"   => run(Driver::new(Isothermal::new()), app, model),
+        "euler" => run(Driver::new(Euler::new()), app, model),
+        _       => Err(anyhow::anyhow!("no such hydrodynamics mode '{}'", hydro))
+    }
 }
 
 
@@ -120,6 +159,17 @@ impl App
 
 
 // ============================================================================
+#[derive(hdf5::H5Type)]
+#[repr(C)]
+pub struct TimeSeriesSample
+{
+    pub time: f64,
+}
+
+
+
+
+// ============================================================================
 #[derive(Clone, hdf5::H5Type)]
 #[repr(C)]
 pub struct RecurringTask
@@ -130,9 +180,9 @@ pub struct RecurringTask
 
 impl RecurringTask
 {
-    pub fn new() -> RecurringTask
+    pub fn new() -> Self
     {
-        RecurringTask{
+        Self{
             count: 0,
             next_time: 0.0,
         }
@@ -191,10 +241,29 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
 // ============================================================================
 impl Tasks
 {
-    fn write_checkpoint(&mut self,
-        state: &State,
+    fn new() -> Self
+    {
+        Self{
+            write_checkpoint: RecurringTask::new(),
+            record_time_sample: RecurringTask::new(),
+            call_count_this_run: 0,
+            tasks_last_performed: Instant::now(),
+        }
+    }
+
+    fn record_time_sample<C: Conserved>(&mut self,
+        state: &State<C>,
+        time_series: &mut Vec<TimeSeriesSample>,
+        model: &kind_config::Form)
+    {
+        self.record_time_sample.advance(model.get("tsi").into());
+        time_series.push(TimeSeriesSample{time: state.time});
+    }
+
+    fn write_checkpoint<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(&mut self,
+        state: &State<C>,
         time_series: &Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData>,
+        block_data: &Vec<BlockData<C>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
     {
@@ -211,21 +280,12 @@ impl Tasks
         Ok(())
     }
 
-    fn record_time_sample(&mut self,
-        state: &State,
-        time_series: &mut Vec<TimeSeriesSample>,
-        model: &kind_config::Form)
-    {
-        self.record_time_sample.advance(model.get("tsi").into());
-        time_series.push(TimeSeriesSample{time: state.time});
-    }
-
-    fn perform(
+    fn perform<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(
         &mut self,
-        state: &State,
+        state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample>,
-        block_data: &Vec<BlockData>,
-        mesh: &scheme::Mesh,
+        block_data: &Vec<BlockData<C>>,
+        mesh: &Mesh,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
     {
@@ -259,65 +319,104 @@ impl Tasks
 
 
 // ============================================================================
-fn disk_model(xy: (f64, f64)) -> Primitive
+trait InitialModel: Hydrodynamics
 {
-    let (x, y) = xy;
-    let r0 = f64::sqrt(x * x + y * y);
-    let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-    let vp = f64::sqrt(ph);
-    let vx = vp * (-y / r0);
-    let vy = vp * ( x / r0);
-    return Primitive(1.0, vx, vy);
+    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive;
 }
 
-fn initial_conserved(block_index: BlockIndex, mesh: &scheme::Mesh) -> ArcArray<Conserved, Ix2>
-{
-    mesh.cell_centers(block_index)
-        .mapv(disk_model)
-        .mapv(Primitive::to_conserved)
-        .to_shared()
-}
 
-fn initial_state(mesh: &scheme::Mesh) -> State
+
+
+// ============================================================================
+impl InitialModel for Isothermal
 {
-    State{
-        time: 0.0,
-        iteration: Rational64::new(0, 1),
-        conserved: mesh.block_indexes().iter().map(|&i| initial_conserved(i, mesh)).collect()
+    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
+    {
+        let (x, y) = xy;
+        let r0 = f64::sqrt(x * x + y * y);
+        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
+        let vp = f64::sqrt(ph);
+        let vx = vp * (-y / r0);
+        let vy = vp * ( x / r0);
+        return hydro_iso2d::Primitive(1.0, vx, vy);
     }
 }
 
-fn initial_tasks() -> Tasks
+impl InitialModel for Euler
 {
-    Tasks{
-        write_checkpoint: RecurringTask::new(),
-        record_time_sample: RecurringTask::new(),
-        call_count_this_run: 0,
-        tasks_last_performed: Instant::now(),
+    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
+    {
+        let (x, y) = xy;
+        let r0 = f64::sqrt(x * x + y * y);
+        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
+        let vp = f64::sqrt(ph);
+        let vx = vp * (-y / r0);
+        let vy = vp * ( x / r0);
+        return hydro_euler::euler_2d::Primitive(1.0, vx, vy, 0.0);
     }
 }
 
-fn initial_time_series() -> Vec<TimeSeriesSample>
+
+
+
+/**
+ * This struct provides functions to construct the core simulation data
+ * structures. It is parameterized around System: Hydrodynamics and a Model:
+ * InitialModel.
+ */
+struct Driver<System: Hydrodynamics + InitialModel>
 {
-    Vec::new()
+    system: System,
 }
 
-fn block_data(block_index: BlockIndex, mesh: &scheme::Mesh) -> BlockData
+impl<System: Hydrodynamics + InitialModel> Driver<System>
 {
-    BlockData{
-        cell_centers:    mesh.cell_centers(block_index).to_shared(),
-        face_centers_x:  mesh.face_centers_x(block_index).to_shared(),
-        face_centers_y:  mesh.face_centers_y(block_index).to_shared(),
-        initial_conserved: initial_conserved(block_index, &mesh).to_shared(),
-        index: block_index,
+    fn new(system: System) -> Self
+    {
+        Self{system: system}
+    }
+    fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<System::Conserved, Ix2>
+    {
+        mesh.cell_centers(block_index)
+            .mapv(|x| self.system.primitive_at(x))
+            .mapv(|p| self.system.to_conserved(p))
+            .to_shared()
+    }
+    fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
+    {
+        State{
+            time: 0.0,
+            iteration: Rational64::new(0, 1),
+            conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect()
+        } 
+    }
+    fn initial_time_series(&self) -> Vec<TimeSeriesSample>
+    {
+        Vec::new()
+    }
+    fn block_data(&self, mesh: &Mesh) -> Vec<BlockData<System::Conserved>>
+    {
+        mesh.block_indexes().iter().map(|&block_index| {
+            BlockData{
+                cell_centers:      mesh.cell_centers(block_index).to_shared(),
+                face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
+                face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
+                initial_conserved: self.initial_conserved(block_index, &mesh).to_shared(),
+                index: block_index,
+            }
+        }).collect()
     }
 }
 
-fn create_solver(model: &kind_config::Form) -> scheme::Solver
+
+
+
+// ============================================================================
+fn create_solver(model: &kind_config::Form) -> Solver
 {
     let one_body: bool = model.get("one_body").into();
 
-    scheme::Solver{
+    Solver{
         buffer_rate:      model.get("buffer_rate").into(),
         buffer_scale:     model.get("buffer_scale").into(),
         cfl:              model.get("cfl").into(),
@@ -334,59 +433,33 @@ fn create_solver(model: &kind_config::Form) -> scheme::Solver
     }
 }
 
-fn create_mesh(model: &kind_config::Form) -> scheme::Mesh
+fn create_mesh(model: &kind_config::Form) -> Mesh
 {
-    scheme::Mesh{
+    Mesh{
         num_blocks: i64::from(model.get("num_blocks")) as usize,
         block_size: i64::from(model.get("block_size")) as usize,
         domain_radius: model.get("domain_radius").into(),
     }
 }
 
-fn create_block_data(mesh: &scheme::Mesh) -> Vec<BlockData>
-{
-    mesh.block_indexes().iter().map(|&i| block_data(i, &mesh)).collect()
-}
-
 
 
 
 // ============================================================================
-fn main() -> anyhow::Result<()>
+fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
+    where
+    S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
+    C: io::H5Conserved<T>,
+    T: hdf5::H5Type + Clone
 {
-    let _silence_hdf5_errors = hdf5::silence_errors();
-    let app = App::parse();
-
-    let model = kind_config::Form::new()
-        .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
-        .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
-        .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
-        .item("cfl"             , 0.5    , "CFL parameter [~0.4-0.7]")
-        .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
-        .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
-        .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
-        .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
-        .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
-        .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
-        .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
-        .item("rk_order"        , 2      , "Runge-Kutta time integration order [1|2|3]")
-        .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
-        .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
-        .item("softening_length", 0.05   , "Gravitational softening length [a]")
-        .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
-        .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
-        .item("tsi"             , 0.1    , "Time series interval [Orbits]")
-        .merge_value_map_freezing(&app.restart_model_parameters()?, &vec!["num_blocks", "block_size", "one_body", "domain_radius"])?
-        .merge_string_args(&app.model_parameters)?;
-
     let solver     = create_solver(&model);
     let mesh       = create_mesh(&model);
-    let block_data = create_block_data(&mesh);
+    let block_data = driver.block_data(&mesh);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file()?.map(io::read_state).unwrap_or_else(|| Ok(initial_state(&mesh)))?;
-    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(initial_tasks()))?;
-    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(initial_time_series()))?;
+    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh)))?;
+    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
+    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
     time_series.retain(|s| s.time < state.time);
 
@@ -404,14 +477,19 @@ fn main() -> anyhow::Result<()>
     tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
     use tokio::runtime::Builder;
-    let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
+
+    let runtime = if app.tokio {
+        Some(Builder::new_multi_thread().worker_threads(app.threads).build()?)
+    } else {
+        None
+    };
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
         if app.tokio {
-            state = scheme::advance_tokio(state, &block_data, &mesh, &solver, dt, app.fold, &runtime);
+            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
         } else {
-            scheme::advance_channels(&mut state, &block_data, &mesh, &solver, dt, app.fold);
+            scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
