@@ -540,10 +540,6 @@ impl Hydrodynamics for Euler
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
 
-        if solver.nu != 0.0 {
-            todo!("viscous flux for the Euler equation");
-        }
-
         let nu    = solver.nu;
         let dim   = solver.stress_dim;
         let tau_x = 0.5 * (l.stress_field(nu, dim, axis, Direction::X) + r.stress_field(nu, dim, axis, Direction::X));
