@@ -62,6 +62,8 @@ fn main() -> anyhow::Result<()>
         .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
+        .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
+        .item("eccentricity"    , 0.0    , "Orbital eccentricity")
         .merge_value_map_freezing(&app.restart_model_parameters()?, &vec!["num_blocks", "block_size", "one_body", "domain_radius"])?
         .merge_string_args(&app.model_parameters)?;
 
@@ -419,6 +421,11 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
 {
     let one_body: bool = model.get("one_body").into();
 
+    let a = if one_body {1e-9} else {1.0};
+    let m = 1.0;
+    let q:f64 = model.get("mass_ratio").into();
+    let e:f64 = model.get("eccentricity").into();
+
     Solver{
         buffer_rate:      model.get("buffer_rate").into(),
         buffer_scale:     model.get("buffer_scale").into(),
@@ -433,7 +440,7 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         softening_length: model.get("softening_length").into(),
         stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
-        orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
+        orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
 }
 
