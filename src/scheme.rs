@@ -24,7 +24,11 @@ pub enum Direction { X, Y }
 
 // ============================================================================
 pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
-pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic {}
+pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic
+{
+    fn zeros() -> Self;
+}
+
 pub trait Primitive: Clone + Copy + Send + Sync
 {
     fn velocity_x(self) -> f64;
@@ -35,8 +39,21 @@ pub trait Primitive: Clone + Copy + Send + Sync
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
 
-impl Conserved for hydro_iso2d::Conserved {}
-impl Conserved for hydro_euler::euler_2d::Conserved {}
+impl Conserved for hydro_iso2d::Conserved
+{
+    fn zeros() -> Self
+    {
+        Self(0.0, 0.0, 0.0)
+    }
+}
+
+impl Conserved for hydro_euler::euler_2d::Conserved
+{
+    fn zeros() -> Self
+    {
+        Self(0.0, 0.0, 0.0, 0.0)
+    }
+}
 
 impl Primitive for hydro_iso2d::Primitive
 {
@@ -178,6 +195,7 @@ pub struct Solver
     pub softening_length: f64,
     pub stress_dim: i64,
     pub force_flux_comm: bool,
+    pub low_mem: bool,
     pub orbital_elements: OrbitalElements,
 }
 
@@ -540,10 +558,6 @@ impl Hydrodynamics for Euler
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
 
-        if solver.nu != 0.0 {
-            todo!("viscous flux for the Euler equation");
-        }
-
         let nu    = solver.nu;
         let dim   = solver.stress_dim;
         let tau_x = 0.5 * (l.stress_field(nu, dim, axis, Direction::X) + r.stress_field(nu, dim, axis, Direction::X));
@@ -626,8 +640,17 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let uc       = uc.clone();
 
         let u1 = async move {
-            let (fx, fy) = flux_map[&block.index].clone().await;
-            scheme.compute_block_updated_conserved(uc, fx.to_owned(), fy.to_owned(), &block, &solver, &mesh, time, dt).to_shared()
+            let (fx, fy) = if ! solver.need_flux_communication() {
+                flux_map[&block.index].clone().await
+            } else {
+                let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
+                let fx_n = flux_n.map(|f| f.clone().0);
+                let fy_n = flux_n.map(|f| f.clone().1);
+                let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
+                let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
+                (fx_e.to_shared(), fy_e.to_shared())
+            };
+            scheme.compute_block_updated_conserved(uc, fx, fy, &block, &solver, &mesh, time, dt).to_shared()
         };
         runtime.spawn(u1).map(|u| u.unwrap()).shared()
     });
@@ -815,46 +838,64 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn compute_block_updated_conserved(
         &self,
         uc:       ArcArray<H::Conserved, Ix2>,
-        fx:       Array<H::Conserved, Ix2>,
-        fy:       Array<H::Conserved, Ix2>,
+        fx:       ArcArray<H::Conserved, Ix2>,
+        fy:       ArcArray<H::Conserved, Ix2>,
         block:    &BlockData<H::Conserved>,
         solver:   &Solver,
         mesh:     &Mesh,
         time:     f64,
         dt:       f64) -> Array<H::Conserved, Ix2>
     {
-        use ndarray::{s, azip};
-
         // ============================================================================
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
         let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
-        // ============================================================================
-        let sources = azip![
-            &uc,
-            &block.initial_conserved,
-            &block.cell_centers]
-        .apply_collect(|&u, &u0, &(x, y)| sum_sources(self.hydro.source_terms(&solver,u, u0, x, y, dt, &two_body_state)));
+        if ! solver.low_mem {
+            use ndarray::{s, azip};
 
-        // ============================================================================
-        let du = if solver.need_flux_communication() {
-            azip![
-                fx.slice(s![1..-2, 1..-1]),
-                fx.slice(s![2..-1, 1..-1]),
-                fy.slice(s![1..-1, 1..-2]),
-                fy.slice(s![1..-1, 2..-1])]
+            // ============================================================================
+            let sources = azip![
+                &uc,
+                &block.initial_conserved,
+                &block.cell_centers]
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
+
+            // ============================================================================
+            let du = if solver.need_flux_communication() {
+                azip![
+                    fx.slice(s![1..-2, 1..-1]),
+                    fx.slice(s![2..-1, 1..-1]),
+                    fy.slice(s![1..-1, 1..-2]),
+                    fy.slice(s![1..-1, 2..-1])]
+            } else {
+                azip![
+                    fx.slice(s![..-1,..]),
+                    fx.slice(s![ 1..,..]),
+                    fy.slice(s![..,..-1]),
+                    fy.slice(s![.., 1..])]
+            }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+            (uc + du + sources).to_owned()
         } else {
-            azip![
-                fx.slice(s![..-1,..]),
-                fx.slice(s![ 1..,..]),
-                fy.slice(s![..,..-1]),
-                fy.slice(s![.., 1..])]
-        }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-        (uc + du + sources).to_owned()
+            // ============================================================================
+            Array::from_shape_fn(uc.dim(), |i| {
+                let m = if solver.need_flux_communication() {
+                    (i.0 + 1, i.1 + 1)
+                } else {
+                    i
+                };
+                let df = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx) +
+                         ((fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
+                let uc = uc[i];
+                let u0 = block.initial_conserved[i];
+                let (x, y)  = block.cell_centers[i];
+                let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
+                uc + df + sum_sources(sources)
+            })
+        }
     }
 }
 
@@ -893,7 +934,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
-    let u1 = scheme.compute_block_updated_conserved(state.conserved, fx, fy, block_data, solver, mesh, state.time, dt);
+    let u1 = scheme.compute_block_updated_conserved(state.conserved, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
 
     BlockState::<H::Conserved>{
         time: state.time + dt,
@@ -949,7 +990,7 @@ pub fn advance_channels<H: Hydrodynamics>(
     fold: usize)
 {
     if solver.need_flux_communication() {
-        panic!("the message-passing parallelization strategy does not support flux communication");
+        todo!("flux communication with message-passing parallelization");
     }
 
     crossbeam::scope(|scope|
