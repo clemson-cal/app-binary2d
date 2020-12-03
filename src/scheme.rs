@@ -882,16 +882,18 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
             // ============================================================================
             Array::from_shape_fn(uc.dim(), |i| {
-
-                unsafe {
-                    let df = ((*fx.uget([i.0 + 1, i.1]) - *fx.uget(i)) / dx) +
-                             ((*fy.uget([i.0, i.1 + 1]) - *fy.uget(i)) / dy) * -dt;
-                    let uc = *uc.uget(i);
-                    let u0 = *block.initial_conserved.uget(i);
-                    let (x, y)  = *block.cell_centers.uget(i);
-                    let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
-                    uc + df + sum_sources(sources)
-                }
+                let m = if solver.need_flux_communication() {
+                    (i.0 + 1, i.1 + 1)
+                } else {
+                    i
+                };
+                let df = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx) +
+                         ((fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
+                let uc = uc[i];
+                let u0 = block.initial_conserved[i];
+                let (x, y)  = block.cell_centers[i];
+                let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
+                uc + df + sum_sources(sources)
             })
         }
     }
