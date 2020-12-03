@@ -392,6 +392,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
 
         BlockSolution{
             conserved: u0,
+            integrated_source_terms: [System::Conserved::zeros(); 5],
         }
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
@@ -469,7 +470,7 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
     where
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
     C: io::H5Conserved<T>,
-    T: hdf5::H5Type + Clone
+    T: hdf5::H5Type + Copy
 {
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);

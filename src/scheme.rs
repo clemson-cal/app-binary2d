@@ -91,7 +91,7 @@ pub struct BlockData<C: Conserved>
 pub struct BlockSolution<C: Conserved>
 {
     pub conserved: ArcArray<C, Ix2>,
-    // pub integrated_source_terms: [C; 5],
+    pub integrated_source_terms: [C; 5],
     // pub change_in_orbital_parameters: OrbitalParameters,
 }
 
@@ -662,9 +662,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            BlockSolution{
-                conserved: scheme.compute_block_updated_conserved(uc, fx, fy, &block, &solver, &mesh, time, dt).to_shared()
-            }
+            scheme.compute_block_updated_solution(uc, fx, fy, &block, &solver, &mesh, time, dt)
         };
         runtime.spawn(s1).map(|s| s.unwrap()).shared()
     });
@@ -691,7 +689,8 @@ impl<C: 'static + Conserved> BlockSolution<C>
         let u1 = s1.conserved.clone();
         
         BlockSolution{
-            conserved: runtime.spawn(async move { u1 * (-bf + 1.) + u0 * bf }).map(|u| u.unwrap()).await
+            conserved: runtime.spawn(async move { u1 * (-bf + 1.) + u0 * bf }).map(|u| u.unwrap()).await,
+            integrated_source_terms: [C::zeros(); 5],
         }
     }
 }
@@ -864,7 +863,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         (fx, fy)
     }
 
-    fn compute_block_updated_conserved(
+    fn compute_block_updated_solution(
         &self,
         uc:       ArcArray<H::Conserved, Ix2>,
         fx:       ArcArray<H::Conserved, Ix2>,
@@ -873,7 +872,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         solver:   &Solver,
         mesh:     &Mesh,
         time:     f64,
-        dt:       f64) -> Array<H::Conserved, Ix2>
+        dt:       f64) -> BlockSolution<H::Conserved>
     {
         // ============================================================================
         let dx = mesh.cell_spacing_x();
@@ -881,7 +880,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
         let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
-        if ! solver.low_mem {
+        let u1 = if ! solver.low_mem {
             use ndarray::{s, azip};
 
             // ============================================================================
@@ -906,7 +905,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                     fy.slice(s![.., 1..])]
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            (uc + du + sources).to_owned()
+            uc + du + sources
         } else {
 
             // ============================================================================
@@ -923,7 +922,11 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 let (x, y)  = block.cell_centers[i];
                 let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
                 uc + df + sum_sources(sources)
-            })
+            }).to_shared()
+        };
+        BlockSolution{
+            conserved: u1,
+            integrated_source_terms: [H::Conserved::zeros(); 5],
         }
     }
 }
@@ -963,12 +966,12 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
-    let u1 = scheme.compute_block_updated_conserved(state.conserved, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
+    let s1 = scheme.compute_block_updated_solution(state.conserved, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
 
     BlockState::<H::Conserved>{
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: u1.to_shared(),
+        conserved: s1.conserved,
     }
 }
 

@@ -50,29 +50,53 @@ impl nicer_hdf5::H5Write for Tasks
 fn write_state<C: H5Conserved<T>, T: H5Type + Clone>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
 {
     let state_group = group.create_group("state")?;
-    let cons = state_group.create_group("conserved")?;
+    let solution_group = state_group.create_group("solution")?;
 
     for (b, s) in block_data.iter().zip(&state.solution)
     {
-        s.conserved.mapv(C::into).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
+        let block_group = solution_group.create_group(&format!("0:{:03}-{:03}", b.index.0, b.index.1))?;
+        s.conserved.mapv(C::into).write(&block_group, "conserved")?;
+
+        let ist = s.integrated_source_terms;
+        let ist: [T; 5] = [
+            ist[0].into(),
+            ist[1].into(),
+            ist[2].into(),
+            ist[3].into(),
+            ist[4].into(),
+        ];
+        block_group.new_dataset::<[T; 5]>().create("integrated_source_terms", ())?.write_scalar(&ist)?;
     }
     state.time.write(&state_group, "time")?;
     state.iteration.write(&state_group, "iteration")?;
     Ok(())
 }
 
-pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + Clone>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
+pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + Copy>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
 {
     |file| {
         let file = File::open(file.to_string())?;
         let state_group = file.group("state")?;
-        let cons = state_group.group("conserved")?;
+        let solution_group = state_group.group("solution")?;
         let mut solution = Vec::new();
 
-        for key in cons.member_names()?
+        for key in solution_group.member_names()?
         {
-            let u = ndarray::Array2::<C::H5Type>::read(&cons, &key)?;
-            solution.push(BlockSolution{conserved: u.mapv(C::from).to_shared()});
+            let block_group = solution_group.group(&key)?;
+            let u = ndarray::Array2::<C::H5Type>::read(&block_group, "conserved")?;
+            let ist: [T; 5] = block_group.dataset("integrated_source_terms")?.read_scalar()?;
+            let ist: [C; 5] = [
+                ist[0].into(),
+                ist[1].into(),
+                ist[2].into(),
+                ist[3].into(),
+                ist[4].into(),
+            ];
+            let s = BlockSolution{
+                conserved: u.mapv(C::from).to_shared(),
+                integrated_source_terms: ist,
+            };
+            solution.push(s);
         }
         let time      = f64::read(&state_group, "time")?;
         let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
