@@ -3,7 +3,7 @@ use hdf5::{File, Group, H5Type};
 use io_logical::verified;
 use io_logical::nicer_hdf5;
 use io_logical::nicer_hdf5::{H5Read, H5Write};
-use crate::scheme::{Hydrodynamics, Conserved, State, BlockData};
+use crate::scheme::{Hydrodynamics, Conserved, State, BlockSolution, BlockData};
 use crate::Tasks;
 
 
@@ -52,9 +52,9 @@ fn write_state<C: H5Conserved<T>, T: H5Type + Clone>(group: &Group, state: &Stat
     let state_group = group.create_group("state")?;
     let cons = state_group.create_group("conserved")?;
 
-    for (b, u) in block_data.iter().zip(&state.conserved)
+    for (b, s) in block_data.iter().zip(&state.solution)
     {
-        u.mapv(C::into).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
+        s.conserved.mapv(C::into).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
     }
     state.time.write(&state_group, "time")?;
     state.iteration.write(&state_group, "iteration")?;
@@ -67,18 +67,18 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + 
         let file = File::open(file.to_string())?;
         let state_group = file.group("state")?;
         let cons = state_group.group("conserved")?;
-        let mut conserved = Vec::new();
+        let mut solution = Vec::new();
 
         for key in cons.member_names()?
         {
             let u = ndarray::Array2::<C::H5Type>::read(&cons, &key)?;
-            conserved.push(u.mapv(C::from).to_shared());
+            solution.push(BlockSolution{conserved: u.mapv(C::from).to_shared()});
         }
         let time      = f64::read(&state_group, "time")?;
         let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
 
         let result = State{
-            conserved: conserved,
+            solution: solution,
             time: time,
             iteration: iteration,
         };

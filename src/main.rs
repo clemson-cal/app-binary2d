@@ -17,15 +17,15 @@ static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
-use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
 use scheme::{
     State,
-    Conserved,
+    BlockSolution,
     BlockIndex,
     BlockData,
+    Conserved,
     Mesh,
     Solver,
     Hydrodynamics,
@@ -383,20 +383,24 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
     {
         Self{system: system}
     }
-    fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<System::Conserved, Ix2>
+    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh) -> BlockSolution<System::Conserved>
     {
-        mesh.cell_centers(block_index)
+        let u0 = mesh.cell_centers(block_index)
             .mapv(|x| self.system.primitive_at(x))
             .mapv(|p| self.system.to_conserved(p))
-            .to_shared()
+            .to_shared();
+
+        BlockSolution{
+            conserved: u0,
+        }
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
     {
         State{
             time: 0.0,
             iteration: Rational64::new(0, 1),
-            conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect()
-        } 
+            solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh)).collect()
+        }
     }
     fn initial_time_series(&self) -> Vec<TimeSeriesSample>
     {
@@ -409,7 +413,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
                 cell_centers:      mesh.cell_centers(block_index).to_shared(),
                 face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
                 face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
-                initial_conserved: self.initial_conserved(block_index, &mesh).to_shared(),
+                initial_conserved: self.initial_solution(block_index, &mesh).conserved,
                 index: block_index,
             }
         }).collect()

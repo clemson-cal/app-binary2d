@@ -88,11 +88,23 @@ pub struct BlockData<C: Conserved>
 
 // ============================================================================
 #[derive(Clone)]
+pub struct BlockSolution<C: Conserved>
+{
+    pub conserved: ArcArray<C, Ix2>,
+    // pub integrated_source_terms: [C; 5],
+    // pub change_in_orbital_parameters: OrbitalParameters,
+}
+
+
+
+
+// ============================================================================
+#[derive(Clone)]
 pub struct State<C: Conserved>
 {
     pub time: f64,
     pub iteration: Rational64,
-    pub conserved: Vec<ArcArray<C, Ix2>>,
+    pub solution: Vec<BlockSolution<C>>,
 }
 
 
@@ -605,9 +617,9 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
     let scheme = UpdateScheme::new(hydro);
     let time = state.time;
 
-    let pc_map: HashMap<_, _> = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    let pc_map: HashMap<_, _> = state.solution.iter().zip(block_data).map(|(solution, block)|
     {
-        let uc = uc.clone();
+        let uc = solution.conserved.clone();
         let primitive = async move {
             scheme.compute_block_primitive(uc).to_shared()
         };
@@ -631,15 +643,15 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         (block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared())
     }).collect();
 
-    let u1_vec = state.conserved.iter().zip(block_data).map(|(uc, block)|
+    let s1_vec = state.solution.iter().zip(block_data).map(|(solution, block)|
     {
         let solver   = solver.clone();
         let mesh     = mesh.clone();
         let flux_map = flux_map.clone();
         let block    = block.clone();
-        let uc       = uc.clone();
+        let uc       = solution.conserved.clone();
 
-        let u1 = async move {
+        let s1 = async move {
             let (fx, fy) = if ! solver.need_flux_communication() {
                 flux_map[&block.index].clone().await
             } else {
@@ -650,15 +662,63 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            scheme.compute_block_updated_conserved(uc, fx, fy, &block, &solver, &mesh, time, dt).to_shared()
+            BlockSolution{
+                conserved: scheme.compute_block_updated_conserved(uc, fx, fy, &block, &solver, &mesh, time, dt).to_shared()
+            }
         };
-        runtime.spawn(u1).map(|u| u.unwrap()).shared()
+        runtime.spawn(s1).map(|s| s.unwrap()).shared()
     });
 
     State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: join_all(u1_vec).await
+        solution: join_all(s1_vec).await
+    }
+}
+
+
+
+impl<C: 'static + Conserved> BlockSolution<C>
+{
+    async fn weighted_average(self, br: Rational64, s0: &BlockSolution<C>, runtime: &tokio::runtime::Runtime) -> BlockSolution<C>
+    {
+        use num::ToPrimitive;
+        use futures::future::FutureExt;
+
+        let bf = br.to_f64().unwrap();
+        let s1 = self;
+        let u0 = s0.conserved.clone();
+        let u1 = s1.conserved.clone();
+        
+        BlockSolution{
+            conserved: runtime.spawn(async move { u1 * (-bf + 1.) + u0 * bf }).map(|u| u.unwrap()).await
+        }
+    }
+}
+
+
+
+
+// ============================================================================
+impl<C: 'static + Conserved> State<C>
+{
+    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
+    {
+        use num::ToPrimitive;
+        use futures::future::join_all;
+
+        let bf = br.to_f64().unwrap();
+
+        let s_avg = self.solution
+            .into_iter()
+            .zip(&s0.solution)
+            .map(|(s1, s0)| s1.weighted_average(br, s0, runtime));
+
+        State{
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
+            solution: join_all(s_avg).await,
+        }
     }
 }
 
@@ -738,37 +798,6 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
         }
     }
     return state;
-}
-
-
-
-
-// ============================================================================
-impl<C: 'static + Conserved> State<C>
-{
-    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
-    {
-        use num::ToPrimitive;
-        use futures::future::FutureExt;
-        use futures::future::join_all;
-
-        let bf = br.to_f64().unwrap();
-
-        let u_avg = self.conserved
-            .iter()
-            .zip(&s0.conserved)
-            .map(|(u1, u2)| {
-                let u1 = u1.clone();
-                let u2 = u2.clone();
-                runtime.spawn(async move { u1 * (-bf + 1.) + u2 * bf }).map(|u| u.unwrap())
-            });
-
-        State{
-            time:      self.time      * (-bf + 1.) + s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
-            conserved: join_all(u_avg).await,
-        }
-    }
 }
 
 
@@ -1000,7 +1029,7 @@ pub fn advance_channels<H: Hydrodynamics>(
         let mut senders         = Vec::new();
         let mut block_primitive = HashMap::new();
 
-        for (u, b) in state.conserved.iter_mut().zip(block_data)
+        for (s, b) in state.solution.iter_mut().zip(block_data)
         {
             let (their_s, my_r) = crossbeam::channel::unbounded();
             let (my_s, their_r) = crossbeam::channel::unbounded();
@@ -1008,7 +1037,7 @@ pub fn advance_channels<H: Hydrodynamics>(
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_channels_internal(u, hydro, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+            scope.spawn(move |_| advance_channels_internal(&mut s.conserved, hydro, b, solver, mesh, &their_s, &their_r, time, dt, fold));
         }
 
         for _ in 0..fold
