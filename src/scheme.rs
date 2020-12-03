@@ -24,7 +24,11 @@ pub enum Direction { X, Y }
 
 // ============================================================================
 pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
-pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic {}
+pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic
+{
+    fn zeros() -> Self;
+}
+
 pub trait Primitive: Clone + Copy + Send + Sync
 {
     fn velocity_x(self) -> f64;
@@ -35,8 +39,21 @@ pub trait Primitive: Clone + Copy + Send + Sync
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
 
-impl Conserved for hydro_iso2d::Conserved {}
-impl Conserved for hydro_euler::euler_2d::Conserved {}
+impl Conserved for hydro_iso2d::Conserved
+{
+    fn zeros() -> Self
+    {
+        Self(0.0, 0.0, 0.0)
+    }
+}
+
+impl Conserved for hydro_euler::euler_2d::Conserved
+{
+    fn zeros() -> Self
+    {
+        Self(0.0, 0.0, 0.0, 0.0)
+    }
+}
 
 impl Primitive for hydro_iso2d::Primitive
 {
@@ -178,6 +195,7 @@ pub struct Solver
     pub softening_length: f64,
     pub stress_dim: i64,
     pub force_flux_comm: bool,
+    pub low_mem: bool,
     pub orbital_elements: OrbitalElements,
 }
 
@@ -819,38 +837,54 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         time:     f64,
         dt:       f64) -> Array<H::Conserved, Ix2>
     {
-        use ndarray::{s, azip};
-
         // ============================================================================
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
         let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
-        // ============================================================================
-        let sources = azip![
-            &uc,
-            &block.initial_conserved,
-            &block.cell_centers]
-        .apply_collect(|&u, &u0, &(x, y)| sum_sources(self.hydro.source_terms(&solver,u, u0, x, y, dt, &two_body_state)));
+        if ! solver.low_mem {
+            use ndarray::{s, azip};
 
-        // ============================================================================
-        let du = if solver.need_flux_communication() {
-            azip![
-                fx.slice(s![1..-2, 1..-1]),
-                fx.slice(s![2..-1, 1..-1]),
-                fy.slice(s![1..-1, 1..-2]),
-                fy.slice(s![1..-1, 2..-1])]
+            // ============================================================================
+            let sources = azip![
+                &uc,
+                &block.initial_conserved,
+                &block.cell_centers]
+            .apply_collect(|&u, &u0, &(x, y)| sum_sources(self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
+
+            // ============================================================================
+            let du = if solver.need_flux_communication() {
+                azip![
+                    fx.slice(s![1..-2, 1..-1]),
+                    fx.slice(s![2..-1, 1..-1]),
+                    fy.slice(s![1..-1, 1..-2]),
+                    fy.slice(s![1..-1, 2..-1])]
+            } else {
+                azip![
+                    fx.slice(s![..-1,..]),
+                    fx.slice(s![ 1..,..]),
+                    fy.slice(s![..,..-1]),
+                    fy.slice(s![.., 1..])]
+            }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+
+            (uc + du + sources).to_owned()
         } else {
-            azip![
-                fx.slice(s![..-1,..]),
-                fx.slice(s![ 1..,..]),
-                fy.slice(s![..,..-1]),
-                fy.slice(s![.., 1..])]
-        }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-        (uc + du + sources).to_owned()
+            // ============================================================================
+            Array::from_shape_fn(uc.dim(), |i| {
+
+                unsafe {
+                    let df = ((*fx.uget([i.0 + 1, i.1]) - *fx.uget(i)) / dx) +
+                             ((*fy.uget([i.0, i.1 + 1]) - *fy.uget(i)) / dy) * -dt;
+                    let uc = *uc.uget(i);
+                    let u0 = *block.initial_conserved.uget(i);
+                    let (x, y)  = *block.cell_centers.uget(i);
+                    let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
+                    uc + df + sum_sources(sources)
+                }
+            })
+        }
     }
 }
 
