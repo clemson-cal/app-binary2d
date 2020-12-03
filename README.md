@@ -1,58 +1,3 @@
-<<<<<<< HEAD
-# binary2d
-A rust project written by Dr. Jonathan Zrake that simulates orbital evolution of a binary system 
-with a circumbinary disk. 
-
-## Intro
-This project produces snapshots of binary orbits and the circumbinary disk over time using 
-runge-kutta methods. The output file type is hdf5 and can be plotted through python, and a 
-python plotting script is included. 
-
-## Setting up the suite
-
-## Initializing the environment
-
-## Using the suite
-The suite has many parameters, and they are listed below with a description. There are two types
-of parameters: model parameters and flags. Arguments have the syntax "[argument name]=[value]", 
-and options are used with "--[option]=[value]". Both kinds are used on the command line or in 
-your pbs batch job script. An example of command is:
-
-cargo run --release num_blocks=20 domain_radius=5.0 --outdir=data/temp --fold=1000
-
---------------------------------------------------------------------------------------------------------------
-
-Model Parameters, [default value]:
-
-num_blocks, 1: Number of blocks per (per direction)
-block_size, 100: Number of grid cells (per direction, per block)
-buffer_rate, 1e3: Rate of damping in the buffer region [orbital frequency @ domain radius]
-buffer_scale, 1.0: Length scale of the buffer transition region
-one_body, false: Collapse the binary to a single body (validation of central potential)
-cfl, 0.4: CFL parameter
-cpi, 1.0: Checkpoint interval [Orbits]
-domain_radius, 24.0: Half-size of the domain
-mach_number, 10.0: Orbital Mach number of the disk
-nu, 0.1: Kinematic viscosity [Omega a^2]
-plm, 1.5: PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)
-rk_order, 1: Runge-Kutta time integration order
-sink_radius, 0.05: Radius of the sink region
-sink_rate, 10.0: Sink rate to model accretion
-softening_length, 0.05: Gravitational softening length
-tfinal, 0.0: Time at which to stop the simulation [Orbits]
-
---------------------------------------------------------------------------------------------------------------
---------------------------------------------------------------------------------------------------------------
-
-Flags, [default value]:
-
-outdir, "data": path of output directory. The root of the of the directory will be the project directory.
-fold, 1: Number of iterations between side effects. 
-restart: Restart file or directory [use latest checkpoint if directory]
-
---------------------------------------------------------------------------------------------------------------
---------------------------------------------------------------------------------------------------------------
-=======
 # The Circumbinary Disk Code (CDC)
 _Simulates accretion from circumbinary gas disks onto stellar and black hole binaries._
 
@@ -78,18 +23,33 @@ __Requirements__: Rust and HDF5
 __Build and install__:
 
 ```Bash
-> git cone https://github.com/clemson-cal/app-binary2d.git
+> git clone https://github.com/clemson-cal/app-binary2d.git
 > cd app-binary2d
 > cargo install --path .
 ```
 
-This will install an executable at `.cargo/bin/binary2d`, which should be in your system path. You should now be able to run the code from anywhere on your machine:
+This will install an executable at `.cargo/bin/binary2d`. Before using the executable, it is necessary to add the path of the excutable to the system PATH variable. To do this, first navigate to the .bashrc file located in your default directory. 
+
+```
+cd
+vi .bashrc
+```
+
+Within the file, there should be a variable named PATH already ( if there isn't one, you can add one using the same format below ). On Palmetto, the PATH to the binary2d executable is: `$HOME/.cargo/bin`. Add this to the end of the line but within the quotation marks so it will look something like this:
+
+```
+PATH="$HOME/.local/bin:$HOME/bin:$PATH:$HOME/.cargo/bin"
+```
+
+After saving the .bashrc file, go back to the default directory and source it. Now the executable is ready to run. On any Unix machine in general, the `.cargo` directory path will be that of your default directory. To run the executable, use the commands here:
 
 ```Bash
 > cd
 > mkdir binary-code-project; cd binary-code-project
 > binary2d --help
 ```
+
+Note that the checkpoint files will be saved to `data/temp` in the directory that you run the executable. 
 
 This will print a list of _command line options_ for things like the data output directory and the execution strategy. You also have a list of _model parameters_, which control things like the physical setup, the mesh parameters, and the output cadence. When run without anything on the command line, the code will print the model parameters default values and brief description:
 
@@ -201,4 +161,3 @@ The main branch may updated incrementally with improvements to the code performa
 - `energy-eqn`: Includes thermodynamics of viscous heating, radiative cooling, etc.
 - `tracers`: Massless tracer particles which help to visualize the accretion flow
 - `orbital-ev`: Evolution of the binary orbital parameters under gravitational and accretion forces
->>>>>>> master
