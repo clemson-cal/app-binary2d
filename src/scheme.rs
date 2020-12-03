@@ -640,8 +640,17 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let uc       = uc.clone();
 
         let u1 = async move {
-            let (fx, fy) = flux_map[&block.index].clone().await;
-            scheme.compute_block_updated_conserved(uc, fx.to_owned(), fy.to_owned(), &block, &solver, &mesh, time, dt).to_shared()
+            let (fx, fy) = if ! solver.need_flux_communication() {
+                flux_map[&block.index].clone().await
+            } else {
+                let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
+                let fx_n = flux_n.map(|f| f.clone().0);
+                let fy_n = flux_n.map(|f| f.clone().1);
+                let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
+                let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
+                (fx_e.to_shared(), fy_e.to_shared())
+            };
+            scheme.compute_block_updated_conserved(uc, fx, fy, &block, &solver, &mesh, time, dt).to_shared()
         };
         runtime.spawn(u1).map(|u| u.unwrap()).shared()
     });
@@ -829,8 +838,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn compute_block_updated_conserved(
         &self,
         uc:       ArcArray<H::Conserved, Ix2>,
-        fx:       Array<H::Conserved, Ix2>,
-        fy:       Array<H::Conserved, Ix2>,
+        fx:       ArcArray<H::Conserved, Ix2>,
+        fy:       ArcArray<H::Conserved, Ix2>,
         block:    &BlockData<H::Conserved>,
         solver:   &Solver,
         mesh:     &Mesh,
@@ -923,7 +932,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
-    let u1 = scheme.compute_block_updated_conserved(state.conserved, fx, fy, block_data, solver, mesh, state.time, dt);
+    let u1 = scheme.compute_block_updated_conserved(state.conserved, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
 
     BlockState::<H::Conserved>{
         time: state.time + dt,
@@ -979,7 +988,7 @@ pub fn advance_channels<H: Hydrodynamics>(
     fold: usize)
 {
     if solver.need_flux_communication() {
-        panic!("the message-passing parallelization strategy does not support flux communication");
+        todo!("flux communication with message-passing parallelization");
     }
 
     crossbeam::scope(|scope|
