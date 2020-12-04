@@ -2,110 +2,122 @@ use std::collections::HashMap;
 use std::time::Instant;
 use hdf5::File;
 use crate::tracers::Tracer;
+use hdf5::{File, Group, H5Type};
+use io_logical::verified;
+use io_logical::nicer_hdf5;
+use io_logical::nicer_hdf5::{H5Read, H5Write};
+use crate::scheme::{Hydrodynamics, Conserved, State, BlockData};
+use crate::Tasks;
 
 
 
 
 // ============================================================================
-fn write_state(group: &hdf5::Group, state: &crate::State, block_data: &Vec<crate::BlockData>) -> Result<(), hdf5::Error>
+pub trait AssociatedH5Type { type H5Type: H5Type; }
+pub trait SynonymForH5Type<T: H5Type + Clone>: AssociatedH5Type<H5Type=T> + Into<T> + From<T> { }
+pub trait H5Conserved<T: H5Type + Clone>: Conserved + SynonymForH5Type<T> { }
+
+impl AssociatedH5Type for hydro_iso2d::Conserved { type H5Type = [f64; 3]; }
+impl SynonymForH5Type<[f64; 3]> for hydro_iso2d::Conserved {}
+impl H5Conserved<[f64; 3]> for hydro_iso2d::Conserved {}
+
+impl AssociatedH5Type for hydro_euler::euler_2d::Conserved { type H5Type = [f64; 4]; }
+impl SynonymForH5Type<[f64; 4]> for hydro_euler::euler_2d::Conserved {}
+impl H5Conserved<[f64; 4]> for hydro_euler::euler_2d::Conserved {}
+
+
+
+
+// ============================================================================
+impl nicer_hdf5::H5Read for Tasks
 {
-    let cons = group.create_group("conserved")?;
-    let trcr = group.create_group("tracers")?;
-
-    for (i, (u, t)) in state.conserved.iter().zip(state.tracers.iter()).enumerate()
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        let block = &block_data[i];
-        let gname = format!("0:{:03}-{:03}", block.index.0, block.index.1);
-        let udata = u.mapv(Into::<[f64; 3]>::into);
-        cons.new_dataset::<[f64; 3]>().create(&gname, u.dim())?.write(&udata)?;
-        trcr.new_dataset::<Tracer>().create(&gname, t.len())?.write(t)?;
-    }
-    group.new_dataset::<i64>().create("iteration",  ())?.write_scalar(&state.iteration.to_integer())?;
-    group.new_dataset::<f64>().create("time",       ())?.write_scalar(&state.time)?;
-
-    Ok(())
+        nicer_hdf5::read_as_keyed_vec(group, name)
+    }    
 }
-
-pub fn read_state(filename: &str) -> Result<crate::State, hdf5::Error>
+impl nicer_hdf5::H5Write for Tasks
 {
-    let file = File::open(filename)?;
-    let cons = file.group("conserved")?;
-    let trcr = file.group("tracers")?;
-    let mut conserved = Vec::new();
-    let mut tracers   = Vec::new();
-
-    for key in cons.member_names()?
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
     {
-        let u = cons.dataset(&key)?
-            .read_dyn::<[f64; 3]>()?
-            .into_dimensionality::<ndarray::Ix2>()?
-            .mapv(Into::<hydro_iso2d::Conserved>::into);
-        conserved.push(u);
+        nicer_hdf5::write_as_keyed_vec(self.clone(), group, name)
     }
-
-    for key in trcr.member_names()?
-    {
-        let t = trcr.dataset(&key)?.read_raw::<Tracer>()?;
-        tracers.push(t);
-    }
-
-    let time      = file.dataset("time")     ?.read_scalar::<f64>()?;
-    let iteration = file.dataset("iteration")?.read_scalar::<usize>()?;
-
-    let result = crate::State{
-        conserved: conserved,
-        time: time,
-        iteration: (iteration as i64).into(),
-        tracers: tracers,
-    };
-    Ok(result)
 }
 
 
 
 
 // ============================================================================
-fn write_tasks(group: &hdf5::Group, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
+fn write_state<C: H5Conserved<T>, T: H5Type + Clone>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
 {
-    group.new_dataset::<f64>  ().create("checkpoint_next_time", ())?.write_scalar(&tasks.checkpoint_next_time)?;
-    group.new_dataset::<usize>().create("checkpoint_count"    , ())?.write_scalar(&tasks.checkpoint_count)?;
-    group.new_dataset::<f64>  ().create("tracer_output_next_time"  , ())?.write_scalar(&tasks.tracer_output_next_time)?;
-    group.new_dataset::<usize>().create("tracer_output_count"      , ())?.write_scalar(&tasks.tracer_output_count)?;
+    let state_group = group.create_group("state")?;
+    let cons = state_group.create_group("conserved")?;
+
+    for (b, u) in block_data.iter().zip(&state.conserved)
+    {
+        u.mapv(C::into).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
+    }
+    state.time.write(&state_group, "time")?;
+    state.iteration.write(&state_group, "iteration")?;
     Ok(())
 }
 
-pub fn read_tasks(filename: &str) -> Result<crate::Tasks, hdf5::Error>
+pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + Clone>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
 {
-    let file = File::open(filename)?;
-    let group = file.group("tasks")?;
+    |file| {
+        let file = File::open(file.to_string())?;
+        let state_group = file.group("state")?;
+        let cons = state_group.group("conserved")?;
+        let mut conserved = Vec::new();
 
-    let result = crate::Tasks{
-        checkpoint_next_time: group.dataset("checkpoint_next_time")?.read_scalar::<f64>()?,
-        checkpoint_count:     group.dataset("checkpoint_count")    ?.read_scalar::<usize>()?,
-        call_count_this_run: 0,
-        tasks_last_performed: Instant::now(),
-        //
-        tracer_output_next_time: group.dataset("tracer_output_next_time")?.read_scalar::<f64>()?,
-        tracer_output_count:     group.dataset("tracer_output_count")    ?.read_scalar::<usize>()?,
-    };
-    Ok(result)
+        for key in cons.member_names()?
+        {
+            let u = ndarray::Array2::<C::H5Type>::read(&cons, &key)?;
+            conserved.push(u.mapv(C::from).to_shared());
+        }
+        let time      = f64::read(&state_group, "time")?;
+        let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
+
+        let result = State{
+            conserved: conserved,
+            time: time,
+            iteration: iteration,
+        };
+        Ok(result)
+    }
 }
 
-
-
-
-// ============================================================================
-fn write_model(group: &hdf5::Group, model: &HashMap::<String, kind_config::Value>) -> Result<(), hdf5::Error>
+fn write_tasks(group: &Group, tasks: &Tasks) -> hdf5::Result<()>
 {
-    kind_config::io::write_to_hdf5(&group, &model)?;
-    Ok(())
+    tasks.write(group, "tasks")
 }
 
-pub fn read_model(filename: &str) -> Result<HashMap::<String, kind_config::Value>, hdf5::Error>
+pub fn read_tasks(file: verified::File) -> hdf5::Result<Tasks>
 {
-    let file = File::open(filename)?;
-    let group = file.group("model")?;
-    kind_config::io::read_from_hdf5(&group)
+    let file = File::open(file.to_string())?;
+    Tasks::read(&file, "tasks")
+}
+
+fn write_model(group: &Group, model: &HashMap::<String, kind_config::Value>) -> hdf5::Result<()>
+{
+    kind_config::io::write_to_hdf5(&group.create_group("model")?, &model)
+}
+
+pub fn read_model(file: verified::File) -> hdf5::Result<HashMap::<String, kind_config::Value>>
+{
+    kind_config::io::read_from_hdf5(&File::open(file.to_string())?.group("model")?)
+}
+
+pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>) -> hdf5::Result<()>
+{
+    let file = File::create(filename)?;
+    time_series.write(&file, "time_series")
+}
+
+pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
+{
+    let file = File::open(file.to_string())?;
+    Vec::<T>::read(&file, "time_series")
 }
 
 
@@ -126,17 +138,19 @@ pub fn write_tracer_subset(file: &hdf5::Group, tracers: &Vec<Vec<crate::tracers:
 
 
 
-
 // ============================================================================
-pub fn write_checkpoint(filename: &str, state: &crate::State, block_data: &Vec<crate::BlockData>, model: &HashMap::<String, kind_config::Value>, tasks: &crate::Tasks) -> Result<(), hdf5::Error>
+pub fn write_checkpoint<C: H5Conserved<T>, T: H5Type + Clone>(
+    filename: &str,
+    state: &State<C>,
+    block_data: &Vec<BlockData<C>>,
+    model: &HashMap::<String, kind_config::Value>,
+    tasks: &Tasks) -> hdf5::Result<()>
 {
     let file = File::create(filename)?;
-    let tasks_group = file.create_group("tasks")?;
-    let model_group = file.create_group("model")?;
 
     write_state(&file, &state, block_data)?;
-    write_tasks(&tasks_group, &tasks)?;
-    write_model(&model_group, &model)?;
+    write_tasks(&file, &tasks)?;
+    write_model(&file, &model)?;
 
     Ok(())
 }
