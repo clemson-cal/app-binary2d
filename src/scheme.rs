@@ -623,7 +623,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let block_index = block.index;
 
         let flux = async move {
-            let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map(|i| &pc_map[i])).await;
+            let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map_3by3(|i| &pc_map[i])).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
             let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
             (fx.to_shared(), fy.to_shared())
@@ -643,9 +643,9 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
             let (fx, fy) = if ! solver.need_flux_communication() {
                 flux_map[&block.index].clone().await
             } else {
-                let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map(|i| &flux_map[i])).await;
-                let fx_n = flux_n.map(|f| f.clone().0);
-                let fy_n = flux_n.map(|f| f.clone().1);
+                let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &flux_map[i])).await;
+                let fx_n = flux_n.map_3by3(|f| f.clone().0);
+                let fy_n = flux_n.map_3by3(|f| f.clone().1);
                 let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
@@ -1022,7 +1022,7 @@ pub fn advance_channels<H: Hydrodynamics>(
 
                 for (block_data, s) in block_data.iter().zip(senders.iter())
                 {
-                    s.send(mesh.neighbor_block_indexes(block_data.index).map(|i| block_primitive
+                    s.send(mesh.neighbor_block_indexes(block_data.index).map_3by3(|i| block_primitive
                         .get(i)
                         .unwrap()
                         .clone()))

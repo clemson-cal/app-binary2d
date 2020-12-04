@@ -509,7 +509,7 @@ dependencies = [
 [[package]]
 name = "ndarray-ops"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/ndarray-ops#3a0c635c45336d8ee00d617e422ef77fee84defe"
+source = "git+https://github.com/clemson-cal/ndarray-ops#fed8a09dcd64638428e66fa17b99c94c56aefb18"
 dependencies = [
  "ndarray",
 ]
