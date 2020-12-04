@@ -278,7 +278,7 @@ impl Tasks
         time_series.push(TimeSeriesSample{time: state.time});
     }
 
-    fn write_checkpoint<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(&mut self,
+    fn write_checkpoint<C: Conserved + hdf5::H5Type>(&mut self,
         state: &State<C>,
         time_series: &Vec<TimeSeriesSample>,
         block_data: &Vec<BlockData<C>>,
@@ -298,7 +298,7 @@ impl Tasks
         Ok(())
     }
 
-    fn perform<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(
+    fn perform<C: Conserved + hdf5::H5Type>(
         &mut self,
         state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample>,
@@ -471,11 +471,10 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 
 
 // ============================================================================
-fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
+fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
     where
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
-    C: io::H5Conserved<T>,
-    T: hdf5::H5Type + Clone
+    C: Conserved + hdf5::H5Type
 {
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
