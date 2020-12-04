@@ -42,6 +42,16 @@ fn main() -> anyhow::Result<()>
     let _silence_hdf5_errors = hdf5::silence_errors();
     let app = App::parse();
 
+    let parameters_not_to_supercede_on_restart = vec![
+        "num_blocks",
+        "block_size",
+        "one_body",
+        "domain_radius",
+        "hydro",
+        "mass_ratio",
+        "eccentricity",
+    ];
+
     let model = kind_config::Form::new()
         .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
@@ -64,7 +74,7 @@ fn main() -> anyhow::Result<()>
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
         .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
         .item("eccentricity"    , 0.0    , "Orbital eccentricity")
-        .merge_value_map_freezing(&app.restart_model_parameters()?, &vec!["num_blocks", "block_size", "one_body", "domain_radius"])?
+        .merge_value_map_freezing(&app.restart_model_parameters()?, &parameters_not_to_supercede_on_restart)?
         .merge_string_args(&app.model_parameters)?;
 
     let hydro: String = model.get("hydro").into();
@@ -268,7 +278,7 @@ impl Tasks
         time_series.push(TimeSeriesSample{time: state.time});
     }
 
-    fn write_checkpoint<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(&mut self,
+    fn write_checkpoint<C: Conserved + hdf5::H5Type>(&mut self,
         state: &State<C>,
         time_series: &Vec<TimeSeriesSample>,
         block_data: &Vec<BlockData<C>>,
@@ -288,7 +298,7 @@ impl Tasks
         Ok(())
     }
 
-    fn perform<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(
+    fn perform<C: Conserved + hdf5::H5Type>(
         &mut self,
         state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample>,
@@ -466,11 +476,10 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 
 
 // ============================================================================
-fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
+fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
     where
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
-    C: io::H5Conserved<T>,
-    T: hdf5::H5Type + Copy
+    C: Conserved + hdf5::H5Type
 {
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);

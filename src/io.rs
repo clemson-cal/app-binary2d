@@ -10,24 +10,6 @@ use crate::Tasks;
 
 
 // ============================================================================
-pub trait AssociatedH5Type { type H5Type: H5Type; }
-pub trait SynonymForH5Type<T: H5Type + Clone>: AssociatedH5Type<H5Type=T> + Into<T> + From<T> { }
-pub trait H5Conserved<T: H5Type + Clone>: Conserved + SynonymForH5Type<T> { }
-
-
-
-impl AssociatedH5Type for hydro_iso2d::Conserved { type H5Type = [f64; 3]; }
-impl SynonymForH5Type<[f64; 3]> for hydro_iso2d::Conserved {}
-impl H5Conserved<[f64; 3]> for hydro_iso2d::Conserved {}
-
-impl AssociatedH5Type for hydro_euler::euler_2d::Conserved { type H5Type = [f64; 4]; }
-impl SynonymForH5Type<[f64; 4]> for hydro_euler::euler_2d::Conserved {}
-impl H5Conserved<[f64; 4]> for hydro_euler::euler_2d::Conserved {}
-
-
-
-
-// ============================================================================
 impl nicer_hdf5::H5Read for Tasks
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
@@ -47,7 +29,7 @@ impl nicer_hdf5::H5Write for Tasks
 
 
 // ============================================================================
-fn write_state<C: H5Conserved<T>, T: H5Type + Clone>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
+fn write_state<C: Conserved + H5Type>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
 {
     let state_group = group.create_group("state")?;
     let solution_group = state_group.create_group("solution")?;
@@ -55,24 +37,15 @@ fn write_state<C: H5Conserved<T>, T: H5Type + Clone>(group: &Group, state: &Stat
     for (b, s) in block_data.iter().zip(&state.solution)
     {
         let block_group = solution_group.create_group(&format!("0:{:03}-{:03}", b.index.0, b.index.1))?;
-        s.conserved.mapv(C::into).write(&block_group, "conserved")?;
-
-        let ist = s.integrated_source_terms;
-        let ist: [T; 5] = [
-            ist[0].into(),
-            ist[1].into(),
-            ist[2].into(),
-            ist[3].into(),
-            ist[4].into(),
-        ];
-        block_group.new_dataset::<[T; 5]>().create("integrated_source_terms", ())?.write_scalar(&ist)?;
+        s.conserved.write(&block_group, "conserved")?;
+        block_group.new_dataset::<[C; 5]>().create("integrated_source_terms", ())?.write_scalar(&s.integrated_source_terms)?;
     }
     state.time.write(&state_group, "time")?;
     state.iteration.write(&state_group, "iteration")?;
     Ok(())
 }
 
-pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + Copy>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
+pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved + H5Type>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
 {
     |file| {
         let file = File::open(file.to_string())?;
@@ -83,18 +56,9 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + 
         for key in solution_group.member_names()?
         {
             let block_group = solution_group.group(&key)?;
-            let u = ndarray::Array2::<C::H5Type>::read(&block_group, "conserved")?;
-            let ist: [T; 5] = block_group.dataset("integrated_source_terms")?.read_scalar()?;
-            let ist: [C; 5] = [
-                ist[0].into(),
-                ist[1].into(),
-                ist[2].into(),
-                ist[3].into(),
-                ist[4].into(),
-            ];
             let s = BlockSolution{
-                conserved: u.mapv(C::from).to_shared(),
-                integrated_source_terms: ist,
+                conserved: ndarray::Array::read(&block_group, "conserved")?.to_shared(),
+                integrated_source_terms: block_group.dataset("integrated_source_terms")?.read_scalar()?,
             };
             solution.push(s);
         }
@@ -147,7 +111,7 @@ pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
 
 
 // ============================================================================
-pub fn write_checkpoint<C: H5Conserved<T>, T: H5Type + Clone>(
+pub fn write_checkpoint<C: Conserved + H5Type>(
     filename: &str,
     state: &State<C>,
     block_data: &Vec<BlockData<C>>,
