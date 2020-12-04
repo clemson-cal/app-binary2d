@@ -179,9 +179,10 @@ impl App
 // ============================================================================
 #[derive(hdf5::H5Type)]
 #[repr(C)]
-pub struct TimeSeriesSample
+pub struct TimeSeriesSample<C: hdf5::H5Type>
 {
     pub time: f64,
+    pub integrated_source_terms: [C; 5],
 }
 
 
@@ -269,18 +270,21 @@ impl Tasks
         }
     }
 
-    fn record_time_sample<C: Conserved>(&mut self,
+    fn record_time_sample<C: Conserved + hdf5::H5Type>(&mut self,
         state: &State<C>,
-        time_series: &mut Vec<TimeSeriesSample>,
+        time_series: &mut Vec<TimeSeriesSample<C>>,
         model: &kind_config::Form)
     {
         self.record_time_sample.advance(model.get("tsi").into());
-        time_series.push(TimeSeriesSample{time: state.time});
+        time_series.push(TimeSeriesSample{
+            time: state.time,
+            integrated_source_terms: [C::zeros(); 5],
+        });
     }
 
     fn write_checkpoint<C: Conserved + hdf5::H5Type>(&mut self,
         state: &State<C>,
-        time_series: &Vec<TimeSeriesSample>,
+        time_series: &Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
@@ -301,7 +305,7 @@ impl Tasks
     fn perform<C: Conserved + hdf5::H5Type>(
         &mut self,
         state: &State<C>,
-        time_series: &mut Vec<TimeSeriesSample>,
+        time_series: &mut Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
         mesh: &Mesh,
         model: &kind_config::Form,
@@ -387,7 +391,7 @@ struct Driver<System: Hydrodynamics + InitialModel>
     system: System,
 }
 
-impl<System: Hydrodynamics + InitialModel> Driver<System>
+impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserved: hdf5::H5Type
 {
     fn new(system: System) -> Self
     {
@@ -413,7 +417,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
             solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh)).collect()
         }
     }
-    fn initial_time_series(&self) -> Vec<TimeSeriesSample>
+    fn initial_time_series(&self) -> Vec<TimeSeriesSample<System::Conserved>>
     {
         Vec::new()
     }
