@@ -24,12 +24,12 @@ pub enum Direction { X, Y }
 
 // ============================================================================
 pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
-pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic
+pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic + hdf5::H5Type
 {
     fn zeros() -> Self;
 }
 
-pub trait Primitive: Clone + Copy + Send + Sync
+pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type
 {
     fn velocity_x(self) -> f64;
     fn velocity_y(self) -> f64;
@@ -91,8 +91,7 @@ pub struct BlockData<C: Conserved>
 pub struct BlockSolution<C: Conserved>
 {
     pub conserved: ArcArray<C, Ix2>,
-    pub integrated_source_terms: [C; 5],
-    // pub change_in_orbital_parameters: OrbitalParameters,
+    pub integrated_source_terms: ItemizedSourceTerms<C>,
 }
 
 
@@ -185,6 +184,73 @@ struct SourceTerms
     sink_rate1: f64,
     sink_rate2: f64,
     buffer_rate: f64,
+}
+
+
+
+
+// ============================================================================
+#[derive(Clone, Copy, hdf5::H5Type)]
+#[repr(C)]
+pub struct ItemizedSourceTerms<C: Conserved>
+{
+    pub sink1:   C,
+    pub sink2:   C,
+    pub grav1:   C,
+    pub grav2:   C,
+    pub buffer:  C,
+    pub cooling: C,
+}
+
+impl<C: Conserved> ItemizedSourceTerms<C>
+{
+    pub fn zeros() -> Self
+    {
+        Self{
+            sink1:   C::zeros(),
+            sink2:   C::zeros(),
+            grav1:   C::zeros(),
+            grav2:   C::zeros(),
+            buffer:  C::zeros(),
+            cooling: C::zeros(),
+        }
+    }
+
+    pub fn total(&self) -> C
+    {
+        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling
+    }
+
+    pub fn add_mut(&mut self, s0: &Self)
+    {
+        self.sink1   =  self.sink1   + s0.sink1;
+        self.sink2   =  self.sink2   + s0.sink2;
+        self.grav1   =  self.grav1   + s0.grav1;
+        self.grav2   =  self.grav2   + s0.grav2;
+        self.buffer  =  self.buffer  + s0.buffer;
+        self.cooling =  self.cooling + s0.cooling;
+    }
+
+    pub fn add(&self, s0: &Self) -> Self
+    {
+        let mut result = self.clone();
+        result.add_mut(s0);
+        return result;
+    }
+
+    pub fn weighted_average(&self, br: Rational64, s0: &Self) -> Self
+    {
+        use num::ToPrimitive;
+        let bf = br.to_f64().unwrap();
+        Self{
+            sink1:   self.sink1   * (-bf + 1.) + s0.sink1   * bf,
+            sink2:   self.sink2   * (-bf + 1.) + s0.sink2   * bf,
+            grav1:   self.grav1   * (-bf + 1.) + s0.grav1   * bf,
+            grav2:   self.grav2   * (-bf + 1.) + s0.grav2   * bf,
+            buffer:  self.buffer  * (-bf + 1.) + s0.buffer  * bf,
+            cooling: self.cooling * (-bf + 1.) + s0.cooling * bf,
+        }        
+    }
 }
 
 
@@ -406,14 +472,14 @@ pub trait Hydrodynamics: Copy + Send
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &OrbitalState) -> [Self::Conserved; 5];
+        two_body_state: &OrbitalState) -> ItemizedSourceTerms<Self::Conserved>;
 
     fn intercell_flux<'a>(
         &self,
         solver: &Solver,
-        l: &CellData<'a, Self::Primitive>, 
-        r: &CellData<'a, Self::Primitive>, 
-        f: &(f64, f64), 
+        l: &CellData<'a, Self::Primitive>,
+        r: &CellData<'a, Self::Primitive>,
+        f: &(f64, f64),
         two_body_state: &kepler_two_body::OrbitalState,
         axis: Direction) -> Self::Conserved;
 }
@@ -467,24 +533,26 @@ impl Hydrodynamics for Isothermal
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
+        two_body_state: &kepler_two_body::OrbitalState) -> ItemizedSourceTerms<Self::Conserved>
     {
         let st = solver.source_terms(two_body_state, x, y, conserved.density());
-        return [
-            hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
-            hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
-            conserved * (-st.sink_rate1 * dt),
-            conserved * (-st.sink_rate2 * dt),
-            (conserved - background_conserved) * (-dt * st.buffer_rate),
-        ];
+        
+        ItemizedSourceTerms{
+            grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
+            grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
+            sink1:   conserved * (-st.sink_rate1 * dt),
+            sink2:   conserved * (-st.sink_rate2 * dt),
+            buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
+            cooling: Self::Conserved::zeros(),
+        }
     }
 
     fn intercell_flux<'a>(
         &self,
         solver: &Solver,
-        l: &CellData<'a, hydro_iso2d::Primitive>, 
-        r: &CellData<'a, hydro_iso2d::Primitive>, 
-        f: &(f64, f64), 
+        l: &CellData<'a, hydro_iso2d::Primitive>,
+        r: &CellData<'a, hydro_iso2d::Primitive>,
+        f: &(f64, f64),
         two_body_state: &kepler_two_body::OrbitalState,
         axis: Direction) -> hydro_iso2d::Conserved
     {
@@ -506,7 +574,7 @@ impl Hydrodynamics for Isothermal
 
 
 
-// ============================================================================   
+// ============================================================================
 impl Euler
 {
     pub fn new() -> Self
@@ -543,19 +611,21 @@ impl Hydrodynamics for Euler
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &kepler_two_body::OrbitalState) -> [Self::Conserved; 5]
+        two_body_state: &kepler_two_body::OrbitalState) -> ItemizedSourceTerms<Self::Conserved>
     {
         let st        = solver.source_terms(two_body_state, x, y, conserved.mass_density());
         let primitive = conserved.to_primitive(self.gamma_law_index);
         let vx        = primitive.velocity_1();
         let vy        = primitive.velocity_2();
-        return [
-            hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
-            hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
-            conserved * (-st.sink_rate1 * dt),
-            conserved * (-st.sink_rate2 * dt),
-            (conserved - background_conserved) * (-dt * st.buffer_rate),
-        ];
+
+        ItemizedSourceTerms{
+            grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
+            grav2:   hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
+            sink1:   conserved * (-st.sink_rate1 * dt),
+            sink2:   conserved * (-st.sink_rate2 * dt),
+            buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
+            cooling: Self::Conserved::zeros(),
+        }
     }
 
     fn intercell_flux<'a>(
@@ -566,7 +636,7 @@ impl Hydrodynamics for Euler
         _: &(f64, f64),
         _: &kepler_two_body::OrbitalState,
         axis: Direction) -> Self::Conserved
-    {       
+    {
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
 
@@ -676,6 +746,8 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
 
 
 
+
+// ============================================================================
 impl<C: 'static + Conserved> BlockSolution<C>
 {
     async fn weighted_average(self, br: Rational64, s0: &BlockSolution<C>, runtime: &tokio::runtime::Runtime) -> BlockSolution<C>
@@ -687,10 +759,12 @@ impl<C: 'static + Conserved> BlockSolution<C>
         let s1 = self;
         let u0 = s0.conserved.clone();
         let u1 = s1.conserved.clone();
-        
+        let t0 = &s0.integrated_source_terms;
+        let t1 = &s1.integrated_source_terms;
+
         BlockSolution{
             conserved: runtime.spawn(async move { u1 * (-bf + 1.) + u0 * bf }).map(|u| u.unwrap()).await,
-            integrated_source_terms: [C::zeros(); 5],
+            integrated_source_terms: t1.weighted_average(br, t0),
         }
     }
 }
@@ -878,17 +952,19 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-        let sum_sources = |s: [H::Conserved; 5]| s[0] + s[1] + s[2] + s[3] + s[4];
 
-        let u1 = if ! solver.low_mem {
+        let s1 = if ! solver.low_mem {
             use ndarray::{s, azip};
 
             // ============================================================================
-            let sources = azip![
+            let itemized_sources = azip![
                 &uc,
                 &block.initial_conserved,
                 &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| sum_sources(self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state)));
+            .apply_collect(|&u, &u0, &(x, y)| self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state));
+
+            let sources = itemized_sources.map(ItemizedSourceTerms::total);
+            let integrated_source_terms = itemized_sources.fold(ItemizedSourceTerms::zeros(), |a, b| a.add(b));
 
             // ============================================================================
             let du = if solver.need_flux_communication() {
@@ -905,11 +981,16 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                     fy.slice(s![.., 1..])]
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            uc + du + sources
+            BlockSolution{
+                conserved: uc + du + sources,
+                integrated_source_terms: integrated_source_terms,
+            }
         } else {
 
+            let mut integrated_source_terms = ItemizedSourceTerms::zeros();
+
             // ============================================================================
-            Array::from_shape_fn(uc.dim(), |i| {
+            let u1 = Array::from_shape_fn(uc.dim(), |i| {
                 let m = if solver.need_flux_communication() {
                     (i.0 + 1, i.1 + 1)
                 } else {
@@ -921,13 +1002,18 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 let u0 = block.initial_conserved[i];
                 let (x, y)  = block.cell_centers[i];
                 let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
-                uc + df + sum_sources(sources)
-            }).to_shared()
+
+                integrated_source_terms.add_mut(&sources);
+
+                uc + df + sources.total()
+            }).to_shared();
+
+            BlockSolution{
+                conserved: u1,
+                integrated_source_terms: integrated_source_terms,
+            }
         };
-        BlockSolution{
-            conserved: u1,
-            integrated_source_terms: [H::Conserved::zeros(); 5],
-        }
+        return s1;
     }
 }
 

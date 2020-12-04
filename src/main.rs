@@ -26,6 +26,7 @@ use scheme::{
     BlockIndex,
     BlockData,
     Conserved,
+    ItemizedSourceTerms,
     Mesh,
     Solver,
     Hydrodynamics,
@@ -179,10 +180,10 @@ impl App
 // ============================================================================
 #[derive(hdf5::H5Type)]
 #[repr(C)]
-pub struct TimeSeriesSample<C: hdf5::H5Type>
+pub struct TimeSeriesSample<C: Conserved + hdf5::H5Type>
 {
     pub time: f64,
-    pub integrated_source_terms: [C; 5],
+    pub integrated_source_terms: ItemizedSourceTerms<C>,
 }
 
 
@@ -270,19 +271,26 @@ impl Tasks
         }
     }
 
-    fn record_time_sample<C: Conserved + hdf5::H5Type>(&mut self,
+    fn record_time_sample<C: Conserved>(&mut self,
         state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample<C>>,
         model: &kind_config::Form)
     {
         self.record_time_sample.advance(model.get("tsi").into());
-        time_series.push(TimeSeriesSample{
+
+        let integrated_source_terms = state.solution
+            .iter()
+            .map(|s| s.integrated_source_terms)
+            .fold(ItemizedSourceTerms::zeros(), |a, b| a.add(&b));
+
+        let sample = TimeSeriesSample{
             time: state.time,
-            integrated_source_terms: [C::zeros(); 5],
-        });
+            integrated_source_terms: integrated_source_terms,
+        };
+        time_series.push(sample);
     }
 
-    fn write_checkpoint<C: Conserved + hdf5::H5Type>(&mut self,
+    fn write_checkpoint<C: Conserved>(&mut self,
         state: &State<C>,
         time_series: &Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
@@ -302,7 +310,7 @@ impl Tasks
         Ok(())
     }
 
-    fn perform<C: Conserved + hdf5::H5Type>(
+    fn perform<C: Conserved>(
         &mut self,
         state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample<C>>,
@@ -406,7 +414,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
 
         BlockSolution{
             conserved: u0,
-            integrated_source_terms: [System::Conserved::zeros(); 5],
+            integrated_source_terms: ItemizedSourceTerms::zeros(),
         }
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
@@ -483,7 +491,7 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
     where
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
-    C: Conserved + hdf5::H5Type
+    C: Conserved
 {
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
