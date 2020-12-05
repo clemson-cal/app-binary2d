@@ -23,7 +23,7 @@ pub enum Direction { X, Y }
 
 // ============================================================================
 pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
-pub trait Conserved: Clone + Copy + Send + Sync + Arithmetic + hdf5::H5Type
+pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + Arithmetic
 {
     fn zeros() -> Self;
 }
@@ -99,12 +99,11 @@ pub struct BlockData<C: Conserved>
 
 // ============================================================================
 #[derive(Clone)]
-struct BlockState<C: Conserved>
+pub struct BlockSolution<C: Conserved>
 {
-    pub time: f64,
-    pub iteration: Rational64,
     pub conserved: ArcArray<C, Ix2>,
     pub integrated_source_terms: ItemizedSourceTerms<C>,
+    pub orbital_elements_change: OrbitalElements,
 }
 
 
@@ -112,10 +111,11 @@ struct BlockState<C: Conserved>
 
 // ============================================================================
 #[derive(Clone)]
-pub struct BlockSolution<C: Conserved>
+struct BlockState<C: Conserved>
 {
-    pub conserved: ArcArray<C, Ix2>,
-    pub integrated_source_terms: ItemizedSourceTerms<C>,
+    pub time: f64,
+    pub iteration: Rational64,
+    pub solution: BlockSolution<C>,
 }
 
 
@@ -753,7 +753,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let mesh     = mesh.clone();
         let flux_map = flux_map.clone();
         let block    = block.clone();
-        let uc       = solution.conserved.clone();
+        let solution = solution.clone();
 
         let s1 = async move {
             let (fx, fy) = if ! solver.need_flux_communication() {
@@ -766,7 +766,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            scheme.compute_block_updated_solution(uc, fx, fy, &block, &solver, &mesh, time, dt)
+            scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt)
         };
         runtime.spawn(s1).map(|s| s.unwrap()).shared()
     });
@@ -790,8 +790,28 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
         Self{
             time:      self.time      * (-bf + 1.) +  s0.time      * bf,
             iteration: self.iteration * (-br + 1 ) +  s0.iteration * br,
-            conserved: self.conserved * (-bf + 1.) + &s0.conserved * bf,
-            integrated_source_terms: self.integrated_source_terms.weighted_average(br, &s0.integrated_source_terms),
+            solution:  self.solution.weighted_average(br, &s0.solution),
+        }
+    }
+}
+
+impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
+{
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
+    {
+        // use godunov_core::runge_kutta::WeightedAverage;
+
+        let s1 = self;
+        let bf = br.to_f64().unwrap();
+        let u0 = s0.conserved.clone();
+        let u1 = s1.conserved.clone();
+        let t0 = &s0.integrated_source_terms;
+        let t1 = &s1.integrated_source_terms;
+
+        BlockSolution{
+            conserved: u1 * (-bf + 1.) + u0 * bf,
+            integrated_source_terms: t1.weighted_average(br, t0),
+            orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
         }
     }
 }
@@ -802,7 +822,7 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
 // ============================================================================
 impl<C: 'static + Conserved> BlockSolution<C>
 {
-    async fn weighted_average(self, br: Rational64, s0: &BlockSolution<C>, runtime: &tokio::runtime::Runtime) -> BlockSolution<C>
+    async fn weighted_average_async(self, br: Rational64, s0: &BlockSolution<C>, runtime: &tokio::runtime::Runtime) -> BlockSolution<C>
     {
         use futures::future::FutureExt;
         use godunov_core::runge_kutta::WeightedAverage;
@@ -817,6 +837,7 @@ impl<C: 'static + Conserved> BlockSolution<C>
         BlockSolution{
             conserved: runtime.spawn(async move { u1 * (-bf + 1.) + u0 * bf }).map(|u| u.unwrap()).await,
             integrated_source_terms: t1.weighted_average(br, t0),
+            orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
         }
     }
 }
@@ -836,7 +857,7 @@ impl<C: 'static + Conserved> State<C>
         let s_avg = self.solution
             .into_iter()
             .zip(&s0.solution)
-            .map(|(s1, s0)| s1.weighted_average(br, s0, runtime));
+            .map(|(s1, s0)| s1.weighted_average_async(br, s0, runtime));
 
         State{
             time:      self.time      * (-bf + 1.) + s0.time      * bf,
@@ -990,7 +1011,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
     fn compute_block_updated_solution(
         &self,
-        uc:       ArcArray<H::Conserved, Ix2>,
+        solution: BlockSolution<H::Conserved>,
+        // uc:       ArcArray<H::Conserved, Ix2>,
         fx:       ArcArray<H::Conserved, Ix2>,
         fy:       ArcArray<H::Conserved, Ix2>,
         block:    &BlockData<H::Conserved>,
@@ -1009,7 +1031,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
             // ============================================================================
             let itemized_sources = azip![
-                &uc,
+                &solution.conserved,
                 &block.initial_conserved,
                 &block.cell_centers]
             .apply_collect(|&u, &u0, &(x, y)| self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state));
@@ -1033,15 +1055,16 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
             BlockSolution{
-                conserved: uc + du + sources,
+                conserved: solution.conserved + du + sources,
                 integrated_source_terms: integrated_source_terms,
+                orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
             }
         } else {
 
             let mut integrated_source_terms = ItemizedSourceTerms::zeros();
 
             // ============================================================================
-            let u1 = ArcArray::from_shape_fn(uc.dim(), |i| {
+            let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
                 let m = if solver.need_flux_communication() {
                     (i.0 + 1, i.1 + 1)
                 } else {
@@ -1049,7 +1072,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 };
                 let du = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx +
                           (fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
-                let uc = uc[i];
+                let uc = solution.conserved[i];
                 let u0 = block.initial_conserved[i];
                 let (x, y)  = block.cell_centers[i];
                 let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
@@ -1062,6 +1085,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             BlockSolution{
                 conserved: u1,
                 integrated_source_terms: integrated_source_terms,
+                orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
             }
         };
         return s1;
@@ -1099,17 +1123,18 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 {
     let scheme = UpdateScheme::new(hydro);
 
-    sender.send(scheme.compute_block_primitive(state.conserved.clone())).unwrap();
+    sender.send(scheme.compute_block_primitive(state.solution.conserved.clone())).unwrap();
+
+    let solution = state.solution;
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
-    let s1 = scheme.compute_block_updated_solution(state.conserved, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
+    let s1 = scheme.compute_block_updated_solution(solution, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
 
     BlockState::<H::Conserved>{
         time: state.time + dt,
         iteration: state.iteration + 1,
-        conserved: s1.conserved,
-        integrated_source_terms: s1.integrated_source_terms,
+        solution: s1,
     }
 }
 
@@ -1118,36 +1143,27 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 
 // ============================================================================
 fn advance_channels_internal<H: Hydrodynamics>(
-    conserved:                &mut ArcArray<H::Conserved, Ix2>,
-    integrated_source_terms:  &mut ItemizedSourceTerms<H::Conserved>,
+    state:      &mut BlockState<H::Conserved>,
     hydro:      H,
     block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
     mesh:       &Mesh,
     sender:     &crossbeam::Sender<Array<H::Primitive, Ix2>>,
     receiver:   &crossbeam::Receiver<[[ArcArray<H::Primitive, Ix2>; 3]; 3]>,
-    time:       f64,
     dt:         f64,
     fold:       usize)
 {
     use std::convert::TryFrom;
 
     let update = |state| advance_channels_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
-    let mut state = BlockState {
-        time: time,
-        iteration: Rational64::new(0, 1),
-        conserved: conserved.clone(),
-        integrated_source_terms: integrated_source_terms.clone(),
-    };
     let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
+    let mut s = state.clone();
 
     for _ in 0..fold
     {
-        state = rk_order.advance(state, update);
+        s = rk_order.advance(s, update);
     }
-
-    *conserved = state.conserved;
-    *integrated_source_terms = state.integrated_source_terms;
+    *state = s;
 }
 
 
@@ -1169,7 +1185,6 @@ pub fn advance_channels<H: Hydrodynamics>(
 
     crossbeam::scope(|scope|
     {
-        let time = state.time;
         let mut receivers       = Vec::new();
         let mut senders         = Vec::new();
         let mut block_primitive = HashMap::new();
@@ -1182,7 +1197,13 @@ pub fn advance_channels<H: Hydrodynamics>(
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_channels_internal(&mut s.conserved, &mut s.integrated_source_terms, hydro, b, solver, mesh, &their_s, &their_r, time, dt, fold));
+            let mut state = BlockState {
+                time: state.time,
+                iteration: state.iteration,
+                solution: s.clone(),
+            };
+
+            scope.spawn(move |_| advance_channels_internal(&mut state, hydro, b, solver, mesh, &their_s, &their_r, dt, fold));
         }
 
         for _ in 0..fold

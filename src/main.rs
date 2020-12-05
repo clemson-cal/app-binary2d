@@ -415,6 +415,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
         BlockSolution{
             conserved: u0,
             integrated_source_terms: ItemizedSourceTerms::zeros(),
+            orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
         }
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
