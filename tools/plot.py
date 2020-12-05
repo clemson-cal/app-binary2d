@@ -35,7 +35,7 @@ def conserved(filename, field):
     bs = h5f['model']['block_size'][()]
     result = np.zeros([bs * nb, bs * nb])
     for (i, j), v in blocks:
-        result[i*bs:i*bs+bs, j*bs:j*bs+bs] = v[...][:,:,field]
+        result[i*bs:i*bs+bs, j*bs:j*bs+bs] = v[()][str(field)]
     return result
 
 
