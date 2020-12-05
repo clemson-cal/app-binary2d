@@ -887,13 +887,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 } else {
                     i
                 };
-                let df = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx) +
-                         ((fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
+                let du = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx +
+                          (fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
                 let uc = uc[i];
                 let u0 = block.initial_conserved[i];
                 let (x, y)  = block.cell_centers[i];
                 let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
-                uc + df + sum_sources(sources)
+
+                uc + du + sum_sources(sources)
             })
         }
     }
