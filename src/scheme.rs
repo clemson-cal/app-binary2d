@@ -799,8 +799,6 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
 {
     fn weighted_average(self, br: Rational64, s0: &Self) -> Self
     {
-        // use godunov_core::runge_kutta::WeightedAverage;
-
         let s1 = self;
         let bf = br.to_f64().unwrap();
         let u0 = s0.conserved.clone();
@@ -820,44 +818,20 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
 
 
 // ============================================================================
-impl<C: 'static + Conserved> BlockSolution<C>
-{
-    async fn weighted_average_async(self, br: Rational64, s0: &BlockSolution<C>, runtime: &tokio::runtime::Runtime) -> BlockSolution<C>
-    {
-        use futures::future::FutureExt;
-        use godunov_core::runge_kutta::WeightedAverage;
-
-        let s1 = self;
-        let bf = br.to_f64().unwrap();
-        let u0 = s0.conserved.clone();
-        let u1 = s1.conserved.clone();
-        let t0 = &s0.integrated_source_terms;
-        let t1 = &s1.integrated_source_terms;
-
-        BlockSolution{
-            conserved: runtime.spawn(async move { u1 * (-bf + 1.) + u0 * bf }).map(|u| u.unwrap()).await,
-            integrated_source_terms: t1.weighted_average(br, t0),
-            orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
-        }
-    }
-}
-
-
-
-
-// ============================================================================
 impl<C: 'static + Conserved> State<C>
 {
     async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
     {
         use futures::future::join_all;
+        use godunov_core::runge_kutta::WeightedAverage;
 
         let bf = br.to_f64().unwrap();
-
         let s_avg = self.solution
             .into_iter()
             .zip(&s0.solution)
-            .map(|(s1, s0)| s1.weighted_average_async(br, s0, runtime));
+            .map(|(s1, s0)| (s1, s0.clone()))
+            .map(|(s1, s0)| runtime.spawn(async move { s1.weighted_average(br, &s0) }))
+            .map(|f| async { f.await.unwrap() });
 
         State{
             time:      self.time      * (-bf + 1.) + s0.time      * bf,
