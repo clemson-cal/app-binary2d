@@ -13,23 +13,26 @@ use kepler_two_body::{OrbitalElements, OrbitalState};
 
 
 // ============================================================================
-pub type BlockIndex = (usize, usize);
-
 #[derive(Copy, Clone)]
 pub enum Direction { X, Y }
+pub type BlockIndex = (usize, usize);
 
 
 
 
 // ============================================================================
 pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
-pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + Arithmetic
-{
+pub trait Zeros {
     fn zeros() -> Self;
 }
 
-pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type
-{
+pub trait ItemizeData: Zeros + Arithmetic + Copy + Clone + hdf5::H5Type {
+}
+
+pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + ItemizeData {
+}
+
+pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type {
     fn velocity_x(self) -> f64;
     fn velocity_y(self) -> f64;
     fn mass_density(self) -> f64;
@@ -41,12 +44,15 @@ pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type
 // ============================================================================
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
+impl Arithmetic for kepler_two_body::OrbitalElements {}
 
 
 
 
 // ============================================================================
-impl Conserved for hydro_iso2d::Conserved
+impl Conserved   for hydro_iso2d::Conserved {}
+impl ItemizeData for hydro_iso2d::Conserved {}
+impl Zeros       for hydro_iso2d::Conserved
 {
     fn zeros() -> Self
     {
@@ -54,7 +60,9 @@ impl Conserved for hydro_iso2d::Conserved
     }
 }
 
-impl Conserved for hydro_euler::euler_2d::Conserved
+impl Conserved   for hydro_euler::euler_2d::Conserved {}
+impl ItemizeData for hydro_euler::euler_2d::Conserved {}
+impl Zeros       for hydro_euler::euler_2d::Conserved
 {
     fn zeros() -> Self
     {
@@ -84,6 +92,18 @@ impl Primitive for hydro_euler::euler_2d::Primitive
 
 
 // ============================================================================
+impl ItemizeData for kepler_two_body::OrbitalElements {}
+impl Zeros       for kepler_two_body::OrbitalElements {
+    fn zeros() -> Self
+    {
+        Self(0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+
+
+
+// ============================================================================
 #[derive(Clone)]
 pub struct BlockData<C: Conserved>
 {
@@ -102,8 +122,8 @@ pub struct BlockData<C: Conserved>
 pub struct BlockSolution<C: Conserved>
 {
     pub conserved: ArcArray<C, Ix2>,
-    pub integrated_source_terms: ItemizedSourceTerms<C>,
-    pub orbital_elements_change: OrbitalElements,
+    pub integrated_source_terms: ItemizedChange<C>,
+    pub orbital_elements_change: ItemizedChange<OrbitalElements>,
 }
 
 
@@ -216,7 +236,7 @@ struct SourceTerms
 // ============================================================================
 #[derive(Clone, Copy, hdf5::H5Type)]
 #[repr(C)]
-pub struct ItemizedSourceTerms<C: Conserved>
+pub struct ItemizedChange<C: ItemizeData>
 {
     pub sink1:   C,
     pub sink2:   C,
@@ -230,7 +250,7 @@ pub struct ItemizedSourceTerms<C: Conserved>
 
 
 // ============================================================================
-impl<C: Conserved> ItemizedSourceTerms<C>
+impl<C: ItemizeData> ItemizedChange<C>
 {
     pub fn zeros() -> Self
     {
@@ -271,7 +291,7 @@ impl<C: Conserved> ItemizedSourceTerms<C>
 
 
 // ============================================================================
-impl<C: Conserved> runge_kutta::WeightedAverage for ItemizedSourceTerms<C>
+impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
 {
     fn weighted_average(self, br: Rational64, s0: &Self) -> Self
     {
@@ -506,7 +526,7 @@ pub trait Hydrodynamics: Copy + Send
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &OrbitalState) -> ItemizedSourceTerms<Self::Conserved>;
+        two_body_state: &OrbitalState) -> ItemizedChange<Self::Conserved>;
 
     fn intercell_flux<'a>(
         &self,
@@ -567,11 +587,11 @@ impl Hydrodynamics for Isothermal
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &kepler_two_body::OrbitalState) -> ItemizedSourceTerms<Self::Conserved>
+        two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
         let st = solver.source_terms(two_body_state, x, y, conserved.density());
         
-        ItemizedSourceTerms{
+        ItemizedChange{
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
             grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
             sink1:   conserved * (-st.sink_rate1 * dt),
@@ -645,14 +665,14 @@ impl Hydrodynamics for Euler
         x: f64,
         y: f64,
         dt: f64,
-        two_body_state: &kepler_two_body::OrbitalState) -> ItemizedSourceTerms<Self::Conserved>
+        two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
         let st        = solver.source_terms(two_body_state, x, y, conserved.mass_density());
         let primitive = conserved.to_primitive(self.gamma_law_index);
         let vx        = primitive.velocity_1();
         let vy        = primitive.velocity_2();
 
-        ItemizedSourceTerms{
+        ItemizedChange{
             grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
             grav2:   hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
             sink1:   conserved * (-st.sink_rate1 * dt),
@@ -805,11 +825,13 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
         let u1 = s1.conserved.clone();
         let t0 = &s0.integrated_source_terms;
         let t1 = &s1.integrated_source_terms;
+        let e0 = &s0.orbital_elements_change;
+        let e1 = &s1.orbital_elements_change;
 
         BlockSolution{
             conserved: u1 * (-bf + 1.) + u0 * bf,
             integrated_source_terms: t1.weighted_average(br, t0),
-            orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
+            orbital_elements_change: e1.weighted_average(br, e0),
         }
     }
 }
@@ -986,7 +1008,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn compute_block_updated_solution(
         &self,
         solution: BlockSolution<H::Conserved>,
-        // uc:       ArcArray<H::Conserved, Ix2>,
         fx:       ArcArray<H::Conserved, Ix2>,
         fy:       ArcArray<H::Conserved, Ix2>,
         block:    &BlockData<H::Conserved>,
@@ -1010,8 +1031,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 &block.cell_centers]
             .apply_collect(|&u, &u0, &(x, y)| self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state));
 
-            let sources = itemized_sources.map(ItemizedSourceTerms::total);
-            let integrated_source_terms = itemized_sources.fold(ItemizedSourceTerms::zeros(), |a, b| a.add(b));
+            let sources = itemized_sources.map(ItemizedChange::total);
+            let ds = itemized_sources.fold(ItemizedChange::zeros(), |a, b| a.add(b));
 
             // ============================================================================
             let du = if solver.need_flux_communication() {
@@ -1028,14 +1049,18 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                     fy.slice(s![.., 1..])]
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
+            // TODO
+            let de = ItemizedChange::zeros();
+            //solver.orbital_elements.perturb(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0).unwrap() - solver.orbital_elements;
+
             BlockSolution{
                 conserved: solution.conserved + du + sources,
-                integrated_source_terms: integrated_source_terms,
-                orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
+                integrated_source_terms: solution.integrated_source_terms.add(&ds),
+                orbital_elements_change: solution.orbital_elements_change.add(&de),
             }
         } else {
 
-            let mut integrated_source_terms = ItemizedSourceTerms::zeros();
+            let mut ds = ItemizedChange::zeros();
 
             // ============================================================================
             let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
@@ -1051,15 +1076,19 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 let (x, y)  = block.cell_centers[i];
                 let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
 
-                integrated_source_terms.add_mut(&sources);
+                ds.add_mut(&sources);
 
                 uc + du + sources.total()
             });
 
+            // TODO
+            let de = ItemizedChange::zeros();
+            //solver.orbital_elements.perturb(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0).unwrap() - solver.orbital_elements;
+
             BlockSolution{
                 conserved: u1,
-                integrated_source_terms: integrated_source_terms,
-                orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
+                integrated_source_terms: solution.integrated_source_terms.add(&ds),
+                orbital_elements_change: solution.orbital_elements_change.add(&de),
             }
         };
         return s1;

@@ -6,7 +6,7 @@ use io_logical::nicer_hdf5::{H5Read, H5Write};
 use crate::Tasks;
 use crate::scheme::{Hydrodynamics,
     Conserved,
-    ItemizedSourceTerms,
+    ItemizedChange,
     State,
     BlockSolution,
     BlockData
@@ -37,6 +37,8 @@ impl nicer_hdf5::H5Write for Tasks
 // ============================================================================
 fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
 {
+    type E = kepler_two_body::OrbitalElements;
+
     let state_group = group.create_group("state")?;
     let solution_group = state_group.create_group("solution")?;
 
@@ -44,7 +46,8 @@ fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<B
     {
         let block_group = solution_group.create_group(&format!("0:{:03}-{:03}", b.index.0, b.index.1))?;
         s.conserved.write(&block_group, "conserved")?;
-        block_group.new_dataset::<ItemizedSourceTerms<C>>().create("integrated_source_terms", ())?.write_scalar(&s.integrated_source_terms)?;
+        block_group.new_dataset::<ItemizedChange<C>>().create("integrated_source_terms", ())?.write_scalar(&s.integrated_source_terms)?;
+        block_group.new_dataset::<ItemizedChange<E>>().create("orbital_elements_change", ())?.write_scalar(&s.orbital_elements_change)?;
     }
     state.time.write(&state_group, "time")?;
     state.iteration.write(&state_group, "iteration")?;
@@ -65,7 +68,7 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(_: &H) -> impl Fn
             let s = BlockSolution{
                 conserved: ndarray::Array::read(&block_group, "conserved")?.to_shared(),
                 integrated_source_terms: block_group.dataset("integrated_source_terms")?.read_scalar()?,
-                orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
+                orbital_elements_change: block_group.dataset("orbital_elements_change")?.read_scalar()?,
             };
             solution.push(s);
         }

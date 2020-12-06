@@ -26,7 +26,8 @@ use scheme::{
     BlockIndex,
     BlockData,
     Conserved,
-    ItemizedSourceTerms,
+    ItemizeData,
+    ItemizedChange,
     Mesh,
     Solver,
     Hydrodynamics,
@@ -180,10 +181,10 @@ impl App
 // ============================================================================
 #[derive(hdf5::H5Type)]
 #[repr(C)]
-pub struct TimeSeriesSample<C: Conserved + hdf5::H5Type>
+pub struct TimeSeriesSample<C: Conserved>
 {
     pub time: f64,
-    pub integrated_source_terms: ItemizedSourceTerms<C>,
+    pub integrated_source_terms: ItemizedChange<C>,
 }
 
 
@@ -281,7 +282,7 @@ impl Tasks
         let integrated_source_terms = state.solution
             .iter()
             .map(|s| s.integrated_source_terms)
-            .fold(ItemizedSourceTerms::zeros(), |a, b| a.add(&b));
+            .fold(ItemizedChange::zeros(), |a, b| a.add(&b));
 
         let sample = TimeSeriesSample{
             time: state.time,
@@ -414,8 +415,8 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
 
         BlockSolution{
             conserved: u0,
-            integrated_source_terms: ItemizedSourceTerms::zeros(),
-            orbital_elements_change: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
+            integrated_source_terms: ItemizedChange::zeros(),
+            orbital_elements_change: ItemizedChange::zeros(),
         }
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
