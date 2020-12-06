@@ -290,14 +290,35 @@ impl<C: ItemizeData> ItemizedChange<C>
         self.cooling =  self.cooling + s0.cooling;
     }
 
+    pub fn mul_mut(&mut self, s: f64)
+    {
+        self.sink1   =  self.sink1   * s;
+        self.sink2   =  self.sink2   * s;
+        self.grav1   =  self.grav1   * s;
+        self.grav2   =  self.grav2   * s;
+        self.buffer  =  self.buffer  * s;
+        self.cooling =  self.cooling * s;
+    }
+
     pub fn add(&self, s0: &Self) -> Self
     {
         let mut result = self.clone();
         result.add_mut(s0);
         return result;
     }
+
+    pub fn mul(&self, s: f64) -> Self
+    {
+        let mut result = self.clone();
+        result.mul_mut(s);
+        return result;
+    }
 }
 
+
+
+
+// ============================================================================
 impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
 {
     fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements
@@ -1082,7 +1103,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             .apply_collect(|&u, &u0, &(x, y)| self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state));
 
             let sources = itemized_sources.map(ItemizedChange::total);
-            let ds = itemized_sources.fold(ItemizedChange::zeros(), |a, b| a.add(b));
+            let ds = itemized_sources.fold(ItemizedChange::zeros(), |a, b| a.add(b)).mul(dx * dy);
             let de = ds.perturbation(time, solver.orbital_elements);
 
             // ============================================================================
@@ -1099,7 +1120,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                     fy.slice(s![..,..-1]),
                     fy.slice(s![.., 1..])]
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
-
 
             BlockSolution{
                 conserved: solution.conserved + du + sources,
@@ -1129,6 +1149,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 uc + du + sources.total()
             });
 
+            let ds = ds.mul(dx * dy);
             let de = ds.perturbation(time, solver.orbital_elements);
 
             BlockSolution{
