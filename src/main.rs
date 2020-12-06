@@ -17,15 +17,16 @@ static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
-use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
 use scheme::{
     State,
-    Conserved,
+    BlockSolution,
     BlockIndex,
     BlockData,
+    Conserved,
+    ItemizedChange,
     Mesh,
     Solver,
     Hydrodynamics,
@@ -179,9 +180,11 @@ impl App
 // ============================================================================
 #[derive(hdf5::H5Type)]
 #[repr(C)]
-pub struct TimeSeriesSample
+pub struct TimeSeriesSample<C: Conserved>
 {
     pub time: f64,
+    pub integrated_source_terms: ItemizedChange<C>,
+    pub orbital_elements_change: ItemizedChange<kepler_two_body::OrbitalElements>,
 }
 
 
@@ -271,16 +274,27 @@ impl Tasks
 
     fn record_time_sample<C: Conserved>(&mut self,
         state: &State<C>,
-        time_series: &mut Vec<TimeSeriesSample>,
+        time_series: &mut Vec<TimeSeriesSample<C>>,
         model: &kind_config::Form)
     {
         self.record_time_sample.advance(model.get("tsi").into());
-        time_series.push(TimeSeriesSample{time: state.time});
+
+        let totals = state.solution
+            .iter()
+            .map(|s| (s.integrated_source_terms, s.orbital_elements_change))
+            .fold((ItemizedChange::zeros(), ItemizedChange::zeros()), |a, b| (a.0.add(&b.0), a.1.add(&b.1)));
+
+        let sample = TimeSeriesSample{
+            time: state.time,
+            integrated_source_terms: totals.0,
+            orbital_elements_change: totals.1,
+        };
+        time_series.push(sample);
     }
 
-    fn write_checkpoint<C: Conserved + hdf5::H5Type>(&mut self,
+    fn write_checkpoint<C: Conserved>(&mut self,
         state: &State<C>,
-        time_series: &Vec<TimeSeriesSample>,
+        time_series: &Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
@@ -298,10 +312,10 @@ impl Tasks
         Ok(())
     }
 
-    fn perform<C: Conserved + hdf5::H5Type>(
+    fn perform<C: Conserved>(
         &mut self,
         state: &State<C>,
-        time_series: &mut Vec<TimeSeriesSample>,
+        time_series: &mut Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
         mesh: &Mesh,
         model: &kind_config::Form,
@@ -387,28 +401,34 @@ struct Driver<System: Hydrodynamics + InitialModel>
     system: System,
 }
 
-impl<System: Hydrodynamics + InitialModel> Driver<System>
+impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserved: hdf5::H5Type
 {
     fn new(system: System) -> Self
     {
         Self{system: system}
     }
-    fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<System::Conserved, Ix2>
+    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh) -> BlockSolution<System::Conserved>
     {
-        mesh.cell_centers(block_index)
+        let u0 = mesh.cell_centers(block_index)
             .mapv(|x| self.system.primitive_at(x))
             .mapv(|p| self.system.to_conserved(p))
-            .to_shared()
+            .to_shared();
+
+        BlockSolution{
+            conserved: u0,
+            integrated_source_terms: ItemizedChange::zeros(),
+            orbital_elements_change: ItemizedChange::zeros(),
+        }
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
     {
         State{
             time: 0.0,
             iteration: Rational64::new(0, 1),
-            conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect()
-        } 
+            solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh)).collect()
+        }
     }
-    fn initial_time_series(&self) -> Vec<TimeSeriesSample>
+    fn initial_time_series(&self) -> Vec<TimeSeriesSample<System::Conserved>>
     {
         Vec::new()
     }
@@ -419,7 +439,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
                 cell_centers:      mesh.cell_centers(block_index).to_shared(),
                 face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
                 face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
-                initial_conserved: self.initial_conserved(block_index, &mesh).to_shared(),
+                initial_conserved: self.initial_solution(block_index, &mesh).conserved,
                 index: block_index,
             }
         }).collect()
@@ -474,7 +494,7 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
     where
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
-    C: Conserved + hdf5::H5Type
+    C: Conserved
 {
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);

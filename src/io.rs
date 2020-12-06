@@ -3,8 +3,14 @@ use hdf5::{File, Group, H5Type};
 use io_logical::verified;
 use io_logical::nicer_hdf5;
 use io_logical::nicer_hdf5::{H5Read, H5Write};
-use crate::scheme::{Hydrodynamics, Conserved, State, BlockData};
 use crate::Tasks;
+use crate::scheme::{Hydrodynamics,
+    Conserved,
+    ItemizedChange,
+    State,
+    BlockSolution,
+    BlockData
+};
 
 
 
@@ -29,38 +35,48 @@ impl nicer_hdf5::H5Write for Tasks
 
 
 // ============================================================================
-fn write_state<C: Conserved + H5Type>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
+fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
 {
-    let state_group = group.create_group("state")?;
-    let cons = state_group.create_group("conserved")?;
+    type E = kepler_two_body::OrbitalElements;
 
-    for (b, u) in block_data.iter().zip(&state.conserved)
+    let state_group = group.create_group("state")?;
+    let solution_group = state_group.create_group("solution")?;
+
+    for (b, s) in block_data.iter().zip(&state.solution)
     {
-        u.write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
+        let block_group = solution_group.create_group(&format!("0:{:03}-{:03}", b.index.0, b.index.1))?;
+        s.conserved.write(&block_group, "conserved")?;
+        block_group.new_dataset::<ItemizedChange<C>>().create("integrated_source_terms", ())?.write_scalar(&s.integrated_source_terms)?;
+        block_group.new_dataset::<ItemizedChange<E>>().create("orbital_elements_change", ())?.write_scalar(&s.orbital_elements_change)?;
     }
     state.time.write(&state_group, "time")?;
     state.iteration.write(&state_group, "iteration")?;
     Ok(())
 }
 
-pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved + H5Type>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
+pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
 {
     |file| {
         let file = File::open(file.to_string())?;
         let state_group = file.group("state")?;
-        let cons = state_group.group("conserved")?;
-        let mut conserved = Vec::new();
+        let solution_group = state_group.group("solution")?;
+        let mut solution = Vec::new();
 
-        for key in cons.member_names()?
+        for key in solution_group.member_names()?
         {
-            let u = ndarray::Array2::<C>::read(&cons, &key)?;
-            conserved.push(u.to_shared());
+            let block_group = solution_group.group(&key)?;
+            let s = BlockSolution{
+                conserved: ndarray::Array::read(&block_group, "conserved")?.to_shared(),
+                integrated_source_terms: block_group.dataset("integrated_source_terms")?.read_scalar()?,
+                orbital_elements_change: block_group.dataset("orbital_elements_change")?.read_scalar()?,
+            };
+            solution.push(s);
         }
         let time      = f64::read(&state_group, "time")?;
         let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
 
         let result = State{
-            conserved: conserved,
+            solution: solution,
             time: time,
             iteration: iteration,
         };
@@ -105,7 +121,7 @@ pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
 
 
 // ============================================================================
-pub fn write_checkpoint<C: Conserved + H5Type>(
+pub fn write_checkpoint<C: Conserved>(
     filename: &str,
     state: &State<C>,
     block_data: &Vec<BlockData<C>>,
