@@ -323,7 +323,7 @@ checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 [[package]]
 name = "godunov-core"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/godunov-core#881ae88af0b3e451ebfda6ff9ecbf9d80163c46c"
+source = "git+https://github.com/clemson-cal/godunov-core#bf2750575658a89876de71a975c12e50d939123d"
 dependencies = [
  "async-trait",
  "ndarray",

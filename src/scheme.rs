@@ -389,6 +389,12 @@ pub struct Solver
 
 impl Solver
 {
+    pub fn runge_kutta(&self) -> runge_kutta::RungeKuttaOrder
+    {
+        use std::convert::TryFrom;
+        runge_kutta::RungeKuttaOrder::try_from(self.rk_order).expect("illegal RK order")
+    }
+
     pub fn need_flux_communication(&self) -> bool
     {
         self.force_flux_comm
@@ -948,12 +954,7 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
 
     for _ in 0..fold {
-        state = match solver.rk_order {
-            1 => runtime.block_on(runge_kutta::async_advance_rk1(state, update, runtime)),
-            2 => runtime.block_on(runge_kutta::async_advance_rk2(state, update, runtime)),
-            3 => runtime.block_on(runge_kutta::async_advance_rk3(state, update, runtime)),
-            _ => panic!("illegal RK order {}", solver.rk_order),
-        }
+        state = runtime.block_on(solver.runge_kutta().advance_async(state, update, runtime));
     }
     return state;
 }
@@ -1168,15 +1169,12 @@ fn advance_channels_internal<H: Hydrodynamics>(
     dt:         f64,
     fold:       usize)
 {
-    use std::convert::TryFrom;
-
     let update = |state| advance_channels_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
-    let rk_order = runge_kutta::RungeKuttaOrder::try_from(solver.rk_order).unwrap();
     let mut s = state.clone();
 
     for _ in 0..fold
     {
-        s = rk_order.advance(s, update);
+        s = solver.runge_kutta().advance(s, update);
     }
     *state = s;
 }
