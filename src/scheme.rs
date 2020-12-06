@@ -783,7 +783,12 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let primitive = async move {
             scheme.compute_block_primitive(uc).to_shared()
         };
-        (block.index, runtime.spawn(primitive).map(|p| p.unwrap()).shared())
+        let primitive = runtime.spawn(primitive);
+        let primitive = async {
+            primitive.await.unwrap()
+        };
+        return (block.index, primitive.shared());
+
     }).collect();
 
     let flux_map: HashMap<_, _> = block_data.iter().map(|block|
@@ -800,7 +805,12 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
             let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
             (fx.to_shared(), fy.to_shared())
         };
-        (block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared())
+        let flux = runtime.spawn(flux);
+        let flux = async {
+            flux.await.unwrap()
+        };
+        return (block_index, flux.shared());
+
     }).collect();
 
     let s1_vec = state.solution.iter().zip(block_data).map(|(solution, block)|
@@ -824,7 +834,11 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
             };
             scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt)
         };
-        runtime.spawn(s1).map(|s| s.unwrap()).shared()
+        let s1 = runtime.spawn(s1);
+        let s1 = async {
+            s1.await.unwrap()
+        };
+        return s1;
     });
 
     State {
@@ -844,8 +858,8 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
     {
         let bf = br.to_f64().unwrap();
         Self{
-            time:      self.time      * (-bf + 1.) +  s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) +  s0.iteration * br,
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
             solution:  self.solution.weighted_average(br, &s0.solution),
         }
     }
