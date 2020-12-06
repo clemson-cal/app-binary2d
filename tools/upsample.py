@@ -57,4 +57,6 @@ for block in old_solution:
     new_conserved[1::2, 0::2] = u
     new_conserved[1::2, 1::2] = u
 
-    new_solution_block.copy(old_solution_block['integrated_source_terms'], 'integrated_source_terms')
+    for key in old_solution_block:
+        if key != 'conserved':
+            new_solution_block.copy(old_solution_block[key], key)
