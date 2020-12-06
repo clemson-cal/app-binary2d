@@ -184,6 +184,7 @@ pub struct TimeSeriesSample<C: Conserved>
 {
     pub time: f64,
     pub integrated_source_terms: ItemizedChange<C>,
+    pub orbital_elements_change: ItemizedChange<kepler_two_body::OrbitalElements>,
 }
 
 
@@ -278,14 +279,15 @@ impl Tasks
     {
         self.record_time_sample.advance(model.get("tsi").into());
 
-        let integrated_source_terms = state.solution
+        let totals = state.solution
             .iter()
-            .map(|s| s.integrated_source_terms)
-            .fold(ItemizedChange::zeros(), |a, b| a.add(&b));
+            .map(|s| (s.integrated_source_terms, s.orbital_elements_change))
+            .fold((ItemizedChange::zeros(), ItemizedChange::zeros()), |a, b| (a.0.add(&b.0), a.1.add(&b.1)));
 
         let sample = TimeSeriesSample{
             time: state.time,
-            integrated_source_terms: integrated_source_terms,
+            integrated_source_terms: totals.0,
+            orbital_elements_change: totals.1,
         };
         time_series.push(sample);
     }
