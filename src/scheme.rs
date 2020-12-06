@@ -30,6 +30,7 @@ pub trait ItemizeData: Zeros + Arithmetic + Copy + Clone + hdf5::H5Type {
 }
 
 pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + ItemizeData {
+    fn mass_and_momentum(&self) -> (f64, f64, f64);
 }
 
 pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type {
@@ -50,9 +51,14 @@ impl Arithmetic for kepler_two_body::OrbitalElements {}
 
 
 // ============================================================================
-impl Conserved   for hydro_iso2d::Conserved {}
-impl ItemizeData for hydro_iso2d::Conserved {}
-impl Zeros       for hydro_iso2d::Conserved
+impl ItemizeData for hydro_iso2d::Conserved {
+}
+impl Conserved for hydro_iso2d::Conserved {
+    fn mass_and_momentum(&self) -> (f64, f64, f64) {
+        (self.0, self.1, self.2)
+    }
+}
+impl Zeros for hydro_iso2d::Conserved
 {
     fn zeros() -> Self
     {
@@ -60,9 +66,14 @@ impl Zeros       for hydro_iso2d::Conserved
     }
 }
 
-impl Conserved   for hydro_euler::euler_2d::Conserved {}
-impl ItemizeData for hydro_euler::euler_2d::Conserved {}
-impl Zeros       for hydro_euler::euler_2d::Conserved
+impl ItemizeData for hydro_euler::euler_2d::Conserved {
+}
+impl Conserved for hydro_euler::euler_2d::Conserved {
+    fn mass_and_momentum(&self) -> (f64, f64, f64) {
+        (self.0, self.1, self.2)
+    }
+}
+impl Zeros for hydro_euler::euler_2d::Conserved
 {
     fn zeros() -> Self
     {
@@ -284,6 +295,31 @@ impl<C: ItemizeData> ItemizedChange<C>
         let mut result = self.clone();
         result.add_mut(s0);
         return result;
+    }
+}
+
+impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
+{
+    fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements
+    {
+        let (dm, dpx, dpy) = delta;
+        elements.perturb(time, -dm, 0.0, -dpx, 0.0, -dpy, 0.0).unwrap() - elements
+    }
+    fn pert2(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements
+    {
+        let (dm, dpx, dpy) = delta;
+        elements.perturb(time, 0.0, -dm, 0.0, -dpx, 0.0, -dpy).unwrap() - elements
+    }
+    pub fn perturbation(&self, time: f64, elements: OrbitalElements) -> ItemizedChange<OrbitalElements>
+    {
+        ItemizedChange{
+            sink1:    Self::pert1(time, self.sink1.mass_and_momentum(), elements),
+            sink2:    Self::pert2(time, self.sink2.mass_and_momentum(), elements),
+            grav1:    Self::pert1(time, self.grav1.mass_and_momentum(), elements),
+            grav2:    Self::pert2(time, self.grav2.mass_and_momentum(), elements),
+            buffer:   OrbitalElements::zeros(),
+            cooling:  OrbitalElements::zeros(),
+        }
     }
 }
 
@@ -1033,6 +1069,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
             let sources = itemized_sources.map(ItemizedChange::total);
             let ds = itemized_sources.fold(ItemizedChange::zeros(), |a, b| a.add(b));
+            let de = ds.perturbation(time, solver.orbital_elements);
 
             // ============================================================================
             let du = if solver.need_flux_communication() {
@@ -1049,9 +1086,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                     fy.slice(s![.., 1..])]
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            // TODO
-            let de = ItemizedChange::zeros();
-            //solver.orbital_elements.perturb(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0).unwrap() - solver.orbital_elements;
 
             BlockSolution{
                 conserved: solution.conserved + du + sources,
@@ -1081,9 +1115,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 uc + du + sources.total()
             });
 
-            // TODO
-            let de = ItemizedChange::zeros();
-            //solver.orbital_elements.perturb(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0).unwrap() - solver.orbital_elements;
+            let de = ds.perturbation(time, solver.orbital_elements);
 
             BlockSolution{
                 conserved: u1,

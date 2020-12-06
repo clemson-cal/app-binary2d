@@ -26,7 +26,6 @@ use scheme::{
     BlockIndex,
     BlockData,
     Conserved,
-    ItemizeData,
     ItemizedChange,
     Mesh,
     Solver,
