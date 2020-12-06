@@ -1,13 +1,29 @@
-// ============================================================================
-use std::ops::{Add, Sub, Mul, Div};
 use std::collections::HashMap;
-use futures::future::Future;
 use num::rational::Rational64;
 use num::ToPrimitive;
-use ndarray::{Axis, Array, ArcArray, Ix1, Ix2};
+use futures::future::Future;
+use ndarray::{Axis, Array, ArcArray, Ix2};
 use ndarray_ops::MapArray3by3;
 use godunov_core::runge_kutta;
-use kepler_two_body::{OrbitalElements, OrbitalState};
+use kepler_two_body::OrbitalElements;
+
+use crate::physics::{
+    Solver
+};
+
+use crate::mesh::{
+    Mesh,
+    BlockIndex,
+};
+
+use crate::traits::{
+    Hydrodynamics,
+    Conserved,
+    Primitive,
+    Zeros,
+    Arithmetic,
+    ItemizeData,
+};
 
 
 
@@ -15,29 +31,6 @@ use kepler_two_body::{OrbitalElements, OrbitalState};
 // ============================================================================
 #[derive(Copy, Clone)]
 pub enum Direction { X, Y }
-pub type BlockIndex = (usize, usize);
-
-
-
-
-// ============================================================================
-pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
-pub trait Zeros {
-    fn zeros() -> Self;
-}
-
-pub trait ItemizeData: Zeros + Arithmetic + Copy + Clone + hdf5::H5Type {
-}
-
-pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + ItemizeData {
-    fn mass_and_momentum(&self) -> (f64, f64, f64);
-}
-
-pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type {
-    fn velocity_x(self) -> f64;
-    fn velocity_y(self) -> f64;
-    fn mass_density(self) -> f64;
-}
 
 
 
@@ -51,13 +44,14 @@ impl Arithmetic for kepler_two_body::OrbitalElements {}
 
 
 // ============================================================================
-impl ItemizeData for hydro_iso2d::Conserved {
-}
-impl Conserved for hydro_iso2d::Conserved {
-    fn mass_and_momentum(&self) -> (f64, f64, f64) {
-        (self.0, self.1, self.2)
-    }
-}
+impl ItemizeData for hydro_iso2d::Conserved {}
+impl ItemizeData for hydro_euler::euler_2d::Conserved {}
+impl ItemizeData for kepler_two_body::OrbitalElements {}
+
+
+
+
+// ============================================================================
 impl Zeros for hydro_iso2d::Conserved
 {
     fn zeros() -> Self
@@ -66,18 +60,34 @@ impl Zeros for hydro_iso2d::Conserved
     }
 }
 
-impl ItemizeData for hydro_euler::euler_2d::Conserved {
-}
-impl Conserved for hydro_euler::euler_2d::Conserved {
-    fn mass_and_momentum(&self) -> (f64, f64, f64) {
-        (self.0, self.1, self.2)
-    }
-}
 impl Zeros for hydro_euler::euler_2d::Conserved
 {
     fn zeros() -> Self
     {
         Self(0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+impl Zeros       for kepler_two_body::OrbitalElements {
+    fn zeros() -> Self
+    {
+        Self(0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+
+
+
+// ============================================================================
+impl Conserved for hydro_iso2d::Conserved {
+    fn mass_and_momentum(&self) -> (f64, f64, f64) {
+        (self.0, self.1, self.2)
+    }
+}
+
+impl Conserved for hydro_euler::euler_2d::Conserved {
+    fn mass_and_momentum(&self) -> (f64, f64, f64) {
+        (self.0, self.1, self.2)
     }
 }
 
@@ -99,17 +109,6 @@ impl Primitive for hydro_euler::euler_2d::Primitive
     fn mass_density(self) -> f64 { self.mass_density() }
 }
 
-
-
-
-// ============================================================================
-impl ItemizeData for kepler_two_body::OrbitalElements {}
-impl Zeros       for kepler_two_body::OrbitalElements {
-    fn zeros() -> Self
-    {
-        Self(0.0, 0.0, 0.0, 0.0)
-    }
-}
 
 
 
@@ -230,21 +229,6 @@ impl<'a, P: Primitive> CellData<'_, P>
 
 
 // ============================================================================
-struct SourceTerms
-{
-    fx1: f64,
-    fy1: f64,
-    fx2: f64,
-    fy2: f64,
-    sink_rate1: f64,
-    sink_rate2: f64,
-    buffer_rate: f64,
-}
-
-
-
-
-// ============================================================================
 #[derive(Clone, Copy, hdf5::H5Type)]
 #[repr(C)]
 pub struct ItemizedChange<C: ItemizeData>
@@ -348,253 +332,6 @@ impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
 
 
 // ============================================================================
-impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
-{
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
-    {
-        let bf = br.to_f64().unwrap();
-        Self{
-            sink1:   self.sink1   * (-bf + 1.) + s0.sink1   * bf,
-            sink2:   self.sink2   * (-bf + 1.) + s0.sink2   * bf,
-            grav1:   self.grav1   * (-bf + 1.) + s0.grav1   * bf,
-            grav2:   self.grav2   * (-bf + 1.) + s0.grav2   * bf,
-            buffer:  self.buffer  * (-bf + 1.) + s0.buffer  * bf,
-            cooling: self.cooling * (-bf + 1.) + s0.cooling * bf,
-        }        
-    }
-}
-
-
-
-
-// ============================================================================
-#[derive(Clone)]
-pub struct Solver
-{
-    pub buffer_rate: f64,
-    pub buffer_scale: f64,
-    pub cfl: f64,
-    pub domain_radius: f64,
-    pub mach_number: f64,
-    pub nu: f64,
-    pub plm: f64,
-    pub rk_order: i64,
-    pub sink_radius: f64,
-    pub sink_rate: f64,
-    pub softening_length: f64,
-    pub stress_dim: i64,
-    pub force_flux_comm: bool,
-    pub low_mem: bool,
-    pub orbital_elements: OrbitalElements,
-}
-
-impl Solver
-{
-    pub fn need_flux_communication(&self) -> bool
-    {
-        self.force_flux_comm
-    }
-
-    pub fn effective_resolution(&self, mesh: &Mesh) -> f64
-    {
-        f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
-    }
-
-    pub fn min_time_step(&self, mesh: &Mesh) -> f64
-    {
-        self.cfl * self.effective_resolution(mesh) / self.maximum_orbital_velocity()
-    }
-
-    fn sink_kernel(&self, dx: f64, dy: f64) -> f64
-    {
-        let r2 = dx * dx + dy * dy;
-        let s2 = self.sink_radius * self.sink_radius;
-
-        if r2 < s2 * 9.0 {
-            self.sink_rate * f64::exp(-(r2 / s2).powi(3))
-        } else {
-            0.0
-        }
-    }
-
-    fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64
-    {
-        -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number.powi(2)
-    }
-
-    fn maximum_orbital_velocity(&self) -> f64
-    {
-        1.0 / self.softening_length.sqrt()
-    }
-
-    fn source_terms(&self, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms
-    {
-        let p1 = two_body_state.0;
-        let p2 = two_body_state.1;
-
-        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length);
-        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length);
-
-        let fx1 = surface_density * ax1;
-        let fy1 = surface_density * ay1;
-        let fx2 = surface_density * ax2;
-        let fy2 = surface_density * ay2;
-
-        let x1 = p1.position_x();
-        let y1 = p1.position_y();
-        let x2 = p2.position_x();
-        let y2 = p2.position_y();
-
-        let sink_rate1 = self.sink_kernel(x - x1, y - y1);
-        let sink_rate2 = self.sink_kernel(x - x2, y - y2);
-
-        let r = (x * x + y * y).sqrt();
-        let y = (r - self.domain_radius) / self.buffer_scale;
-        let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
-        let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
-
-        SourceTerms{
-            fx1: fx1,
-            fy1: fy1,
-            fx2: fx2,
-            fy2: fy2,
-            sink_rate1: sink_rate1,
-            sink_rate2: sink_rate2,
-            buffer_rate: buffer_rate,
-        }
-    }
-}
-
-
-
-
-// ============================================================================
-#[derive(Clone)]
-pub struct Mesh
-{
-    pub num_blocks: usize,
-    pub block_size: usize,
-    pub domain_radius: f64,
-}
-
-impl Mesh
-{
-    pub fn block_length(&self) -> f64
-    {
-        2.0 * self.domain_radius / (self.num_blocks as f64)
-    }
-
-    pub fn block_start(&self, block_index: BlockIndex) -> (f64, f64)
-    {
-        (
-            -self.domain_radius + (block_index.0 as f64) * self.block_length(),
-            -self.domain_radius + (block_index.1 as f64) * self.block_length(),
-        )
-    }
-
-    pub fn block_vertices(&self, block_index: BlockIndex) -> (Array<f64, Ix1>, Array<f64, Ix1>)
-    {
-        let start = self.block_start(block_index);
-        let xv = Array::linspace(start.0, start.0 + self.block_length(), self.block_size + 1);
-        let yv = Array::linspace(start.1, start.1 + self.block_length(), self.block_size + 1);
-        (xv, yv)
-    }
-
-    pub fn cell_centers(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
-    {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
-        let (xv, yv) = self.block_vertices(block_index);
-        let xc = adjacent_mean(&xv, Axis(0));
-        let yc = adjacent_mean(&yv, Axis(0));
-        return cartesian_product2(xc, yc);
-    }
-
-    pub fn face_centers_x(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
-    {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
-        let (xv, yv) = self.block_vertices(block_index);
-        let yc = adjacent_mean(&yv, Axis(0));
-        return cartesian_product2(xv, yc);
-    }
-
-    pub fn face_centers_y(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2>
-    {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
-        let (xv, yv) = self.block_vertices(block_index);
-        let xc = adjacent_mean(&xv, Axis(0));
-        return cartesian_product2(xc, yv);
-    }
-
-    pub fn cell_spacing_x(&self) -> f64
-    {
-        self.block_length() / (self.block_size as f64)
-    }
-
-    pub fn cell_spacing_y(&self) -> f64
-    {
-        self.block_length() / (self.block_size as f64)
-    }
-
-    pub fn total_zones(&self) -> usize
-    {
-        self.num_blocks * self.num_blocks * self.block_size * self.block_size
-    }
-
-    pub fn block_indexes(&self) -> Vec<BlockIndex>
-    {
-        (0..self.num_blocks)
-        .map(|i| (0..self.num_blocks)
-        .map(move |j| (i, j)))
-        .flatten()
-        .collect()
-    }
-
-    pub fn neighbor_block_indexes(&self, block_index: BlockIndex) -> [[BlockIndex; 3]; 3]
-    {
-        let b = self.num_blocks;
-        let m = |i, j| (i % b, j % b);
-        let (i, j) = block_index;
-        [
-            [m(i + b - 1, j + b - 1), m(i + b - 1, j + b + 0), m(i + b - 0, j + b + 1)],
-            [m(i + b + 0, j + b - 1), m(i + b + 0, j + b + 0), m(i + b + 0, j + b + 1)],
-            [m(i + b + 1, j + b - 1), m(i + b + 1, j + b + 0), m(i + b + 1, j + b + 1)],
-        ]
-    }
-}
-
-
-
-
-// ============================================================================
-pub trait Hydrodynamics: Copy + Send
-{
-    type Conserved: Conserved;
-    type Primitive: Primitive;
-
-    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
-    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
-    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
-
-    fn source_terms(
-        &self,
-        solver: &Solver,
-        conserved: Self::Conserved,
-        background_conserved: Self::Conserved,
-        x: f64,
-        y: f64,
-        dt: f64,
-        two_body_state: &OrbitalState) -> ItemizedChange<Self::Conserved>;
-
-    fn intercell_flux<'a>(
-        &self,
-        solver: &Solver,
-        l: &CellData<'a, Self::Primitive>,
-        r: &CellData<'a, Self::Primitive>,
-        f: &(f64, f64),
-        two_body_state: &kepler_two_body::OrbitalState,
-        axis: Direction) -> Self::Conserved;
-}
-
 #[derive(Clone, Copy)]
 pub struct Isothermal {
 }
@@ -771,6 +508,83 @@ impl Hydrodynamics for Euler
 
 
 // ============================================================================
+impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
+{
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
+    {
+        let bf = br.to_f64().unwrap();
+        Self{
+            sink1:   self.sink1   * (-bf + 1.) + s0.sink1   * bf,
+            sink2:   self.sink2   * (-bf + 1.) + s0.sink2   * bf,
+            grav1:   self.grav1   * (-bf + 1.) + s0.grav1   * bf,
+            grav2:   self.grav2   * (-bf + 1.) + s0.grav2   * bf,
+            buffer:  self.buffer  * (-bf + 1.) + s0.buffer  * bf,
+            cooling: self.cooling * (-bf + 1.) + s0.cooling * bf,
+        }        
+    }
+}
+
+impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
+{
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
+    {
+        let bf = br.to_f64().unwrap();
+        Self{
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
+            solution:  self.solution.weighted_average(br, &s0.solution),
+        }
+    }
+}
+
+impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
+{
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
+    {
+        let s1 = self;
+        let bf = br.to_f64().unwrap();
+        let u0 = s0.conserved.clone();
+        let u1 = s1.conserved.clone();
+        let t0 = &s0.integrated_source_terms;
+        let t1 = &s1.integrated_source_terms;
+        let e0 = &s0.orbital_elements_change;
+        let e1 = &s1.orbital_elements_change;
+
+        BlockSolution{
+            conserved: u1 * (-bf + 1.) + u0 * bf,
+            integrated_source_terms: t1.weighted_average(br, t0),
+            orbital_elements_change: e1.weighted_average(br, e0),
+        }
+    }
+}
+
+impl<C: 'static + Conserved> State<C>
+{
+    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
+    {
+        use futures::future::join_all;
+        use godunov_core::runge_kutta::WeightedAverage;
+
+        let bf = br.to_f64().unwrap();
+        let s_avg = self.solution
+            .into_iter()
+            .zip(&s0.solution)
+            .map(|(s1, s0)| (s1, s0.clone()))
+            .map(|(s1, s0)| runtime.spawn(async move { s1.weighted_average(br, &s0) }))
+            .map(|f| async { f.await.unwrap() });
+
+        State{
+            time:      self.time      * (-bf + 1.) + s0.time      * bf,
+            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
+            solution: join_all(s_avg).await,
+        }
+    }
+}
+
+
+
+
+// ============================================================================
 async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
 {
     [
@@ -866,71 +680,6 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         time: state.time + dt,
         iteration: state.iteration + 1,
         solution: join_all(s1_vec).await
-    }
-}
-
-
-
-
-// ============================================================================
-impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
-{
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
-    {
-        let bf = br.to_f64().unwrap();
-        Self{
-            time:      self.time      * (-bf + 1.) + s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
-            solution:  self.solution.weighted_average(br, &s0.solution),
-        }
-    }
-}
-
-impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
-{
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
-    {
-        let s1 = self;
-        let bf = br.to_f64().unwrap();
-        let u0 = s0.conserved.clone();
-        let u1 = s1.conserved.clone();
-        let t0 = &s0.integrated_source_terms;
-        let t1 = &s1.integrated_source_terms;
-        let e0 = &s0.orbital_elements_change;
-        let e1 = &s1.orbital_elements_change;
-
-        BlockSolution{
-            conserved: u1 * (-bf + 1.) + u0 * bf,
-            integrated_source_terms: t1.weighted_average(br, t0),
-            orbital_elements_change: e1.weighted_average(br, e0),
-        }
-    }
-}
-
-
-
-
-// ============================================================================
-impl<C: 'static + Conserved> State<C>
-{
-    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
-    {
-        use futures::future::join_all;
-        use godunov_core::runge_kutta::WeightedAverage;
-
-        let bf = br.to_f64().unwrap();
-        let s_avg = self.solution
-            .into_iter()
-            .zip(&s0.solution)
-            .map(|(s1, s0)| (s1, s0.clone()))
-            .map(|(s1, s0)| runtime.spawn(async move { s1.weighted_average(br, &s0) }))
-            .map(|f| async { f.await.unwrap() });
-
-        State{
-            time:      self.time      * (-bf + 1.) + s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
-            solution: join_all(s_avg).await,
-        }
     }
 }
 
@@ -1044,9 +793,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         use ndarray::{s, azip};
         use ndarray_ops::{map_stencil3};
 
-        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
         // ========================================================================
+        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
         let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
         let xf = &block.face_centers_x;
@@ -1087,7 +835,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         time:     f64,
         dt:       f64) -> BlockSolution<H::Conserved>
     {
-        // ============================================================================
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
@@ -1095,7 +842,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let s1 = if ! solver.low_mem {
             use ndarray::{s, azip};
 
-            // ============================================================================
             let itemized_sources = azip![
                 &solution.conserved,
                 &block.initial_conserved,
@@ -1106,7 +852,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             let ds = itemized_sources.fold(ItemizedChange::zeros(), |a, b| a.add(b)).mul(dx * dy);
             let de = ds.perturbation(time, solver.orbital_elements);
 
-            // ============================================================================
             let du = if solver.need_flux_communication() {
                 azip![
                     fx.slice(s![1..-2, 1..-1]),
@@ -1130,7 +875,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
             let mut ds = ItemizedChange::zeros();
 
-            // ============================================================================
             let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
                 let m = if solver.need_flux_communication() {
                     (i.0 + 1, i.1 + 1)

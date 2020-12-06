@@ -4,12 +4,15 @@ use io_logical::verified;
 use io_logical::nicer_hdf5;
 use io_logical::nicer_hdf5::{H5Read, H5Write};
 use crate::Tasks;
-use crate::scheme::{Hydrodynamics,
+use crate::traits::{
+    Hydrodynamics,
     Conserved,
+};
+use crate::scheme::{
     ItemizedChange,
     State,
     BlockSolution,
-    BlockData
+    BlockData,
 };
 
 

@@ -11,7 +11,10 @@
 
 // ============================================================================
 mod io;
+mod mesh;
 mod scheme;
+mod traits;
+mod physics;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 use std::time::Instant;
@@ -20,18 +23,27 @@ use num::rational::Rational64;
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
+
+use traits::{
+    Hydrodynamics,
+    Conserved,
+};
+
+use physics::{
+    Solver,
+};
+
+use mesh::{
+    Mesh,
+    BlockIndex,
+};
 use scheme::{
     State,
     BlockSolution,
-    BlockIndex,
     BlockData,
-    Conserved,
     ItemizedChange,
-    Mesh,
-    Solver,
-    Hydrodynamics,
     Isothermal,
-    Euler
+    Euler,
 };
 
 
