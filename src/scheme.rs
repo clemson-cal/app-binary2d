@@ -1,4 +1,3 @@
-// ============================================================================
 use std::ops::{Add, Sub, Mul, Div};
 use std::collections::HashMap;
 use futures::future::Future;
@@ -907,13 +906,11 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
     }
 }
 
-
-
-
-// ============================================================================
-impl<C: 'static + Conserved> State<C>
+#[async_trait::async_trait]
+impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C>
 {
-    async fn weighted_average(self, br: Rational64, s0: &State<C>, runtime: &tokio::runtime::Runtime) -> State<C>
+    type Runtime = tokio::runtime::Runtime;
+    async fn weighted_average(self, br: Rational64, s0: &Self, runtime: &Self::Runtime) -> Self
     {
         use futures::future::join_all;
         use godunov_core::runge_kutta::WeightedAverage;
@@ -938,57 +935,6 @@ impl<C: 'static + Conserved> State<C>
 
 
 // ============================================================================
-async fn advance_rk1<C, F, U>(state: State<C>, update: U, _runtime: &tokio::runtime::Runtime) -> State<C>
-    where
-    C: Conserved,
-    U: Fn(State<C>) -> F,
-    F: Future<Output=State<C>>
-{
-    update(state).await
-}
-
-
-
-
-// ============================================================================
-async fn advance_rk2<C, F, U>(state: State<C>, update: U, runtime: &tokio::runtime::Runtime) -> State<C>
-    where
-    C: 'static + Conserved,
-    U: Fn(State<C>) -> F,
-    F: Future<Output=State<C>>
-{
-    let b1 = Rational64::new(1, 2);
-
-    let s1 = state.clone();
-    let s1 = update(s1).await;
-    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
-    s1
-}
-
-
-
-
-// ============================================================================
-async fn advance_rk3<C, F, U>(state: State<C>, update: U, runtime: &tokio::runtime::Runtime) -> State<C>
-    where
-    C: 'static + Conserved,
-    U: Fn(State<C>) -> F,
-    F: Future<Output=State<C>>
-{
-    let b1 = Rational64::new(3, 4);
-    let b2 = Rational64::new(1, 3);
-
-    let s1 = state.clone();
-    let s1 = update(s1).await;
-    let s1 = update(s1).await.weighted_average(b1, &state, runtime).await;
-    let s1 = update(s1).await.weighted_average(b2, &state, runtime).await;
-    s1
-}
-
-
-
-
-// ============================================================================
 pub fn advance_tokio<H: 'static + Hydrodynamics>(
     mut state:  State<H::Conserved>,
     hydro:      H,
@@ -1003,9 +949,9 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
     for _ in 0..fold {
         state = match solver.rk_order {
-            1 => runtime.block_on(advance_rk1(state, update, runtime)),
-            2 => runtime.block_on(advance_rk2(state, update, runtime)),
-            3 => runtime.block_on(advance_rk3(state, update, runtime)),
+            1 => runtime.block_on(runge_kutta::async_advance_rk1(state, update, runtime)),
+            2 => runtime.block_on(runge_kutta::async_advance_rk2(state, update, runtime)),
+            3 => runtime.block_on(runge_kutta::async_advance_rk3(state, update, runtime)),
             _ => panic!("illegal RK order {}", solver.rk_order),
         }
     }
