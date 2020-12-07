@@ -99,21 +99,21 @@ impl H5Read for f64
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        group.dataset(name)?.read_scalar::<Self>()
+        group.dataset(name)?.read_scalar()
     }
 }
 impl H5Read for i64
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        group.dataset(name)?.read_scalar::<Self>()
+        group.dataset(name)?.read_scalar()
     }
 }
 impl<T> H5Read for num::rational::Ratio<T> where T: num::Integer + H5Type + Copy
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        let nd = group.dataset(name)?.read_scalar::<[T; 2]>()?;
+        let nd: [T; 2] = group.dataset(name)?.read_scalar()?;
         Ok(Self::new(nd[0], nd[1]))
     }
 }
@@ -157,10 +157,10 @@ impl<T> H5Read for Vec<T>
  */
 pub fn write_as_keyed_vec<E: H5Type, T: Into<Vec<(String, E)>>>(item: T, group: &Group, name: &str) -> Result<(), hdf5::Error>
 {
-    let task_vec: Vec<_> = item.into();
+    let item_vec: Vec<_> = item.into();
     let target_group = group.create_group(name)?;
-    for (name, task) in task_vec {
-        target_group.new_dataset::<E>().create(&name, ())?.write_scalar(&task)?;
+    for (key, item) in item_vec {
+        target_group.new_dataset::<E>().create(&key, ())?.write_scalar(&item)?;
     }
     Ok(())
 }
@@ -175,12 +175,12 @@ pub fn write_as_keyed_vec<E: H5Type, T: Into<Vec<(String, E)>>>(item: T, group: 
  */
 pub fn read_as_keyed_vec<E: H5Type, T: From<Vec<(String, E)>>>(group: &Group, name: &str) -> Result<T, hdf5::Error>
 {
-    let task_vec: Vec<_> = group
-        .group(name)?
+    let item_group = group.group(name)?;
+    let item_vec: Vec<_> = item_group
         .member_names()?
         .into_iter()
-        .map(|name| group.dataset(&name)?.read_scalar::<E>().map(|task| (name, task)))
+        .map(|key| item_group.dataset(&key)?.read_scalar::<E>().map(|item| (key, item)))
         .filter_map(Result::ok)
         .collect();
-    Ok(task_vec.into())
+    Ok(item_vec.into())
 }

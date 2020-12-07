@@ -1,4 +1,3 @@
-#![allow(unused)]
 /**
  * @brief      Code to solve gas-driven binary evolution
  *
@@ -10,30 +9,42 @@
 
 
 
-
 // ============================================================================
 mod io;
+mod mesh;
 mod scheme;
-mod tracers;
+mod traits;
+mod physics;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
-use ndarray::{ArcArray, Ix2};
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
+
+use traits::{
+    Hydrodynamics,
+    Conserved,
+};
+
+use physics::{
+    Euler,
+    ItemizedChange,
+    Isothermal,
+    Solver,
+};
+
+use mesh::{
+    Mesh,
+    BlockIndex,
+};
+
 use scheme::{
     State,
-    Conserved,
-    BlockIndex,
+    BlockSolution,
     BlockData,
-    Mesh,
-    Solver,
-    Hydrodynamics,
-    Isothermal,
-    Euler
 };
 
 
@@ -45,11 +56,21 @@ fn main() -> anyhow::Result<()>
     let _silence_hdf5_errors = hdf5::silence_errors();
     let app = App::parse();
 
+    let parameters_not_to_supercede_on_restart = vec![
+        "num_blocks",
+        "block_size",
+        "one_body",
+        "domain_radius",
+        "hydro",
+        "mass_ratio",
+        "eccentricity",
+    ];
+
     let model = kind_config::Form::new()
         .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
-        .item("cfl"             , 0.5    , "CFL parameter [~0.4-0.7]")
+        .item("cfl"             , 0.4    , "CFL parameter [~0.4-0.7]")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
@@ -65,7 +86,9 @@ fn main() -> anyhow::Result<()>
         .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
-        .merge_value_map_freezing(&app.restart_model_parameters()?, &vec!["num_blocks", "block_size", "one_body", "domain_radius"])?
+        .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
+        .item("eccentricity"    , 0.0    , "Orbital eccentricity")
+        .merge_value_map_freezing(&app.restart_model_parameters()?, &parameters_not_to_supercede_on_restart)?
         .merge_string_args(&app.model_parameters)?;
 
     let hydro: String = model.get("hydro").into();
@@ -170,9 +193,11 @@ impl App
 // ============================================================================
 #[derive(hdf5::H5Type)]
 #[repr(C)]
-pub struct TimeSeriesSample
+pub struct TimeSeriesSample<C: Conserved>
 {
     pub time: f64,
+    pub integrated_source_terms: ItemizedChange<C>,
+    pub orbital_elements_change: ItemizedChange<kepler_two_body::OrbitalElements>,
 }
 
 
@@ -212,7 +237,6 @@ pub struct Tasks
 {
     pub write_checkpoint: RecurringTask,
     pub record_time_sample: RecurringTask,
-    pub write_tracer_output: RecurringTask,
 
     pub call_count_this_run: usize,
     pub tasks_last_performed: Instant,
@@ -228,7 +252,6 @@ impl From<Tasks> for Vec<(String, RecurringTask)>
         vec![
             ("write_checkpoint".into(), tasks.write_checkpoint),
             ("record_time_sample".into(), tasks.record_time_sample),
-            ("write_tracer_output".into(), tasks.write_tracer_output),
         ]
     }
 }
@@ -238,9 +261,8 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
     fn from(a: Vec<(String, RecurringTask)>) -> Tasks {
         let task_map: HashMap<_, _> = a.into_iter().collect();
         Tasks {
-            write_checkpoint:    task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
-            record_time_sample:  task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
-            write_tracer_output: task_map.get("write_tracer_output").cloned().unwrap_or_else(RecurringTask::new),
+            write_checkpoint:   task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
+            record_time_sample: task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
             call_count_this_run: 0,
             tasks_last_performed: Instant::now(),
         }
@@ -258,7 +280,6 @@ impl Tasks
         Self{
             write_checkpoint: RecurringTask::new(),
             record_time_sample: RecurringTask::new(),
-            write_tracer_output: RecurringTask::new(),
             call_count_this_run: 0,
             tasks_last_performed: Instant::now(),
         }
@@ -266,16 +287,27 @@ impl Tasks
 
     fn record_time_sample<C: Conserved>(&mut self,
         state: &State<C>,
-        time_series: &mut Vec<TimeSeriesSample>,
+        time_series: &mut Vec<TimeSeriesSample<C>>,
         model: &kind_config::Form)
     {
         self.record_time_sample.advance(model.get("tsi").into());
-        time_series.push(TimeSeriesSample{time: state.time});
+
+        let totals = state.solution
+            .iter()
+            .map(|s| (s.integrated_source_terms, s.orbital_elements_change))
+            .fold((ItemizedChange::zeros(), ItemizedChange::zeros()), |a, b| (a.0.add(&b.0), a.1.add(&b.1)));
+
+        let sample = TimeSeriesSample{
+            time: state.time,
+            integrated_source_terms: totals.0,
+            orbital_elements_change: totals.1,
+        };
+        time_series.push(sample);
     }
 
-    fn write_checkpoint<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(&mut self,
+    fn write_checkpoint<C: Conserved>(&mut self,
         state: &State<C>,
-        time_series: &Vec<TimeSeriesSample>,
+        time_series: &Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
         model: &kind_config::Form,
         app: &App) -> anyhow::Result<()>
@@ -293,26 +325,10 @@ impl Tasks
         Ok(())
     }
 
-    fn write_tracer_output<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(&mut self,
-        state: &State<C>,
-        model: &kind_config::Form,
-        app: &App) -> anyhow::Result<()>
-    {
-        let outdir = app.output_directory()?;
-        let fname  = outdir.child(&format!("tracers.{:04}.h5", self.write_tracer_output.count));
-
-        self.write_tracer_output.advance(model.get("toi").into());
-
-        println!("write tracer_output {}", fname);
-        io::write_tracer_output(&fname, &state, &model).expect("HDF5 write failed");
-
-        Ok(())
-    }
-
-    fn perform<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(
+    fn perform<C: Conserved>(
         &mut self,
         state: &State<C>,
-        time_series: &mut Vec<TimeSeriesSample>,
+        time_series: &mut Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
         mesh: &Mesh,
         model: &kind_config::Form,
@@ -338,10 +354,7 @@ impl Tasks
         {
             self.write_checkpoint(state, time_series, block_data, model, app)?;
         }
-        if state.time / ORBITAL_PERIOD >= self.write_tracer_output.next_time
-        {
-            self.write_tracer_output(state, model, app);
-        }
+
         self.call_count_this_run += 1;
         Ok(())
     }
@@ -374,7 +387,6 @@ impl InitialModel for Isothermal
     }
 }
 
-
 impl InitialModel for Euler
 {
     fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
@@ -402,53 +414,36 @@ struct Driver<System: Hydrodynamics + InitialModel>
     system: System,
 }
 
-
-
-
-impl<System: Hydrodynamics + InitialModel> Driver<System>
+impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserved: hdf5::H5Type
 {
     fn new(system: System) -> Self
     {
         Self{system: system}
     }
-    fn initial_conserved(&self, block_index: BlockIndex, mesh: &Mesh) -> ArcArray<System::Conserved, Ix2>
+    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh) -> BlockSolution<System::Conserved>
     {
-        mesh.cell_centers(block_index)
+        let u0 = mesh.cell_centers(block_index)
             .mapv(|x| self.system.primitive_at(x))
             .mapv(|p| self.system.to_conserved(p))
-            .to_shared()
+            .to_shared();
+
+        BlockSolution{
+            conserved: u0,
+            integrated_source_terms: ItemizedChange::zeros(),
+            orbital_elements_change: ItemizedChange::zeros(),
+        }
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
     {
         State{
             time: 0.0,
             iteration: Rational64::new(0, 1),
-            conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect(),
-            tracers  : mesh.block_indexes().iter().map(|&i| self.initial_tracers(i, mesh, mesh.tracers_per_block)).collect(),
-        } 
+            solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh)).collect()
+        }
     }
-    fn initial_time_series(&self) -> Vec<TimeSeriesSample>
+    fn initial_time_series(&self) -> Vec<TimeSeriesSample<System::Conserved>>
     {
         Vec::new()
-    }
-    fn initial_tracers(&self, block_index: BlockIndex, mesh: &scheme::Mesh, ntracers: usize) -> Vec<tracers::Tracer>
-    {
-        let x0 = mesh.block_start(block_index);
-        let tracers_per_row = f64::sqrt(ntracers as f64).ceil();
-        let tracer_spacing  = mesh.block_length() / tracers_per_row;
-        let total_tracers   = (tracers_per_row * tracers_per_row) as usize;
-        let get_id = |i| self.linear_index(block_index, mesh.num_blocks) * ntracers + i;
-
-        let make_grid = |n|
-        {
-            let m = tracers_per_row as usize;
-            let x = ((n % m) as f64 + 0.5) * tracer_spacing + x0.0;
-            let y = ((n / m) as f64 + 0.5) * tracer_spacing + x0.1;
-            ((x, y), n)
-        };
-        (0..total_tracers).map(make_grid)
-                          .map(|(xy, n)| tracers::Tracer::new(xy, get_id(n)))
-                          .collect()
     }
     fn block_data(&self, mesh: &Mesh) -> Vec<BlockData<System::Conserved>>
     {
@@ -457,14 +452,10 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
                 cell_centers:      mesh.cell_centers(block_index).to_shared(),
                 face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
                 face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
-                initial_conserved: self.initial_conserved(block_index, &mesh).to_shared(),
+                initial_conserved: self.initial_solution(block_index, &mesh).conserved,
                 index: block_index,
             }
         }).collect()
-    }
-    fn linear_index(&self, block_index: BlockIndex, num_blocks: usize) -> usize
-    {
-        block_index.0 * num_blocks + block_index.1
     }
 }
 
@@ -475,6 +466,11 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
 fn create_solver(model: &kind_config::Form, app: &App) -> Solver
 {
     let one_body: bool = model.get("one_body").into();
+
+    let a = if one_body {1e-9} else {1.0};
+    let m = 1.0;
+    let q:f64 = model.get("mass_ratio").into();
+    let e:f64 = model.get("eccentricity").into();
 
     Solver{
         buffer_rate:      model.get("buffer_rate").into(),
@@ -491,7 +487,7 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
         low_mem:          app.low_mem,
-        orbital_elements: kepler_two_body::OrbitalElements(if one_body {1e-9} else {1.0}, 1.0, 1.0, 0.0),
+        orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
 }
 
@@ -501,7 +497,6 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
         num_blocks: i64::from(model.get("num_blocks")) as usize,
         block_size: i64::from(model.get("block_size")) as usize,
         domain_radius: model.get("domain_radius").into(),
-        tracers_per_block : i64::from(model.get("num_tracers")) as usize,
     }
 }
 
@@ -509,11 +504,10 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
 
 
 // ============================================================================
-fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
+fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
     where
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
-    C: io::H5Conserved<T>,
-    T: hdf5::H5Type + Clone
+    C: Conserved
 {
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
@@ -552,8 +546,7 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
         if app.tokio {
             state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
         } else {
-            // scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
-            panic!("Not here right now");
+            scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
