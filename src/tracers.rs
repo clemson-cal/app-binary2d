@@ -2,9 +2,10 @@ use std::ops::{Add, Mul};
 use ndarray::{Array, Ix2};
 use num::rational::Rational64;
 use num::ToPrimitive;
-use crate::Direction;
 use crate::scheme::*;
 
+// #[derive(Copy, Clone)]
+// pub enum Direction { X, Y }
 
 
 
@@ -98,8 +99,8 @@ pub fn update_tracers(
     let (i, j) = mesh.get_cell_index(index, tracer.x, tracer.y);
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
-    let wx = (tracer.x - mesh.face_center_at(index, i, j, Direction::X).0) / dx; 
-    let wy = (tracer.y - mesh.face_center_at(index, i, j, Direction::Y).1) / dy;
+    let wx = (tracer.x - mesh.face_center_at(index, i, j, crate::scheme::Direction::X).0) / dx; 
+    let wy = (tracer.y - mesh.face_center_at(index, i, j, crate::scheme::Direction::Y).1) / dy;
     let m  = (i + pad_size as i64) as usize;
     let n  = (j + pad_size as i64) as usize;
     let vx = (1.0 - wx) * vfield_x[[m, n]] + wx * vfield_x[[m + 1, n]];

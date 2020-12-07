@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::time::Instant;
-use hdf5::File;
 use crate::tracers::Tracer;
 use hdf5::{File, Group, H5Type};
 use io_logical::verified;
@@ -52,10 +50,15 @@ fn write_state<C: H5Conserved<T>, T: H5Type + Clone>(group: &Group, state: &Stat
 {
     let state_group = group.create_group("state")?;
     let cons = state_group.create_group("conserved")?;
+    let trcr = state_group.create_group("tracers")?;
 
-    for (b, u) in block_data.iter().zip(&state.conserved)
+    // for (b, u) in block_data.iter().zip(&state.conserved)
+    for (i, (u, t)) in state.conserved.iter().zip(state.tracers.iter()).enumerate()
     {
-        u.mapv(C::into).write(&cons, &format!("0:{:03}-{:03}", b.index.0, b.index.1))?
+        let b = &block_data[i];
+        let gname = format!("0:{:03}-{:03}", b.index.0, b.index.1);
+        u.mapv(C::into).write(&cons, &gname)?;
+        t.write(&trcr, &gname)?;
     }
     state.time.write(&state_group, "time")?;
     state.iteration.write(&state_group, "iteration")?;
@@ -68,12 +71,19 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + 
         let file = File::open(file.to_string())?;
         let state_group = file.group("state")?;
         let cons = state_group.group("conserved")?;
+        let trcr = state_group.group("tracers")?;
         let mut conserved = Vec::new();
+        let mut tracers   = Vec::new();
 
         for key in cons.member_names()?
         {
             let u = ndarray::Array2::<C::H5Type>::read(&cons, &key)?;
             conserved.push(u.mapv(C::from).to_shared());
+        }
+        for key in trcr.member_names()?
+        {
+            let t = trcr.dataset(&key)?.read_raw::<Tracer>()?;
+            tracers.push(t);
         }
         let time      = f64::read(&state_group, "time")?;
         let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
@@ -82,6 +92,7 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: H5Conserved<T>, T: H5Type + 
             conserved: conserved,
             time: time,
             iteration: iteration,
+            tracers: tracers,
         };
         Ok(result)
     }
@@ -132,7 +143,8 @@ pub fn write_tracer_subset(file: &hdf5::Group, tracers: &Vec<Vec<crate::tracers:
         .flatten()
         .map(|t| t.clone())
         .collect();
-    file.new_dataset::<crate::tracers::Tracer>().create("tracers", subset.len())?.write(&subset)?;
+    subset.write(&file, "tracers");
+    // file.new_dataset::<crate::tracers::Tracer>().create("tracers", subset.len())?.write(&subset)?;
     Ok(())
 }
 
@@ -155,14 +167,19 @@ pub fn write_checkpoint<C: H5Conserved<T>, T: H5Type + Clone>(
     Ok(())
 }
 
-pub fn write_tracer_output(filename: &str, state: &crate::State, model: &kind_config::Form) -> Result<(), hdf5::Error>
+pub fn write_tracer_output<C: H5Conserved<T>, T: H5Type + Clone>(
+    filename: &str,
+    state: &State<C>,
+    model: &kind_config::Form) -> Result<(), hdf5::Error>
 {
     let file = File::create(filename)?;
     let tracer_output_ratio: f64 = model.get("tor").into();
 
     write_tracer_subset(&file, &state.tracers, tracer_output_ratio as usize)?;
-    file.new_dataset::<i64>().create("iteration", ())?.write_scalar(&state.iteration.to_integer())?;
-    file.new_dataset::<f64>().create("time"     , ())?.write_scalar(&state.time)?;
+    state.time.write(&file, "time")?;
+    state.iteration.write(&file, "iteration")?;
+    // file.new_dataset::<i64>().create("iteration", ())?.write_scalar(&state.iteration.to_integer())?;
+    // file.new_dataset::<f64>().create("time"     , ())?.write_scalar(&state.time)?;
 
     Ok(())
 }

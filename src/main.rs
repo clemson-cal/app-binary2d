@@ -1,3 +1,4 @@
+#![allow(unused)]
 /**
  * @brief      Code to solve gas-driven binary evolution
  *
@@ -5,6 +6,7 @@
  * @copyright  Jonathan Zrake, Clemson University (2020)
  *
  */
+
 
 
 
@@ -210,15 +212,10 @@ pub struct Tasks
 {
     pub write_checkpoint: RecurringTask,
     pub record_time_sample: RecurringTask,
+    pub write_tracer_output: RecurringTask,
 
     pub call_count_this_run: usize,
     pub tasks_last_performed: Instant,
-    //
-    pub checkpoint_next_time: f64,
-    pub checkpoint_count    : usize,
-    //
-    pub tracer_output_next_time: f64,
-    pub tracer_output_count    : usize,
 }
 
 
@@ -231,6 +228,7 @@ impl From<Tasks> for Vec<(String, RecurringTask)>
         vec![
             ("write_checkpoint".into(), tasks.write_checkpoint),
             ("record_time_sample".into(), tasks.record_time_sample),
+            ("write_tracer_output".into(), tasks.write_tracer_output),
         ]
     }
 }
@@ -240,8 +238,9 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
     fn from(a: Vec<(String, RecurringTask)>) -> Tasks {
         let task_map: HashMap<_, _> = a.into_iter().collect();
         Tasks {
-            write_checkpoint:   task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
-            record_time_sample: task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
+            write_checkpoint:    task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
+            record_time_sample:  task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
+            write_tracer_output: task_map.get("write_tracer_output").cloned().unwrap_or_else(RecurringTask::new),
             call_count_this_run: 0,
             tasks_last_performed: Instant::now(),
         }
@@ -259,6 +258,7 @@ impl Tasks
         Self{
             write_checkpoint: RecurringTask::new(),
             record_time_sample: RecurringTask::new(),
+            write_tracer_output: RecurringTask::new(),
             call_count_this_run: 0,
             tasks_last_performed: Instant::now(),
         }
@@ -293,19 +293,20 @@ impl Tasks
         Ok(())
     }
 
-    fn write_tracer_output(&mut self, state: &State, model: &kind_config::Form, app: &App)
+    fn write_tracer_output<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(&mut self,
+        state: &State<C>,
+        model: &kind_config::Form,
+        app: &App) -> anyhow::Result<()>
     {
-        let tracer_output_interval: f64 = model.get("toi").into();
-        let outdir = app.output_directory();
-        let fname  = format!("{}/tracers.{:04}.h5", outdir, self.tracer_output_count);
+        let outdir = app.output_directory()?;
+        let fname  = outdir.child(&format!("tracers.{:04}.h5", self.write_tracer_output.count));
 
-        std::fs::create_dir_all(outdir).unwrap();
-
-        self.tracer_output_count += 1;
-        self.tracer_output_next_time += tracer_output_interval;
+        self.write_tracer_output.advance(model.get("toi").into());
 
         println!("write tracer_output {}", fname);
         io::write_tracer_output(&fname, &state, &model).expect("HDF5 write failed");
+
+        Ok(())
     }
 
     fn perform<C: io::H5Conserved<T>, T: hdf5::H5Type + Clone>(
@@ -337,7 +338,7 @@ impl Tasks
         {
             self.write_checkpoint(state, time_series, block_data, model, app)?;
         }
-        if state.time / ORBITAL_PERIOD >= self.tracer_output_next_time
+        if state.time / ORBITAL_PERIOD >= self.write_tracer_output.next_time
         {
             self.write_tracer_output(state, model, app);
         }
@@ -422,7 +423,8 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
         State{
             time: 0.0,
             iteration: Rational64::new(0, 1),
-            conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect()
+            conserved: mesh.block_indexes().iter().map(|&i| self.initial_conserved(i, mesh)).collect(),
+            tracers  : mesh.block_indexes().iter().map(|&i| self.initial_tracers(i, mesh, mesh.tracers_per_block)).collect(),
         } 
     }
     fn initial_time_series(&self) -> Vec<TimeSeriesSample>
@@ -435,7 +437,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
         let tracers_per_row = f64::sqrt(ntracers as f64).ceil();
         let tracer_spacing  = mesh.block_length() / tracers_per_row;
         let total_tracers   = (tracers_per_row * tracers_per_row) as usize;
-        let get_id = |i| linear_index(block_index, mesh.num_blocks) * ntracers + i;
+        let get_id = |i| self.linear_index(block_index, mesh.num_blocks) * ntracers + i;
 
         let make_grid = |n|
         {
@@ -460,15 +462,10 @@ impl<System: Hydrodynamics + InitialModel> Driver<System>
             }
         }).collect()
     }
-}
-
-
-
-
-// ============================================================================
-fn linear_index(block_index: BlockIndex, num_blocks: usize) -> usize
-{
-    return block_index.0 * num_blocks + block_index.1;
+    fn linear_index(&self, block_index: BlockIndex, num_blocks: usize) -> usize
+    {
+        block_index.0 * num_blocks + block_index.1
+    }
 }
 
 
@@ -555,7 +552,8 @@ fn run<S, C, T>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow
         if app.tokio {
             state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
         } else {
-            scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
+            // scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
+            panic!("Not here right now");
         }
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
