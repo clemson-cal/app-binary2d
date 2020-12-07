@@ -606,7 +606,7 @@ pub struct Isothermal {
 
 #[derive(Clone, Copy)]
 pub struct Euler {
-    gamma_law_index: f64,
+    pub gamma_law_index: f64,
 }
 
 
