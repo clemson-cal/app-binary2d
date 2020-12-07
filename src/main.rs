@@ -11,7 +11,10 @@
 
 // ============================================================================
 mod io;
+mod mesh;
 mod scheme;
+mod traits;
+mod physics;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 use std::time::Instant;
@@ -20,18 +23,28 @@ use num::rational::Rational64;
 use clap::Clap;
 use kind_config;
 use io_logical::verified;
+
+use traits::{
+    Hydrodynamics,
+    Conserved,
+};
+
+use physics::{
+    Euler,
+    ItemizedChange,
+    Isothermal,
+    Solver,
+};
+
+use mesh::{
+    Mesh,
+    BlockIndex,
+};
+
 use scheme::{
     State,
     BlockSolution,
-    BlockIndex,
     BlockData,
-    Conserved,
-    ItemizedChange,
-    Mesh,
-    Solver,
-    Hydrodynamics,
-    Isothermal,
-    Euler
 };
 
 
@@ -57,7 +70,7 @@ fn main() -> anyhow::Result<()>
         .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
-        .item("cfl"             , 0.5    , "CFL parameter [~0.4-0.7]")
+        .item("cfl"             , 0.4    , "CFL parameter [~0.4-0.7]")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
@@ -117,6 +130,9 @@ struct App
 
     #[clap(long, about="Reduce memory footprint [benchmarking]")]
     low_mem: bool,
+
+    #[clap(long, about="Truncate an existing time series file in the output directory")]
+    truncate: bool,
 }
 
 impl App
@@ -505,7 +521,17 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
-    time_series.retain(|s| s.time < state.time);
+
+    if let Some(last_sample) = time_series.last() {
+        if state.time < last_sample.time {
+            if ! app.truncate {
+                return Err(anyhow::anyhow!("output directory would lose time series data; run with --truncate to proceed anyway."));
+            } else {
+                time_series.retain(|s| s.time < state.time);
+            }
+        }
+    }
+
 
     println!();
     for key in &model.sorted_keys() {
