@@ -1,3 +1,4 @@
+use godunov_core::runge_kutta;
 use kepler_two_body::{OrbitalElements, OrbitalState};
 use crate::mesh::Mesh;
 
@@ -41,6 +42,12 @@ pub struct Solver
 
 impl Solver
 {
+    pub fn runge_kutta(&self) -> runge_kutta::RungeKuttaOrder
+    {
+        use std::convert::TryFrom;
+        runge_kutta::RungeKuttaOrder::try_from(self.rk_order).expect("illegal RK order")
+    }
+
     pub fn need_flux_communication(&self) -> bool
     {
         self.force_flux_comm
