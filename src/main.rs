@@ -130,6 +130,9 @@ struct App
 
     #[clap(long, about="Reduce memory footprint [benchmarking]")]
     low_mem: bool,
+
+    #[clap(long, about="Truncate an existing time series file in the output directory")]
+    truncate: bool,
 }
 
 impl App
@@ -518,7 +521,17 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
-    time_series.retain(|s| s.time < state.time);
+
+    if let Some(last_sample) = time_series.last() {
+        if state.time < last_sample.time {
+            if ! app.truncate {
+                return Err(anyhow::anyhow!("output directory would lose time series data; run with --truncate to proceed anyway."));
+            } else {
+                time_series.retain(|s| s.time < state.time);
+            }
+        }
+    }
+
 
     println!();
     for key in &model.sorted_keys() {
