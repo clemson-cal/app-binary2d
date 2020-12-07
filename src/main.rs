@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<()>
         .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
-        .item("cfl"             , 0.5    , "CFL parameter [~0.4-0.7]")
+        .item("cfl"             , 0.4    , "CFL parameter [~0.4-0.7]")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")

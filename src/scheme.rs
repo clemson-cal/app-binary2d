@@ -852,8 +852,8 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
                 flux_map[&block.index].clone().await
             } else {
                 let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &flux_map[i])).await;
-                let fx_n = flux_n.map_3by3(|f| f.clone().0);
-                let fy_n = flux_n.map_3by3(|f| f.clone().1);
+                let fx_n = flux_n.map_3by3(|f| f.0.clone());
+                let fy_n = flux_n.map_3by3(|f| f.1.clone());
                 let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
