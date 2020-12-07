@@ -99,21 +99,21 @@ impl H5Read for f64
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        group.dataset(name)?.read_scalar::<Self>()
+        group.dataset(name)?.read_scalar()
     }
 }
 impl H5Read for i64
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        group.dataset(name)?.read_scalar::<Self>()
+        group.dataset(name)?.read_scalar()
     }
 }
 impl<T> H5Read for num::rational::Ratio<T> where T: num::Integer + H5Type + Copy
 {
     fn read(group: &Group, name: &str) -> hdf5::Result<Self>
     {
-        let nd = group.dataset(name)?.read_scalar::<[T; 2]>()?;
+        let nd: [T; 2] = group.dataset(name)?.read_scalar()?;
         Ok(Self::new(nd[0], nd[1]))
     }
 }

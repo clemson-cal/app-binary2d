@@ -22,6 +22,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbf56136a5198c7b01a49e3afcbef6cf84597273d298f54432926024107b0109"
 
 [[package]]
+name = "async-trait"
+version = "0.1.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d3a45e77e34375a7923b1e8febb049bb011f064714a8e17a1a616fef01da13d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -43,6 +54,7 @@ name = "binary2d"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "crossbeam",
  "futures",
@@ -116,6 +128,15 @@ name = "cloudabi"
 version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddfc5b9aa5d4507acaf872de71051dfd0e309860e88966e1051e462a077aac4f"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
+name = "cloudabi"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4344512281c643ae7638bbabc3af17a11307803ec8f0fcad9fae512a8bf36467"
 dependencies = [
  "bitflags",
 ]
@@ -302,8 +323,9 @@ checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 [[package]]
 name = "godunov-core"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/godunov-core#03c50839f814aa449febbd955403849196bc2aa3"
+source = "git+https://github.com/clemson-cal/godunov-core#bf2750575658a89876de71a975c12e50d939123d"
 dependencies = [
+ "async-trait",
  "ndarray",
  "num",
 ]
@@ -329,7 +351,7 @@ dependencies = [
  "ndarray",
  "num-integer",
  "num-traits",
- "parking_lot",
+ "parking_lot 0.10.2",
 ]
 
 [[package]]
@@ -389,12 +411,18 @@ dependencies = [
 [[package]]
 name = "hydro-euler"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/hydro-euler#57a60c9b05ab4c8a1325367113cddc5f48b2e411"
+source = "git+https://github.com/clemson-cal/hydro-euler#55f5e5b7a3735c50f85073d4fc91aba2a1fe2ff2"
+dependencies = [
+ "hdf5",
+]
 
 [[package]]
 name = "hydro-iso2d"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/hydro-iso2d#a7d22acefa6878338c131110efdd25ffec4182ee"
+source = "git+https://github.com/clemson-cal/hydro-iso2d#05d41739f2ed91ecc7ba53735ba152ee866931fc"
+dependencies = [
+ "hdf5",
+]
 
 [[package]]
 name = "indexmap"
@@ -404,6 +432,15 @@ checksum = "55e2e4c765aa53a0424761bf9f41aa7a6ac1efa87238f59560640e27fca028f2"
 dependencies = [
  "autocfg",
  "hashbrown",
+]
+
+[[package]]
+name = "instant"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61124eeebbd69b8190558df225adf7e4caafce0d743919e5d6b19652314ec5ec"
+dependencies = [
+ "cfg-if 1.0.0",
 ]
 
 [[package]]
@@ -422,12 +459,15 @@ dependencies = [
 [[package]]
 name = "kepler-two-body"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/kepler-two-body#d42ade3094e4e7dcd0c083830c7743ba826b2570"
+source = "git+https://github.com/clemson-cal/kepler-two-body#93f89ec53482edfeec7c6ebf52abffc63ac3aaaa"
+dependencies = [
+ "hdf5",
+]
 
 [[package]]
 name = "kind-config"
-version = "0.2.2"
-source = "git+https://github.com/clemson-cal/kind-config#2b310216c3231c5ef8e54d112f9aa0ebd47d8e32"
+version = "0.2.3"
+source = "git+https://github.com/clemson-cal/kind-config#8e5434b1d3a4277df31ab66c3c18d95e351bf072"
 dependencies = [
  "hdf5",
 ]
@@ -446,9 +486,9 @@ checksum = "4d58d1b70b004888f764dfbf6a26a3b0342a1632d33968e4a179d8011c760614"
 
 [[package]]
 name = "libloading"
-version = "0.6.5"
+version = "0.6.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1090080fe06ec2648d0da3881d9453d97e71a45f00eb179af7fdd7e3f686fdb0"
+checksum = "e9367bdfa836b7e3cf895867f7a570283444da90562980ec2263d6e1569b16bc"
 dependencies = [
  "cfg-if 1.0.0",
  "winapi",
@@ -459,6 +499,15 @@ name = "lock_api"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4da24a77a3d8a6d4862d95f72e6fdb9c09a643ecdb402d754004a557f2bec75"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
+name = "lock_api"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd96ffd135b2fd7b973ac026d28085defbe8983df057ced3eb4f2130b0831312"
 dependencies = [
  "scopeguard",
 ]
@@ -628,8 +677,19 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3a704eb390aafdc107b0e392f56a82b668e3a71366993b5340f5833fd62505e"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.3.4",
+ "parking_lot_core 0.7.2",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d7744ac029df22dca6284efe4e898991d28e3085c706c972bcd7da4a27a15eb"
+dependencies = [
+ "instant",
+ "lock_api 0.4.2",
+ "parking_lot_core 0.8.0",
 ]
 
 [[package]]
@@ -639,7 +699,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d58c7c768d4ba344e3e8d72518ac13e259d7c7ade24167003b8488e10b6740a3"
 dependencies = [
  "cfg-if 0.1.10",
- "cloudabi",
+ "cloudabi 0.0.3",
+ "libc",
+ "redox_syscall",
+ "smallvec",
+ "winapi",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c361aa727dd08437f2f1447be8b59a33b0edd15e0fcee698f935613d9efbca9b"
+dependencies = [
+ "cfg-if 0.1.10",
+ "cloudabi 0.1.0",
+ "instant",
  "libc",
  "redox_syscall",
  "smallvec",
@@ -793,20 +868,20 @@ dependencies = [
 
 [[package]]
 name = "serial_test"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b15f74add9a9d4a3eb2bf739c9a427d266d3895b53d992c3a7c234fec2ff1f1"
+checksum = "e0bccbcf40c8938196944a3da0e133e031a33f4d6b72db3bda3cc556e361905d"
 dependencies = [
  "lazy_static",
- "parking_lot",
+ "parking_lot 0.11.1",
  "serial_test_derive",
 ]
 
 [[package]]
 name = "serial_test_derive"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65f59259be9fc1bf677d06cc1456e97756004a1a5a577480f71430bd7c17ba33"
+checksum = "b2acd6defeddb41eb60bb468f8825d0cfd0c2a76bc03bfd235b6a1dc4f6a1ad5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -833,9 +908,9 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "syn"
-version = "1.0.50"
+version = "1.0.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "443b4178719c5a851e1bde36ce12da21d74a0e60b4d982ec3385a933c812f0f6"
+checksum = "8833e20724c24de12bbaba5ad230ea61c3eafb05b881c7c9d3cfe8638b187e68"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -891,9 +966,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dfe2523e6fa84ddf5e688151d4e5fddc51678de9752c6512a24714c23818d61"
+checksum = "a12a3eb39ee2c231be64487f1fcbe726c8f2514876a55480a5ab8559fc374252"
 dependencies = [
  "autocfg",
  "num_cpus",
@@ -903,9 +978,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.7.0"
+version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db8716a166f290ff49dabc18b44aa407cb7c6dbe1aa0971b44b8a24b0ca35aae"
+checksum = "bb0d2e7be6ae3a5fa87eed5fb451aff96f2573d2694942e40543ae0bbe19c796"
 
 [[package]]
 name = "unicode-width"
