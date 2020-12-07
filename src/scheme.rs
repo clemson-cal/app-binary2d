@@ -256,8 +256,8 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
                 flux_map[&block.index].clone().await
             } else {
                 let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &flux_map[i])).await;
-                let fx_n = flux_n.map_3by3(|f| f.clone().0);
-                let fy_n = flux_n.map_3by3(|f| f.clone().1);
+                let fx_n = flux_n.map_3by3(|f| f.0.clone());
+                let fy_n = flux_n.map_3by3(|f| f.1.clone());
                 let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
@@ -489,7 +489,8 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 
 // ============================================================================
 fn advance_channels_internal<H: Hydrodynamics>(
-    state:      &mut BlockState<H::Conserved>,
+    solution:   &mut BlockSolution<H::Conserved>,
+    time:       f64,
     hydro:      H,
     block_data: &BlockData<H::Conserved>,
     solver:     &Solver,
@@ -500,13 +501,17 @@ fn advance_channels_internal<H: Hydrodynamics>(
     fold:       usize)
 {
     let update = |state| advance_channels_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
-    let mut s = state.clone();
+    let mut state = BlockState {
+        time: time,
+        iteration: Rational64::new(0, 1),
+        solution: solution.clone(),
+    };
 
     for _ in 0..fold
     {
-        s = solver.runge_kutta().advance(s, update);
+        state = solver.runge_kutta().advance(state, update);
     }
-    *state = s;
+    *solution = state.solution;
 }
 
 
@@ -525,6 +530,7 @@ pub fn advance_channels<H: Hydrodynamics>(
     if solver.need_flux_communication() {
         todo!("flux communication with message-passing parallelization");
     }
+    let time = state.time;
 
     crossbeam::scope(|scope|
     {
@@ -532,7 +538,7 @@ pub fn advance_channels<H: Hydrodynamics>(
         let mut senders         = Vec::new();
         let mut block_primitive = HashMap::new();
 
-        for (s, b) in state.solution.iter_mut().zip(block_data)
+        for (solution, block) in state.solution.iter_mut().zip(block_data)
         {
             let (their_s, my_r) = crossbeam::channel::unbounded();
             let (my_s, their_r) = crossbeam::channel::unbounded();
@@ -540,13 +546,7 @@ pub fn advance_channels<H: Hydrodynamics>(
             senders.push(my_s);
             receivers.push(my_r);
 
-            let mut state = BlockState {
-                time: state.time,
-                iteration: state.iteration,
-                solution: s.clone(),
-            };
-
-            scope.spawn(move |_| advance_channels_internal(&mut state, hydro, b, solver, mesh, &their_s, &their_r, dt, fold));
+            scope.spawn(move |_| advance_channels_internal(solution, time, hydro, block, solver, mesh, &their_s, &their_r, dt, fold));
         }
 
         for _ in 0..fold
