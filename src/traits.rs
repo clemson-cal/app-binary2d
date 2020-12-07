@@ -1,10 +1,11 @@
 use std::ops::{Add, Sub, Mul, Div};
 use kepler_two_body::OrbitalState;
-use crate::physics::Solver;
-use crate::scheme::{
-	Direction,
-	CellData,
-	ItemizedChange
+
+use crate::physics::{
+    CellData,
+    Direction,
+    ItemizedChange,
+    Solver,
 };
 
 

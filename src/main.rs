@@ -30,6 +30,9 @@ use traits::{
 };
 
 use physics::{
+    Euler,
+    ItemizedChange,
+    Isothermal,
     Solver,
 };
 
@@ -37,13 +40,11 @@ use mesh::{
     Mesh,
     BlockIndex,
 };
+
 use scheme::{
     State,
     BlockSolution,
     BlockData,
-    ItemizedChange,
-    Isothermal,
-    Euler,
 };
 
 
