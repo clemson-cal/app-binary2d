@@ -68,6 +68,7 @@ pub struct Solver
     pub cfl: f64,
     pub domain_radius: f64,
     pub mach_number: f64,
+    pub num_tracers: i64,
     pub nu: f64,
     pub plm: f64,
     pub rk_order: i64,
@@ -273,6 +274,11 @@ impl Solver
         self.force_flux_comm
     }
 
+    pub fn using_tracers(&self) -> bool
+    {
+        self.num_tracers > 0
+    }
+
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64
     {
         f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
@@ -423,6 +429,31 @@ impl Hydrodynamics for Isothermal
         };
         hydro_iso2d::riemann_hlle(pl, pr, iso2d_axis, cs2) + hydro_iso2d::Conserved(0.0, -tau_x, -tau_y)
     }
+
+    fn intercell_flux_plus_state<'a>(
+        &self,
+        solver: &Solver,
+        l: &CellData<'a, hydro_iso2d::Primitive>, 
+        r: &CellData<'a, hydro_iso2d::Primitive>, 
+        f: &(f64, f64), 
+        two_body_state: &kepler_two_body::OrbitalState,
+        axis: Direction) -> (hydro_iso2d::Conserved, hydro_iso2d::Conserved)
+    {
+        let cs2 = solver.sound_speed_squared(f, &two_body_state);
+        let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
+        let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
+        let nu  = solver.nu;
+        let dim = solver.stress_dim;
+        let tau_x = 0.5 * (l.stress_field(nu, dim, axis, Direction::X) + r.stress_field(nu, dim, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(nu, dim, axis, Direction::Y) + r.stress_field(nu, dim, axis, Direction::Y));
+        let iso2d_axis = match axis {
+            Direction::X => hydro_iso2d::Direction::X,
+            Direction::Y => hydro_iso2d::Direction::Y,
+        };
+        let (uflux, ustate) = hydro_iso2d::riemann_hlle_plus_state(pl, pr, iso2d_axis, cs2);
+        let vflux = hydro_iso2d::Conserved(0.0, -tau_x, -tau_y);
+        (uflux + vflux, ustate)
+    }
 }
 
 
@@ -511,6 +542,18 @@ impl Hydrodynamics for Euler
             Direction::Y => hydro_euler::geometry::Direction::Y,
         };
         hydro_euler::euler_2d::riemann_hlle(pl, pr, euler_axis, self.gamma_law_index) + viscous_flux
+    }
+
+    fn intercell_flux_plus_state<'a>(
+        &self,
+        _solver: &Solver,
+        _l: &CellData<'a, Self::Primitive>, 
+        _r: &CellData<'a, Self::Primitive>, 
+        _f: &(f64, f64), 
+        _two_body_state: &kepler_two_body::OrbitalState,
+        _axis: Direction) -> (Self::Conserved, Self::Conserved)
+    {
+        todo!("write riemann_hlle_plus_state in hydro_euler::euler_2d and call here");
     }
 }
 

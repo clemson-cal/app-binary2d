@@ -78,4 +78,13 @@ pub trait Hydrodynamics: Copy + Send
         f: &(f64, f64),
         two_body_state: &kepler_two_body::OrbitalState,
         axis: Direction) -> Self::Conserved;
+
+    fn intercell_flux_plus_state<'a>(
+        &self,
+        solver: &Solver,
+        l: &CellData<'a, Self::Primitive>, 
+        r: &CellData<'a, Self::Primitive>, 
+        f: &(f64, f64), 
+        two_body_state: &kepler_two_body::OrbitalState,
+        axis: Direction) -> (Self::Conserved, Self::Conserved);
 }

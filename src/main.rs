@@ -15,6 +15,7 @@ mod mesh;
 mod scheme;
 mod traits;
 mod physics;
+mod tracers;
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 use std::time::Instant;
@@ -47,6 +48,7 @@ use scheme::{
     BlockData,
 };
 
+use tracers::*;
 
 
 
@@ -77,6 +79,7 @@ fn main() -> anyhow::Result<()>
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
+        .item("num_tracers"     , 0      , "Number of tracers per block")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
         .item("rk_order"        , 2      , "Runge-Kutta time integration order [1|2|3]")
@@ -85,6 +88,8 @@ fn main() -> anyhow::Result<()>
         .item("softening_length", 0.05   , "Gravitational softening length [a]")
         .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
+        .item("toi"             , 1.0    , "Tracer output interval [Orbits]")
+        .item("tor"             , 1.0    , "Tracer output ratio")
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
         .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
         .item("eccentricity"    , 0.0    , "Orbital eccentricity")
@@ -237,6 +242,7 @@ pub struct Tasks
 {
     pub write_checkpoint: RecurringTask,
     pub record_time_sample: RecurringTask,
+    pub write_tracer_output: RecurringTask,
 
     pub call_count_this_run: usize,
     pub tasks_last_performed: Instant,
@@ -252,6 +258,7 @@ impl From<Tasks> for Vec<(String, RecurringTask)>
         vec![
             ("write_checkpoint".into(), tasks.write_checkpoint),
             ("record_time_sample".into(), tasks.record_time_sample),
+            ("write_tracer_output".into(), tasks.write_tracer_output),
         ]
     }
 }
@@ -261,8 +268,9 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
     fn from(a: Vec<(String, RecurringTask)>) -> Tasks {
         let task_map: HashMap<_, _> = a.into_iter().collect();
         Tasks {
-            write_checkpoint:   task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
-            record_time_sample: task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
+            write_checkpoint:    task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
+            record_time_sample:  task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
+            write_tracer_output: task_map.get("write_tracer_output").cloned().unwrap_or_else(RecurringTask::new),
             call_count_this_run: 0,
             tasks_last_performed: Instant::now(),
         }
@@ -280,6 +288,7 @@ impl Tasks
         Self{
             write_checkpoint: RecurringTask::new(),
             record_time_sample: RecurringTask::new(),
+            write_tracer_output: RecurringTask::new(),
             call_count_this_run: 0,
             tasks_last_performed: Instant::now(),
         }
@@ -325,6 +334,22 @@ impl Tasks
         Ok(())
     }
 
+    fn write_tracer_output<C: Conserved>(&mut self,
+        state: &State<C>,
+        model: &kind_config::Form,
+        app: &App) -> anyhow::Result<()>
+    {
+        let outdir = app.output_directory()?;
+        let fname  = outdir.child(&format!("tracers.{:04}.h5", self.write_tracer_output.count));
+
+        self.write_tracer_output.advance(model.get("toi").into());
+
+        println!("Write tracer_output {}", fname);
+        io::write_tracer_output(&fname, &state, &model)?;
+
+        Ok(())
+    }
+
     fn perform<C: Conserved>(
         &mut self,
         state: &State<C>,
@@ -353,6 +378,11 @@ impl Tasks
         if state.time / ORBITAL_PERIOD >= self.write_checkpoint.next_time
         {
             self.write_checkpoint(state, time_series, block_data, model, app)?;
+        }
+
+        if state.time / ORBITAL_PERIOD >= self.write_tracer_output.next_time
+        {
+            self.write_tracer_output(state, model, app)?;
         }
 
         self.call_count_this_run += 1;
@@ -431,7 +461,27 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
             conserved: u0,
             integrated_source_terms: ItemizedChange::zeros(),
             orbital_elements_change: ItemizedChange::zeros(),
+            tracers: self.initial_tracers(block_index, mesh, mesh.tracers_per_block),
         }
+    }
+    fn initial_tracers(&self, block_index: BlockIndex, mesh: &Mesh, ntracers: usize) -> Vec<Tracer>
+    {
+        let x0 = mesh.block_start(block_index);
+        let tracers_per_row = f64::sqrt(ntracers as f64).ceil();
+        let tracer_spacing  = mesh.block_length() / tracers_per_row;
+        let total_tracers   = (tracers_per_row * tracers_per_row) as usize;
+        let get_id = |i| self.linear_index(block_index, mesh.num_blocks) * ntracers + i;
+
+        let make_grid = |n|
+        {
+            let m = tracers_per_row as usize;
+            let x = ((n % m) as f64 + 0.5) * tracer_spacing + x0.0;
+            let y = ((n / m) as f64 + 0.5) * tracer_spacing + x0.1;
+            ((x, y), n)
+        };
+        (0..total_tracers).map(make_grid)
+                          .map(|(xy, n)| Tracer::new(xy, get_id(n)))
+                          .collect()
     }
     fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
     {
@@ -457,6 +507,10 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
             }
         }).collect()
     }
+    fn linear_index(&self, block_index: BlockIndex, num_blocks: usize) -> usize
+    {
+        block_index.0 * num_blocks + block_index.1
+    }
 }
 
 
@@ -478,6 +532,7 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         cfl:              model.get("cfl").into(),
         domain_radius:    model.get("domain_radius").into(),
         mach_number:      model.get("mach_number").into(),
+        num_tracers:      model.get("num_tracers").into(),
         nu:               model.get("nu").into(),
         plm:              model.get("plm").into(),
         rk_order:         model.get("rk_order").into(),
@@ -497,6 +552,7 @@ fn create_mesh(model: &kind_config::Form) -> Mesh
         num_blocks: i64::from(model.get("num_blocks")) as usize,
         block_size: i64::from(model.get("block_size")) as usize,
         domain_radius: model.get("domain_radius").into(),
+        tracers_per_block: i64::from(model.get("num_tracers")) as usize,
     }
 }
 

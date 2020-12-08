@@ -20,6 +20,10 @@ use crate::scheme::{
     BlockData,
 };
 
+use crate::tracers::{
+    Tracer,
+};
+
 
 
 
@@ -54,6 +58,7 @@ fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<B
     {
         let block_group = solution_group.create_group(&format!("0:{:03}-{:03}", b.index.0, b.index.1))?;
         s.conserved.write(&block_group, "conserved")?;
+        s.tracers.write(&block_group, "tracers")?;
         block_group.new_dataset::<ItemizedChange<C>>().create("integrated_source_terms", ())?.write_scalar(&s.integrated_source_terms)?;
         block_group.new_dataset::<ItemizedChange<E>>().create("orbital_elements_change", ())?.write_scalar(&s.orbital_elements_change)?;
     }
@@ -77,6 +82,7 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(_: &H) -> impl Fn
                 conserved: ndarray::Array::read(&block_group, "conserved")?.to_shared(),
                 integrated_source_terms: block_group.dataset("integrated_source_terms")?.read_scalar()?,
                 orbital_elements_change: block_group.dataset("orbital_elements_change")?.read_scalar()?,
+                tracers: Vec::read(&block_group, "tracers")?,
             };
             solution.push(s);
         }
@@ -129,6 +135,34 @@ pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
 
 
 // ============================================================================
+pub fn write_tracer_output<C:Conserved>(filename: &str, state: &State<C>, model: &kind_config::Form) -> hdf5::Result<()>
+{
+    let file = File::create(filename)?;
+    let tracer_output_ratio: f64 = model.get("tor").into();
+
+    write_tracer_subset(&file, &state.solution, tracer_output_ratio as usize)?;
+    state.time.write(&file, "time")?;
+    state.iteration.write(&file, "iteration")?;
+    
+    Ok(())
+}
+
+fn write_tracer_subset<C: Conserved>(file: &hdf5::Group, solution: &Vec<BlockSolution<C>>, tor: usize) -> hdf5::Result<()>
+{
+    let subset: Vec<Tracer> = solution
+        .iter()
+        .map(|s| s.tracers.iter().filter(|t| t.id % tor == 0))
+        .flatten()
+        .map(|t| t.clone())
+        .collect();
+    subset.write(&file, "tracers")?;
+    Ok(())
+}
+
+
+
+
+// ============================================================================
 pub fn write_checkpoint<C: Conserved>(
     filename: &str,
     state: &State<C>,
@@ -144,3 +178,4 @@ pub fn write_checkpoint<C: Conserved>(
 
     Ok(())
 }
+

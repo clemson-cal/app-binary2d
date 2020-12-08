@@ -1,11 +1,14 @@
-use std::ops::{Add, Mul};
 use ndarray::{Array, Ix2};
 use num::rational::Rational64;
 use num::ToPrimitive;
-use crate::scheme::*;
+use std::sync::Arc;
+use godunov_core::runge_kutta;
+use crate::physics::Direction;
 
-// #[derive(Copy, Clone)]
-// pub enum Direction { X, Y }
+use crate::mesh::{
+    Mesh,
+    BlockIndex,
+};
 
 
 
@@ -23,30 +26,15 @@ pub struct Tracer
 
 
 // ============================================================================
-impl Add for Tracer
+impl runge_kutta::WeightedAverage for Tracer
 {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
     {
-        Self{
+        let bf = br.to_f64().unwrap();
+        Tracer{
             id: self.id,
-            x : self.x + other.x,
-            y : self.y + other.y,
-        }
-    }
-}
-
-impl Mul<Rational64> for Tracer
-{
-    type Output = Self;
-
-    fn mul(self, b: Rational64) -> Self
-    {
-        Self{
-            id: self.id,
-            x : self.x * b.to_f64().unwrap(),
-            y : self.y * b.to_f64().unwrap(),
+            x : self.x * (-bf + 1.) + s0.x * bf, 
+            y : self.y * (-bf + 1.) + s0.y * bf, 
         }
     }
 }
@@ -99,8 +87,8 @@ pub fn update_tracers(
     let (i, j) = mesh.get_cell_index(index, tracer.x, tracer.y);
     let dx = mesh.cell_spacing_x();
     let dy = mesh.cell_spacing_y();
-    let wx = (tracer.x - mesh.face_center_at(index, i, j, crate::scheme::Direction::X).0) / dx; 
-    let wy = (tracer.y - mesh.face_center_at(index, i, j, crate::scheme::Direction::Y).1) / dy;
+    let wx = (tracer.x - mesh.face_center_at(index, i, j, Direction::X).0) / dx; 
+    let wy = (tracer.y - mesh.face_center_at(index, i, j, Direction::Y).1) / dy;
     let m  = (i + pad_size as i64) as usize;
     let n  = (j + pad_size as i64) as usize;
     let vx = (1.0 - wx) * vfield_x[[m, n]] + wx * vfield_x[[m + 1, n]];
@@ -113,7 +101,7 @@ pub fn update_tracers(
 
 
 // ============================================================================
-pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracerVecs, mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
+pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Tracer>>; 3]; 3], mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
@@ -136,7 +124,7 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: NeighborTracer
 
 
 
-// ============================================================================
+// // ============================================================================
 pub fn tracers_on_and_off_block(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
 {
     let r = mesh.block_length();
