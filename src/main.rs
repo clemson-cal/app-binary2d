@@ -137,6 +137,9 @@ struct App
 
     #[clap(long, about="Reduce memory footprint [benchmarking]")]
     low_mem: bool,
+
+    #[clap(long, about="Do tracer communications in parallel [benchmarking]")]
+    async_rebin: bool,
 }
 
 impl App
@@ -544,6 +547,7 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
         low_mem:          app.low_mem,
+        async_rebin:      app.async_rebin,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
 }

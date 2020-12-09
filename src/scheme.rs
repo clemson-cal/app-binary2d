@@ -329,7 +329,11 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
     for _ in 0..fold {
         if solver.using_tracers() {
-            state = runtime.block_on(rebin_tracers(state, &mesh, block_data, runtime));
+            if solver.async_rebin {
+                state = runtime.block_on(rebin_tracers_async(state, &mesh, block_data, runtime));
+            } else {
+                state = rebin_tracers_sync(state, &mesh, block_data);
+            }
         }
         state = runtime.block_on(solver.runge_kutta().advance_async(state, update, runtime));
     }
@@ -340,7 +344,7 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
 
 // ============================================================================
-async fn rebin_tracers<C: Conserved>(
+async fn rebin_tracers_async<C: Conserved>(
     state: State<C>,
     mesh : &Mesh,
     block_data: &Vec<BlockData<C>>,
@@ -371,12 +375,12 @@ async fn rebin_tracers<C: Conserved>(
     {
         let mesh         = mesh.clone();
         let block        = block.clone();
-        let solution     = s.clone();
         let tracer_map   = tracer_map.clone();
+        let solution     = s.clone();
 
         let s1 = async move {
-            let my_tracers = tracer_map[&block.index].clone().await.0;
-            let tracers_on_off_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i])).await;
+            let my_tracers            = tracer_map[&block.index].clone().await.0;
+            let tracers_on_off_n      = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i])).await;
             let tracers_to_be_claimed = tracers_on_off_n.map_3by3(|(_, off)| off.clone());
             solution.with_tracers(push_new_tracers(my_tracers, tracers_to_be_claimed, &mesh, block.index))
         };
@@ -391,6 +395,33 @@ async fn rebin_tracers<C: Conserved>(
         time: state.time,
         iteration: state.iteration,
         solution: join_all(s1_vec).await
+    }
+}
+
+
+
+
+// ============================================================================
+fn rebin_tracers_sync<C: Conserved>(state: State<C>, mesh: &Mesh, block_data: &Vec<BlockData<C>>) -> State<C>
+{
+    let tracer_map: HashMap<_, _> = state.solution.iter().zip(block_data).map(|(s, block)|
+    {
+        let (mine, theirs) = crate::tracers::tracers_on_and_off_block(&s.tracers, &mesh, block.index);
+        (block.index, (mine, Arc::new(theirs)))
+    }).collect();
+
+    let s1_vec = state.solution.iter().zip(block_data).map(|(solution, block)|
+    {
+        let my_tracers            = tracer_map[&block.index].clone().0;
+        let tracers_on_off_n      = mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i]);
+        let tracers_to_be_claimed = tracers_on_off_n.map_3by3(|(_, off)| off.clone());
+        solution.with_tracers(crate::tracers::push_new_tracers(my_tracers, tracers_to_be_claimed, &mesh, block.index))
+    });
+
+    State {
+        time: state.time,
+        iteration: state.iteration,
+        solution: s1_vec.collect(),
     }
 }
 

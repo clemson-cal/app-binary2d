@@ -78,6 +78,7 @@ pub struct Solver
     pub stress_dim: i64,
     pub force_flux_comm: bool,
     pub low_mem: bool,
+    pub async_rebin: bool,
     pub orbital_elements: OrbitalElements,
 }
 
