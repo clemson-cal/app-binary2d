@@ -20,6 +20,7 @@ static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 use std::time::Instant;
 use std::collections::HashMap;
+use std::sync::Arc;
 use num::rational::Rational64;
 use clap::Clap;
 use kind_config;
@@ -462,7 +463,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
             conserved: u0,
             integrated_source_terms: ItemizedChange::zeros(),
             orbital_elements_change: ItemizedChange::zeros(),
-            tracers: self.initial_tracers(block_index, mesh, mesh.tracers_per_block),
+            tracers: Arc::new(self.initial_tracers(block_index, mesh, mesh.tracers_per_block)),
         }
     }
     fn initial_tracers(&self, block_index: BlockIndex, mesh: &Mesh, ntracers: usize) -> Vec<Tracer>

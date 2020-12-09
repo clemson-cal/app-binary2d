@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use hdf5::{File, Group, H5Type};
 use io_logical::verified;
 use io_logical::nicer_hdf5;
@@ -82,7 +83,7 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(_: &H) -> impl Fn
                 conserved: ndarray::Array::read(&block_group, "conserved")?.to_shared(),
                 integrated_source_terms: block_group.dataset("integrated_source_terms")?.read_scalar()?,
                 orbital_elements_change: block_group.dataset("orbital_elements_change")?.read_scalar()?,
-                tracers: Vec::read(&block_group, "tracers")?,
+                tracers: Arc::new(Vec::read(&block_group, "tracers")?),
             };
             solution.push(s);
         }

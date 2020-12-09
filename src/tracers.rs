@@ -1,4 +1,4 @@
-use ndarray::{Array, Ix2};
+use ndarray::{ArcArray, Ix2};
 use num::rational::Rational64;
 use num::ToPrimitive;
 use std::sync::Arc;
@@ -15,12 +15,12 @@ use crate::mesh::{
 
 // ============================================================================
 #[repr(C)]
-#[derive(hdf5::H5Type, Clone)]
+#[derive(hdf5::H5Type, Clone, Copy)]
 pub struct Tracer
 {
     pub id: usize,
-    pub x : f64,
-    pub y : f64,
+    pub x:  f64,
+    pub y:  f64,
 }
 
 
@@ -34,8 +34,8 @@ impl runge_kutta::WeightedAverage for Tracer
         let bf = br.to_f64().unwrap();
         Tracer{
             id: self.id,
-            x : self.x * (-bf + 1.) + s0.x * bf, 
-            y : self.y * (-bf + 1.) + s0.y * bf, 
+            x:  self.x * (-bf + 1.) + s0.x * bf, 
+            y:  self.y * (-bf + 1.) + s0.y * bf, 
         }
     }
 }
@@ -54,9 +54,9 @@ impl Tracer
     pub fn update(&self, v: (f64, f64), dt: f64) ->Tracer
     {
         Tracer{
-            x : self.x + v.0 * dt,
-            y : self.y + v.1 * dt,
             id: self.id,
+            x:  self.x + v.0 * dt,
+            y:  self.y + v.1 * dt,
         }
     }
 }
@@ -65,12 +65,12 @@ impl Tracer
 
 
 // ============================================================================
-pub fn update_tracers(
-    tracer: Tracer, 
+pub fn update_tracer(
+    tracer: &Tracer,
     mesh: &Mesh,
     index: crate::BlockIndex,
-    vfield_x: &Array<f64, Ix2>,
-    vfield_y: &Array<f64, Ix2>,
+    vfield_x: &ArcArray<f64, Ix2>,
+    vfield_y: &ArcArray<f64, Ix2>,
     pad_size: usize,
     dt: f64) -> Tracer
 {
@@ -124,7 +124,7 @@ pub fn push_new_tracers(mut tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Trace
 
 
 // ============================================================================
-pub fn tracers_on_and_off_block(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
+pub fn tracers_on_and_off_block(tracers: &Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);

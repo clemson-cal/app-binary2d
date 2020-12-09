@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::collections::HashMap;
+use std::sync::Arc;
 use num::rational::Rational64;
 use num::ToPrimitive;
 use ndarray::{Axis, Array, ArcArray, Ix2};
@@ -27,7 +28,7 @@ use crate::traits::{
 
 use crate::tracers::{
     Tracer,
-    update_tracers,
+    update_tracer,
 };
 
 
@@ -54,7 +55,7 @@ pub struct BlockSolution<C: Conserved>
     pub conserved: ArcArray<C, Ix2>,
     pub integrated_source_terms: ItemizedChange<C>,
     pub orbital_elements_change: ItemizedChange<OrbitalElements>,
-    pub tracers: Vec<Tracer>, // TODO: make this Arc
+    pub tracers: Arc<Vec<Tracer>>,
 }
 
 impl<C: Conserved> BlockSolution<C>
@@ -65,7 +66,7 @@ impl<C: Conserved> BlockSolution<C>
             conserved: self.conserved.clone(),
             integrated_source_terms: self.integrated_source_terms,
             orbital_elements_change: self.orbital_elements_change,
-            tracers: new_tracers,
+            tracers: Arc::new(new_tracers),
         }
     }
 }
@@ -164,7 +165,7 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
             conserved: u1 * (-bf + 1.) + u0 * bf,
             integrated_source_terms: t1.weighted_average(br, t0),
             orbital_elements_change: e1.weighted_average(br, e0),
-            tracers: tr0.iter().zip(tr1.iter()).map(|(tr0, tr1)| tr1.clone().weighted_average(br, &tr0.clone())).collect(),
+            tracers: Arc::new(tr0.iter().zip(tr1.as_ref()).map(|(tr0, tr1)| tr1.weighted_average(br, tr0)).collect()),
         }
     }
 }
@@ -347,7 +348,6 @@ async fn rebin_tracers<C: Conserved>(
 {
     use futures::future::{FutureExt, join_all};
     use crate::{tracers_on_and_off_block, push_new_tracers};
-    use std::sync::Arc;
 
     let tracer_map: HashMap<_, _> = state.solution.iter().zip(block_data).map(|(s, block)|
     {
@@ -357,7 +357,7 @@ async fn rebin_tracers<C: Conserved>(
         let block_index  = block.index;
 
         let tracer_split = async move {
-            let (mine, theirs) = tracers_on_and_off_block(tracers, &mesh, block_index);
+            let (mine, theirs) = tracers_on_and_off_block(&tracers, &mesh, block_index);
             (mine, Arc::new(theirs))
         };
         let split = runtime.spawn(tracer_split);
@@ -503,22 +503,17 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         (fx, fy, vstar_x, vstar_y)
     }
 
-
     fn compute_block_tracer_update(
         &self,
-        tracers:  Vec<Tracer>,
+        tracers:  &Vec<Tracer>,
         vstar_x:  ArcArray<f64, Ix2>,
         vstar_y:  ArcArray<f64, Ix2>,
         index:    BlockIndex,
-        solver:   &Solver,
         mesh:     &Mesh,
         dt:       f64) -> Vec<Tracer>
     {
-        if !solver.need_flux_communication() {
-            panic!();
-        }
         tracers.into_iter()
-               .map(|t| update_tracers(t, &mesh, index, &vstar_x.to_owned(), &vstar_y.to_owned(), 1, dt))
+               .map(|t| update_tracer(t, &mesh, index, &vstar_x, &vstar_y, 1, dt))
                .collect()
     }
 
@@ -566,8 +561,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                     fy.slice(s![.., 1..])]
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
-            let new_tracers = if solver.using_tracers()  {
-                self.compute_block_tracer_update(solution.tracers, vx.unwrap(), vy.unwrap(), block.index, &solver, &mesh, dt)
+            let new_tracers = if solver.using_tracers() {
+                Arc::new(self.compute_block_tracer_update(&solution.tracers, vx.unwrap(), vy.unwrap(), block.index, &mesh, dt))
             }
             else {
                 solution.tracers
@@ -604,7 +599,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             let de = ds.perturbation(time, solver.orbital_elements);
 
             let new_tracers = if solver.using_tracers()  {
-                self.compute_block_tracer_update(solution.tracers, vx.unwrap(), vy.unwrap(), block.index, &solver, &mesh, dt)
+                Arc::new(self.compute_block_tracer_update(&solution.tracers, vx.unwrap(), vy.unwrap(), block.index, &mesh, dt))
             }
             else {
                 solution.tracers
