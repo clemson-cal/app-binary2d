@@ -54,12 +54,12 @@ pub struct BlockSolution<C: Conserved>
     pub conserved: ArcArray<C, Ix2>,
     pub integrated_source_terms: ItemizedChange<C>,
     pub orbital_elements_change: ItemizedChange<OrbitalElements>,
-    pub tracers: Vec<Tracer>,
+    pub tracers: Vec<Tracer>, // TODO: make this Arc
 }
 
 impl<C: Conserved> BlockSolution<C>
 {
-    fn new_tracers(&self, new_tracers: Vec<Tracer>) -> Self
+    fn with_tracers(&self, new_tracers: Vec<Tracer>) -> Self
     {
         BlockSolution{
             conserved: self.conserved.clone(),
@@ -120,7 +120,7 @@ impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
             grav2:   self.grav2   * (-bf + 1.) + s0.grav2   * bf,
             buffer:  self.buffer  * (-bf + 1.) + s0.buffer  * bf,
             cooling: self.cooling * (-bf + 1.) + s0.cooling * bf,
-        }        
+        }
     }
 }
 
@@ -254,8 +254,14 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let fv = async move {
             let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map_3by3(|i| &pc_map[i])).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let (fx, fy, vstar_x, vstar_y) = scheme.compute_block_fluxes_and_face_velocities(&pe, &block, &solver, time);
-            (fx.to_shared(), fy.to_shared(), vstar_x.to_shared(), vstar_y.to_shared())
+
+            if solver.using_tracers() {
+                let (fx, fy, vx, vy) = scheme.compute_block_fluxes_and_face_velocities(&pe, &block, &solver, time);
+                (fx.to_shared(), fy.to_shared(), Some(vx.to_shared()), Some(vy.to_shared()))
+            } else {
+                let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
+                (fx.to_shared(), fy.to_shared(), None, None)
+            }
         };
         let fv = runtime.spawn(fv);
         let fv = async {
@@ -274,21 +280,21 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let solution = solution.clone();
 
         let s1 = async move {
-            let (fx, fy, vstar_x, vstar_y) = if ! solver.need_flux_communication() {
+            let (fx, fy, vx, vy) = if ! solver.need_flux_communication() {
                 fv_map[&block.index].clone().await
             } else {
                 let fv_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &fv_map[i])).await;
                 let fx_n = fv_n.map_3by3(|fv| fv.0.clone());
                 let fy_n = fv_n.map_3by3(|fv| fv.1.clone());
-                let vx_n = fv_n.map_3by3(|fv| fv.2.clone());
-                let vy_n = fv_n.map_3by3(|fv| fv.3.clone());
+                let vx_n = fv_n.map_3by3(|fv| fv.2.clone().unwrap());
+                let vy_n = fv_n.map_3by3(|fv| fv.3.clone().unwrap());
                 let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 let vx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&vx_n, 1, 1, 1, 1);
                 let vy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&vy_n, 1, 1, 1, 1);
-                (fx_e.to_shared(), fy_e.to_shared(), vx_e.to_shared(), vy_e.to_shared())
+                (fx_e.to_shared(), fy_e.to_shared(), Some(vx_e.to_shared()), Some(vy_e.to_shared()))
             };
-            scheme.compute_block_updated_solution(solution, (fx, Some(vstar_x)), (fy, Some(vstar_y)), &block, &solver, &mesh, time, dt)
+            scheme.compute_block_updated_solution(solution, fx, fy, vx, vy, &block, &solver, &mesh, time, dt)
         };
         let s1 = runtime.spawn(s1);
         let s1 = async {
@@ -352,7 +358,7 @@ async fn rebin_tracers<C: Conserved>(
 
         let tracer_split = async move {
             let (mine, theirs) = tracers_on_and_off_block(tracers, &mesh, block_index);
-            (Arc::new(mine), Arc::new(theirs))
+            (mine, Arc::new(theirs))
         };
         let split = runtime.spawn(tracer_split);
         let split = async {
@@ -372,7 +378,7 @@ async fn rebin_tracers<C: Conserved>(
             let my_tracers = tracer_map[&block.index].clone().await.0;
             let tracers_on_off_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i])).await;
             let tracers_to_be_claimed = tracers_on_off_n.map_3by3(|(_, off)| off.clone());
-            solution.new_tracers(push_new_tracers(my_tracers.to_vec(), tracers_to_be_claimed, &mesh, block.index))
+            solution.with_tracers(push_new_tracers(my_tracers, tracers_to_be_claimed, &mesh, block.index))
         };
         let s1 = runtime.spawn(s1);
         let s1 = async {
@@ -470,7 +476,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             gx.slice(s![ ..  ,1..-1]),
             gy.slice(s![1..-1, ..  ])]
         .apply_collect(CellData::new);
-        
+
         // ============================================================================
         let flux_and_vx = |(f, u): (H::Conserved, H::Conserved)| (f, self.hydro.to_primitive(u).velocity_x());
         let flux_and_vy = |(f, u): (H::Conserved, H::Conserved)| (f, self.hydro.to_primitive(u).velocity_y());
@@ -500,7 +506,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
     fn compute_block_tracer_update(
         &self,
-        tracers:  Vec<Tracer>, 
+        tracers:  Vec<Tracer>,
         vstar_x:  ArcArray<f64, Ix2>,
         vstar_y:  ArcArray<f64, Ix2>,
         index:    BlockIndex,
@@ -519,8 +525,10 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn compute_block_updated_solution(
         &self,
         solution: BlockSolution<H::Conserved>,
-        fv_x:       (ArcArray<H::Conserved, Ix2>, Option<ArcArray<f64, Ix2>>),
-        fv_y:       (ArcArray<H::Conserved, Ix2>, Option<ArcArray<f64, Ix2>>),
+        fx:       ArcArray<H::Conserved, Ix2>,
+        fy:       ArcArray<H::Conserved, Ix2>,
+        vx:       Option<ArcArray<f64, Ix2>>,
+        vy:       Option<ArcArray<f64, Ix2>>,
         block:    &BlockData<H::Conserved>,
         solver:   &Solver,
         mesh:     &Mesh,
@@ -530,13 +538,6 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-
-        let (fx, vstar_x) = fv_x;
-        let (fy, vstar_y) = fv_y;
-
-        if solver.using_tracers()  && (vstar_x.is_none() || vstar_y.is_none()) {
-            panic!("Updating with tracers so need to send face velocities to block_udpate!");
-        }
 
         let s1 = if ! solver.low_mem {
             use ndarray::{s, azip};
@@ -566,7 +567,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
 
             let new_tracers = if solver.using_tracers()  {
-                self.compute_block_tracer_update(solution.tracers, vstar_x.unwrap(), vstar_y.unwrap(), block.index, &solver, &mesh, dt)
+                self.compute_block_tracer_update(solution.tracers, vx.unwrap(), vy.unwrap(), block.index, &solver, &mesh, dt)
             }
             else {
                 solution.tracers
@@ -603,7 +604,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             let de = ds.perturbation(time, solver.orbital_elements);
 
             let new_tracers = if solver.using_tracers()  {
-                self.compute_block_tracer_update(solution.tracers, vstar_x.unwrap(), vstar_y.unwrap(), block.index, &solver, &mesh, dt)
+                self.compute_block_tracer_update(solution.tracers, vx.unwrap(), vy.unwrap(), block.index, &solver, &mesh, dt)
             }
             else {
                 solution.tracers
@@ -657,7 +658,17 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
     let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
-    let s1 = scheme.compute_block_updated_solution(solution, (fx.to_shared(), None), (fy.to_shared(), None), block_data, solver, mesh, state.time, dt);
+    let s1 = scheme.compute_block_updated_solution(
+        solution,
+        fx.to_shared(),
+        fy.to_shared(),
+        None,
+        None,
+        block_data,
+        solver,
+        mesh,
+        state.time,
+        dt);
 
     BlockState::<H::Conserved>{
         time: state.time + dt,
@@ -711,6 +722,9 @@ pub fn advance_channels<H: Hydrodynamics>(
 {
     if solver.need_flux_communication() {
         todo!("flux communication with message-passing parallelization");
+    }
+    if solver.using_tracers() {
+        todo!("tracer particles with message-passing parallelization");
     }
     let time = state.time;
 

@@ -12,6 +12,7 @@ use crate::mesh::{
 
 
 
+
 // ============================================================================
 #[repr(C)]
 #[derive(hdf5::H5Type, Clone)]
@@ -101,11 +102,10 @@ pub fn update_tracers(
 
 
 // ============================================================================
-pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Tracer>>; 3]; 3], mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
+pub fn push_new_tracers(mut tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Tracer>>; 3]; 3], mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
-    let mut tracers = Vec::new();
 
     for block_tracers in neigh_tracers.iter().flat_map(|r| r.iter())
     {
@@ -117,7 +117,6 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Trac
             }
         }
     }
-    tracers.extend(init_tracers);
     return tracers;
 }
 

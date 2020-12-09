@@ -271,12 +271,7 @@ impl Solver
 
     pub fn need_flux_communication(&self) -> bool
     {
-        if self.using_tracers() {
-            true
-        }
-        else {
-            self.force_flux_comm
-        }
+        self.using_tracers() || self.force_flux_comm
     }
 
     pub fn using_tracers(&self) -> bool

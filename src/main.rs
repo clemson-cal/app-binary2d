@@ -52,6 +52,7 @@ use tracers::*;
 
 
 
+
 // ============================================================================
 fn main() -> anyhow::Result<()>
 {
@@ -344,7 +345,7 @@ impl Tasks
 
         self.write_tracer_output.advance(model.get("toi").into());
 
-        println!("Write tracer_output {}", fname);
+        println!("write tracers {}", fname);
         io::write_tracer_output(&fname, &state, &model)?;
 
         Ok(())
