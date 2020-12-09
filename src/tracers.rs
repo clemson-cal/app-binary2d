@@ -124,7 +124,7 @@ pub fn push_new_tracers(init_tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Trac
 
 
 
-// // ============================================================================
+// ============================================================================
 pub fn tracers_on_and_off_block(tracers: Vec<Tracer>, mesh: &Mesh, index: BlockIndex) -> (Vec<Tracer>, Vec<Tracer>)
 {
     let r = mesh.block_length();

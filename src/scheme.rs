@@ -350,15 +350,15 @@ async fn rebin_tracers<C: Conserved>(
         let tracers      = s.tracers.clone();
         let block_index  = block.index;
 
-        let their_tracers = async move {
-            let (_mine, theirs) = tracers_on_and_off_block(tracers, &mesh, block_index);
-            Arc::new(theirs)
+        let tracer_split = async move {
+            let (mine, theirs) = tracers_on_and_off_block(tracers, &mesh, block_index);
+            (Arc::new(mine), Arc::new(theirs))
         };
-        let theirs = runtime.spawn(their_tracers);
-        let theirs = async {
-            theirs.await.unwrap()
+        let split = runtime.spawn(tracer_split);
+        let split = async {
+            split.await.unwrap()
         };
-        return (block_index, theirs.shared());
+        return (block_index, split.shared());
     }).collect();
 
     let s1_vec = state.solution.iter().zip(block_data).map(|(s, block)|
@@ -366,12 +366,13 @@ async fn rebin_tracers<C: Conserved>(
         let mesh         = mesh.clone();
         let block        = block.clone();
         let solution     = s.clone();
-        let tracers      = s.tracers.clone();
         let tracer_map   = tracer_map.clone();
 
         let s1 = async move {
-            let tr_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i])).await;
-            solution.new_tracers(push_new_tracers(tracers, tr_n, &mesh, block.index))
+            let my_tracers = tracer_map[&block.index].clone().await.0;
+            let tracers_on_off_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i])).await;
+            let tracers_to_be_claimed = tracers_on_off_n.map_3by3(|(_, off)| off.clone());
+            solution.new_tracers(push_new_tracers(my_tracers.to_vec(), tracers_to_be_claimed, &mesh, block.index))
         };
         let s1 = runtime.spawn(s1);
         let s1 = async {
