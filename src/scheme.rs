@@ -329,73 +329,11 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 
     for _ in 0..fold {
         if solver.using_tracers() {
-            if solver.async_rebin {
-                state = runtime.block_on(rebin_tracers_async(state, &mesh, block_data, runtime));
-            } else {
-                state = rebin_tracers_sync(state, &mesh, block_data);
-            }
+            state = rebin_tracers_sync(state, &mesh, block_data);
         }
         state = runtime.block_on(solver.runge_kutta().advance_async(state, update, runtime));
     }
     return state;
-}
-
-
-
-
-// ============================================================================
-async fn rebin_tracers_async<C: Conserved>(
-    state: State<C>,
-    mesh : &Mesh,
-    block_data: &Vec<BlockData<C>>,
-    runtime: &tokio::runtime::Runtime) -> State<C>
-{
-    use futures::future::{FutureExt, join_all};
-    use crate::{tracers_on_and_off_block, push_new_tracers};
-
-    let tracer_map: HashMap<_, _> = state.solution.iter().zip(block_data).map(|(s, block)|
-    {
-        let mesh         = mesh.clone();
-        let block        = block.clone();
-        let tracers      = s.tracers.clone();
-        let block_index  = block.index;
-
-        let tracer_split = async move {
-            let (mine, theirs) = tracers_on_and_off_block(&tracers, &mesh, block_index);
-            (mine, Arc::new(theirs))
-        };
-        let split = runtime.spawn(tracer_split);
-        let split = async {
-            split.await.unwrap()
-        };
-        return (block_index, split.shared());
-    }).collect();
-
-    let s1_vec = state.solution.iter().zip(block_data).map(|(s, block)|
-    {
-        let mesh         = mesh.clone();
-        let block        = block.clone();
-        let tracer_map   = tracer_map.clone();
-        let solution     = s.clone();
-
-        let s1 = async move {
-            let my_tracers            = tracer_map[&block.index].clone().await.0;
-            let tracers_on_off_n      = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i])).await;
-            let tracers_to_be_claimed = tracers_on_off_n.map_3by3(|(_, off)| off.clone());
-            solution.with_tracers(push_new_tracers(my_tracers, tracers_to_be_claimed, &mesh, block.index))
-        };
-        let s1 = runtime.spawn(s1);
-        let s1 = async {
-            s1.await.unwrap()
-        };
-        return s1;
-    });
-
-    State {
-        time: state.time,
-        iteration: state.iteration,
-        solution: join_all(s1_vec).await
-    }
 }
 
 
