@@ -5,3 +5,5 @@ ndarray-ops/Cargo.lock
 *.pbs
 *.png
 *.txt
+output_parse.py
+.idea
