@@ -27,15 +27,15 @@ def conserved(filename, field):
     blocks = []
     h5f = h5py.File(filename, 'r')
     print('loading {}/{}'.format(filename, field))
-    for block in h5f['conserved']:
+    for block in h5f['state']['solution']:
         level, rest = block.split(':')
         index = [int(i) for i in rest.split('-')]
-        blocks.append((index, h5f['conserved'][block]))
+        blocks.append((index, h5f['state']['solution'][block]['conserved']))
     nb = h5f['model']['num_blocks'][()]
     bs = h5f['model']['block_size'][()]
     result = np.zeros([bs * nb, bs * nb])
     for (i, j), v in blocks:
-        result[i*bs:i*bs+bs, j*bs:j*bs+bs] = v[...][:,:,field]
+        result[i*bs:i*bs+bs, j*bs:j*bs+bs] = v[()][str(field)]
     return result
 
 

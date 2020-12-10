@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 crossbeam       = "0.7"
 num             = "0.3"
+libm            = "0.2"
 ndarray         = "0.13"
 hdf5            = "0.7"
 clap            = "3.0.0-beta"
@@ -16,13 +17,16 @@ glob            = "0.3"
 anyhow          = "1.0"
 num_cpus        = "1.0"
 futures         = "0.3"
+async-trait     = "0.1"
 tokio           = { version = "0.3", features = ["rt-multi-thread"] }
 
-kind-config     = { git = "https://github.com/clemson-cal/kind-config", features = ["hdf5"] }
-kepler-two-body = { git = "https://github.com/clemson-cal/kepler-two-body" }
-hydro-iso2d     = { git = "https://github.com/clemson-cal/hydro-iso2d" }
+kind-config     = { git = "https://github.com/clemson-cal/kind-config",     features = ["hdf5"] }
+kepler-two-body = { git = "https://github.com/clemson-cal/kepler-two-body", features = ["hdf5"] }
+hydro-iso2d     = { git = "https://github.com/clemson-cal/hydro-iso2d",     features = ["hdf5"] }
+hydro-euler     = { git = "https://github.com/clemson-cal/hydro-euler",     features = ["hdf5"] }
 godunov-core    = { git = "https://github.com/clemson-cal/godunov-core" }
 ndarray-ops     = { git = "https://github.com/clemson-cal/ndarray-ops" }
+io-logical      = { path = "io-logical" }
 
 [profile.release]
 lto = "thin"
