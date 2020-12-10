@@ -381,12 +381,12 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         conserved.mapv(|u| self.hydro.to_primitive(u))
     }
 
-    fn block_riemann_solutions(&self, 
-        cell_data: &Array<CellData<H::Primitive>, Ix2>, 
-        faces: &ArcArray<(f64, f64), Ix2>, 
-        solver: &Solver,
-        dir: crate::physics::Direction,
-        time: f64) -> (Array<H::Conserved, Ix2>, Option<Array<f64, Ix2>>)
+    fn block_riemann_solutions(&self,
+        cell_data: &Array<CellData<H::Primitive>, Ix2>,
+        faces:     &ArcArray<(f64, f64), Ix2>,
+        solver:    &Solver,
+        dir:       Direction,
+        time:      f64) -> (Array<H::Conserved, Ix2>, Option<Array<f64, Ix2>>)
     {
         use ndarray::{s, azip};
         use crate::traits::{Primitive};
@@ -394,37 +394,33 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
 
-        let riemann_solver = |l, r, f| if solver.include_face_velocities() 
-        {    
-            let (flux, u) = self.hydro.intercell_flux_plus_state(&solver, l, r, f, &two_body_state, dir);
-            let vstar = match dir {
-                X => self.hydro.to_primitive(u).velocity_x(),
-                Y => self.hydro.to_primitive(u).velocity_y(),
-            }; 
-            (flux, Some(vstar))
-        }
-        else { 
-            let flux = self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, dir); 
-            (flux, None)
-        };
-        
-        let (mut i, mut j) = (0, 0);
-        match dir {
-            X => j = 1, 
-            Y => i = 1,
+        let face_data = match dir {
+            X => azip![
+                    cell_data.slice(s![..-1, 1..-1]),
+                    cell_data.slice(s![1..,  1..-1]),
+                    faces],
+            Y => azip![
+                    cell_data.slice(s![1..-1, ..-1]),
+                    cell_data.slice(s![1..-1, 1.. ]),
+                    faces],
         };
 
-        let fv = azip![
-            cell_data.slice(s![i..-1, j..-1]),
-            cell_data.slice(s![1..-i, 1..-j]),
-            faces]
-        .apply_collect(riemann_solver);
+        if solver.need_face_velocities() {
+            let riemann_solver = |l, r, f|
+            {
+                let (flux, u) = self.hydro.intercell_flux_plus_state(&solver, l, r, f, &two_body_state, dir);
+                let vstar = match dir {
+                    X => self.hydro.to_primitive(u).velocity_x(),
+                    Y => self.hydro.to_primitive(u).velocity_y(),
+                };
+                (flux, vstar)
+            };
+            let fv = face_data.apply_collect(riemann_solver);
+            (fv.map(|&(f, _)| f), Some(fv.map(|&(_, v)| v)))
 
-        if solver.include_face_velocities() {
-            (fv.map(|fv| fv.0), Some(fv.map(|fv| fv.1.unwrap())))
-        }
-        else {
-            (fv.map(|fv| fv.0), None)
+        } else {
+            let riemann_solver = |l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, dir);
+            (face_data.apply_collect(riemann_solver), None)
         }
     }
 
@@ -436,7 +432,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>, Option<Array<f64, Ix2>>, Option<Array<f64, Ix2>>)
     {
         use ndarray::{s, azip};
-        use ndarray_ops::{map_stencil3};
+        use ndarray_ops::map_stencil3;
 
         // ========================================================================
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
