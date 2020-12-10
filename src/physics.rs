@@ -280,6 +280,11 @@ impl Solver
         self.num_tracers > 0
     }
 
+    pub fn include_face_velocities(&self) -> bool
+    {
+        self.using_tracers()
+    }
+
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64
     {
         f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())

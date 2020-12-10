@@ -257,10 +257,12 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
 
             if solver.using_tracers() {
-                let (fx, fy, vx, vy) = scheme.compute_block_fluxes_and_face_velocities(&pe, &block, &solver, time);
-                (fx.to_shared(), fy.to_shared(), Some(vx.to_shared()), Some(vy.to_shared()))
+                let (fx, fy, vx, vy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
+                let vstar_x = vx.unwrap().to_shared();
+                let vstar_y = vy.unwrap().to_shared();
+                (fx.to_shared(), fy.to_shared(), Some(vstar_x), Some(vstar_y))
             } else {
-                let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
+                let (fx, fy, _, _) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
                 (fx.to_shared(), fy.to_shared(), None, None)
             }
         };
@@ -379,59 +381,62 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         conserved.mapv(|u| self.hydro.to_primitive(u))
     }
 
+    fn block_riemann_solutions(&self, 
+        cell_data: &Array<CellData<H::Primitive>, Ix2>, 
+        faces: &ArcArray<(f64, f64), Ix2>, 
+        solver: &Solver,
+        dir: crate::physics::Direction,
+        time: f64) -> (Array<H::Conserved, Ix2>, Option<Array<f64, Ix2>>)
+    {
+        use ndarray::{s, azip};
+        use crate::traits::{Primitive};
+        use crate::physics::Direction::{X, Y};
+
+        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+
+        let riemann_solver = |l, r, f| if solver.include_face_velocities() 
+        {    
+            let (flux, u) = self.hydro.intercell_flux_plus_state(&solver, l, r, f, &two_body_state, dir);
+            let vstar = match dir {
+                X => self.hydro.to_primitive(u).velocity_x(),
+                Y => self.hydro.to_primitive(u).velocity_y(),
+            }; 
+            (flux, Some(vstar))
+        }
+        else { 
+            let flux = self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, dir); 
+            (flux, None)
+        };
+        
+        let (mut i, mut j) = (0, 0);
+        match dir {
+            X => j = 1, 
+            Y => i = 1,
+        };
+
+        let fv = azip![
+            cell_data.slice(s![i..-1, j..-1]),
+            cell_data.slice(s![1..-i, 1..-j]),
+            faces]
+        .apply_collect(riemann_solver);
+
+        if solver.include_face_velocities() {
+            (fv.map(|fv| fv.0), Some(fv.map(|fv| fv.1.unwrap())))
+        }
+        else {
+            (fv.map(|fv| fv.0), None)
+        }
+    }
+
     fn compute_block_fluxes(
         &self,
         pe:     &Array<H::Primitive, Ix2>,
         block:  &BlockData<H::Conserved>,
         solver: &Solver,
-        time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
+        time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>, Option<Array<f64, Ix2>>, Option<Array<f64, Ix2>>)
     {
         use ndarray::{s, azip};
         use ndarray_ops::{map_stencil3};
-
-        // ========================================================================
-        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
-        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
-        let xf = &block.face_centers_x;
-        let yf = &block.face_centers_y;
-
-        // ============================================================================
-        let cell_data = azip![
-            pe.slice(s![1..-1,1..-1]),
-            gx.slice(s![ ..  ,1..-1]),
-            gy.slice(s![1..-1, ..  ])]
-        .apply_collect(CellData::new);
-
-        // ============================================================================
-        let fx = azip![
-            cell_data.slice(s![..-1,1..-1]),
-            cell_data.slice(s![ 1..,1..-1]),
-            xf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
-
-        // ============================================================================
-        let fy = azip![
-            cell_data.slice(s![1..-1,..-1]),
-            cell_data.slice(s![1..-1, 1..]),
-            yf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
-
-        (fx, fy)
-    }
-
-    fn compute_block_fluxes_and_face_velocities(
-        &self,
-        pe:     &Array<H::Primitive, Ix2>,
-        block:  &BlockData<H::Conserved>,
-        solver: &Solver,
-        time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>, Array<f64, Ix2>, Array<f64, Ix2>)
-    {
-        use ndarray::{s, azip};
-        use ndarray_ops::{map_stencil3};
-        use crate::traits::{Primitive};
-
-        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
 
         // ========================================================================
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
@@ -446,30 +451,10 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             gy.slice(s![1..-1, ..  ])]
         .apply_collect(CellData::new);
 
-        // ============================================================================
-        let flux_and_vx = |(f, u): (H::Conserved, H::Conserved)| (f, self.hydro.to_primitive(u).velocity_x());
-        let flux_and_vy = |(f, u): (H::Conserved, H::Conserved)| (f, self.hydro.to_primitive(u).velocity_y());
+        let (fx, vx) = self.block_riemann_solutions(&cell_data, xf, solver, Direction::X, time);
+        let (fy, vy) = self.block_riemann_solutions(&cell_data, yf, solver, Direction::Y, time);
 
-        // ============================================================================
-        let fv_x = azip![
-            cell_data.slice(s![..-1,1..-1]),
-            cell_data.slice(s![ 1..,1..-1]),
-            xf]
-        .apply_collect(|l, r, f| flux_and_vx(self.hydro.intercell_flux_plus_state(&solver, l, r, f, &two_body_state, Direction::X)));
-
-        // ============================================================================
-        let fv_y = azip![
-            cell_data.slice(s![1..-1,..-1]),
-            cell_data.slice(s![1..-1, 1..]),
-            yf]
-        .apply_collect(|l, r, f| flux_and_vy(self.hydro.intercell_flux_plus_state(&solver, l, r, f, &two_body_state, Direction::Y)));
-
-        let fx      = fv_x.map(|fv| fv.0);
-        let fy      = fv_y.map(|fv| fv.0);
-        let vstar_x = fv_x.map(|fv| fv.1);
-        let vstar_y = fv_y.map(|fv| fv.1);
-
-        (fx, fy, vstar_x, vstar_y)
+        (fx, fy, vx, vy)
     }
 
     fn compute_block_tracer_update(
@@ -621,7 +606,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
     let solution = state.solution;
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
+    let (fx, fy, _, _) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
     let s1 = scheme.compute_block_updated_solution(
         solution,
         fx.to_shared(),
