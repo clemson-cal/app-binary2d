@@ -149,15 +149,10 @@ impl App
         }
     }
 
-    fn restart_rundir(&self) -> anyhow::Result<Option<verified::Directory>>
+    fn output_rundir_child(&self, filename: &str) -> anyhow::Result<Option<verified::File>>
     {
-        Ok(self.restart_file()?.map(|f| f.parent()))
-    }
-
-    fn restart_rundir_child(&self, filename: &str) -> anyhow::Result<Option<verified::File>>
-    {
-        if let Some(restart_rundir) = self.restart_rundir()? {
-            Ok(Some(restart_rundir.existing_child(filename)?))
+        if let Ok(file) = self.output_directory()?.existing_child(filename) {
+            Ok(Some(file))
         } else {
             Ok(None)
         }
@@ -533,7 +528,7 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let dt         = solver.min_time_step(&mesh);
     let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
-    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
+    let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
     if let Some(last_sample) = time_series.last() {
         if state.time < last_sample.time {
