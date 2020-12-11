@@ -506,8 +506,8 @@ impl Hydrodynamics for Euler
         let dim   = solver.stress_dim;
         let tau_x = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::X) + r.stress_field(nu, dx, dy, dim, axis, Direction::X));
         let tau_y = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::Y) + r.stress_field(nu, dx, dy, dim, axis, Direction::Y));
-        let vx = l.pc.velocity_x();
-        let vy = l.pc.velocity_y();
+        let vx = 0.5 * (l.pc.velocity_x() + l.pc.velocity_x());
+        let vy = 0.5 * (l.pc.velocity_y() + l.pc.velocity_y());
         let viscous_flux = hydro_euler::euler_2d::Conserved(0.0, -tau_x, -tau_y, -(tau_x * vx + tau_y * vy));
 
         let euler_axis = match axis {
