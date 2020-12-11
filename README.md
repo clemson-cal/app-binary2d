@@ -26,7 +26,7 @@ __Requirements__: Rust and HDF5
 __Build and install__:
 
 ```Bash
-> git cone https://github.com/clemson-cal/app-binary2d.git
+> git clone https://github.com/clemson-cal/app-binary2d.git
 > cd app-binary2d
 > cargo install --path .
 ```

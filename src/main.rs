@@ -78,8 +78,11 @@ fn main() -> anyhow::Result<()>
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
+        .item("disk_radius"     , 3.0    , "Disk truncation radius (model-dependent)")
+        .item("disk_width"      , 1.0    , "Disk width (model-dependent)")
+        .item("disk_mass"       , 1.0    , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
-        .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
+        .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("num_tracers"     , 0      , "Number of tracers per block")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
@@ -135,11 +138,8 @@ struct App
     #[clap(long, about="Do flux communication even if it's not needed [benchmarking]")]
     flux_comm: bool,
 
-    #[clap(long, about="Reduce memory footprint [benchmarking]")]
-    low_mem: bool,
-
-    #[clap(long, about="Do tracer communications in parallel [benchmarking]")]
-    async_rebin: bool,
+    #[clap(long, about="Truncate an existing time series file in the output directory")]
+    truncate: bool,
 }
 
 impl App
@@ -153,15 +153,10 @@ impl App
         }
     }
 
-    fn restart_rundir(&self) -> anyhow::Result<Option<verified::Directory>>
+    fn output_rundir_child(&self, filename: &str) -> anyhow::Result<Option<verified::File>>
     {
-        Ok(self.restart_file()?.map(|f| f.parent()))
-    }
-
-    fn restart_rundir_child(&self, filename: &str) -> anyhow::Result<Option<verified::File>>
-    {
-        if let Some(restart_rundir) = self.restart_rundir()? {
-            Ok(Some(restart_rundir.existing_child(filename)?))
+        if let Ok(file) = self.output_directory()?.existing_child(filename) {
+            Ok(Some(file))
         } else {
             Ok(None)
         }
@@ -401,7 +396,7 @@ impl Tasks
 // ============================================================================
 trait InitialModel: Hydrodynamics
 {
-    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive;
+    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive;
 }
 
 
@@ -410,21 +405,32 @@ trait InitialModel: Hydrodynamics
 // ============================================================================
 impl InitialModel for Isothermal
 {
-    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
+        use std::f64::consts::PI;
+        use libm::{exp, erf, sqrt};
+
         let (x, y) = xy;
         let r0 = f64::sqrt(x * x + y * y);
         let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
         let vp = f64::sqrt(ph);
         let vx = vp * (-y / r0);
         let vy = vp * ( x / r0);
-        return hydro_iso2d::Primitive(1.0, vx, vy);
+
+        let rd: f64 = model.get("disk_radius").into();
+        let dr: f64 = model.get("disk_width").into();
+        let md: f64 = model.get("disk_mass").into();
+
+        let total = PI * dr * dr * (exp(-(rd / dr).powi(2)) + sqrt(PI) * rd / dr * (1.0 + erf(rd / dr)));
+        let sigma = md / total * exp(-((r0 - rd) / dr).powi(2));
+
+        return hydro_iso2d::Primitive(sigma, vx, vy);
     }
 }
 
 impl InitialModel for Euler
 {
-    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, _model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
         let (x, y) = xy;
         let r0 = f64::sqrt(x * x + y * y);
@@ -455,10 +461,10 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
     {
         Self{system: system}
     }
-    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh) -> BlockSolution<System::Conserved>
+    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh, model: &kind_config::Form) -> BlockSolution<System::Conserved>
     {
         let u0 = mesh.cell_centers(block_index)
-            .mapv(|x| self.system.primitive_at(x))
+            .mapv(|x| self.system.primitive_at(model, x))
             .mapv(|p| self.system.to_conserved(p))
             .to_shared();
 
@@ -488,26 +494,26 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
                           .map(|(xy, n)| Tracer::new(xy, get_id(n)))
                           .collect()
     }
-    fn initial_state(&self, mesh: &Mesh) -> State<System::Conserved>
+    fn initial_state(&self, mesh: &Mesh, model: &kind_config::Form) -> State<System::Conserved>
     {
         State{
             time: 0.0,
             iteration: Rational64::new(0, 1),
-            solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh)).collect()
+            solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh, model)).collect()
         }
     }
     fn initial_time_series(&self) -> Vec<TimeSeriesSample<System::Conserved>>
     {
         Vec::new()
     }
-    fn block_data(&self, mesh: &Mesh) -> Vec<BlockData<System::Conserved>>
+    fn block_data(&self, mesh: &Mesh, model: &kind_config::Form) -> Vec<BlockData<System::Conserved>>
     {
         mesh.block_indexes().iter().map(|&block_index| {
             BlockData{
                 cell_centers:      mesh.cell_centers(block_index).to_shared(),
                 face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
                 face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
-                initial_conserved: self.initial_solution(block_index, &mesh).conserved,
+                initial_conserved: self.initial_solution(block_index, mesh, model).conserved,
                 index: block_index,
             }
         }).collect()
@@ -546,8 +552,6 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         softening_length: model.get("softening_length").into(),
         stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
-        low_mem:          app.low_mem,
-        async_rebin:      app.async_rebin,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
 }
@@ -573,19 +577,28 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
 {
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
-    let block_data = driver.block_data(&mesh);
+    let block_data = driver.block_data(&mesh, &model);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh)))?;
+    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
-    let mut time_series = app.restart_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
+    let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
-    time_series.retain(|s| s.time < state.time);
+    if let Some(last_sample) = time_series.last() {
+        if state.time < last_sample.time {
+            if ! app.truncate {
+                return Err(anyhow::anyhow!("output directory would lose time series data; run with --truncate to proceed anyway."));
+            } else {
+                time_series.retain(|s| s.time < state.time);
+            }
+        }
+    }
 
     println!();
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
     }
+
     println!();
     println!("\trestart file            = {}",      app.restart_file()?.map(|f|f.to_string()).unwrap_or("none".to_string()));
     println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));

@@ -65,8 +65,8 @@ pub trait Hydrodynamics: Copy + Send
         solver: &Solver,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
-        x: f64,
-        y: f64,
+        x : f64,
+        y : f64,
         dt: f64,
         two_body_state: &OrbitalState) -> ItemizedChange<Self::Conserved>;
 
@@ -76,6 +76,8 @@ pub trait Hydrodynamics: Copy + Send
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
         f: &(f64, f64),
+        dx: f64,
+        dy: f64,
         two_body_state: &kepler_two_body::OrbitalState,
         axis: Direction) -> Self::Conserved;
 
@@ -85,6 +87,8 @@ pub trait Hydrodynamics: Copy + Send
         l: &CellData<'a, Self::Primitive>, 
         r: &CellData<'a, Self::Primitive>, 
         f: &(f64, f64), 
+        dx: f64,
+        dy: f64,
         two_body_state: &kepler_two_body::OrbitalState,
         axis: Direction) -> (Self::Conserved, Self::Conserved);
 }

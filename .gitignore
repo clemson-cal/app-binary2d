@@ -1,10 +1,6 @@
-.gitignore
-Copy
 target
 data
-ndarray-ops/Cargo.lock
 *.h5
-*.py
 *.ipynb
 *.pbs
 *.png
