@@ -375,69 +375,33 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let dy = mesh.cell_spacing_y();
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
 
-        let s1 = if ! solver.low_mem {
-            use ndarray::{s, azip};
+        let mut ds = ItemizedChange::zeros();
 
-            let itemized_sources = azip![
-                &solution.conserved,
-                &block.initial_conserved,
-                &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state));
-
-            let sources = itemized_sources.map(ItemizedChange::total);
-            let ds = itemized_sources.fold(ItemizedChange::zeros(), |a, b| a.add(b)).mul(dx * dy);
-            let de = ds.perturbation(time, solver.orbital_elements);
-
-            let du = if solver.need_flux_communication() {
-                azip![
-                    fx.slice(s![1..-2, 1..-1]),
-                    fx.slice(s![2..-1, 1..-1]),
-                    fy.slice(s![1..-1, 1..-2]),
-                    fy.slice(s![1..-1, 2..-1])]
+        let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
+            let m = if solver.need_flux_communication() {
+                (i.0 + 1, i.1 + 1)
             } else {
-                azip![
-                    fx.slice(s![..-1,..]),
-                    fx.slice(s![ 1..,..]),
-                    fy.slice(s![..,..-1]),
-                    fy.slice(s![.., 1..])]
-            }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+                i
+            };
+            let du = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx +
+                      (fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
+            let uc = solution.conserved[i];
+            let u0 = block.initial_conserved[i];
+            let (x, y)  = block.cell_centers[i];
+            let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
 
-            BlockSolution{
-                conserved: solution.conserved + du + sources,
-                integrated_source_terms: solution.integrated_source_terms.add(&ds),
-                orbital_elements_change: solution.orbital_elements_change.add(&de),
-            }
-        } else {
+            ds.add_mut(&sources);
+            uc + du + sources.total()
+        });
 
-            let mut ds = ItemizedChange::zeros();
+        let ds = ds.mul(dx * dy);
+        let de = ds.perturbation(time, solver.orbital_elements);
 
-            let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
-                let m = if solver.need_flux_communication() {
-                    (i.0 + 1, i.1 + 1)
-                } else {
-                    i
-                };
-                let du = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx +
-                          (fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
-                let uc = solution.conserved[i];
-                let u0 = block.initial_conserved[i];
-                let (x, y)  = block.cell_centers[i];
-                let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
-
-                ds.add_mut(&sources);
-                uc + du + sources.total()
-            });
-
-            let ds = ds.mul(dx * dy);
-            let de = ds.perturbation(time, solver.orbital_elements);
-
-            BlockSolution{
-                conserved: u1,
-                integrated_source_terms: solution.integrated_source_terms.add(&ds),
-                orbital_elements_change: solution.orbital_elements_change.add(&de),
-            }
-        };
-        return s1;
+        BlockSolution{
+            conserved: u1,
+            integrated_source_terms: solution.integrated_source_terms.add(&ds),
+            orbital_elements_change: solution.orbital_elements_change.add(&de),
+        }
     }
 }
 

@@ -131,9 +131,6 @@ struct App
     #[clap(long, about="Do flux communication even if it's not needed [benchmarking]")]
     flux_comm: bool,
 
-    #[clap(long, about="Reduce memory footprint [benchmarking]")]
-    low_mem: bool,
-
     #[clap(long, about="Truncate an existing time series file in the output directory")]
     truncate: bool,
 }
@@ -498,7 +495,6 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         softening_length: model.get("softening_length").into(),
         stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
-        low_mem:          app.low_mem,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
 }
