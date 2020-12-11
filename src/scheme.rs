@@ -232,7 +232,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let flux = async move {
             let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map_3by3(|i| &pc_map[i])).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
+            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
             (fx.to_shared(), fy.to_shared())
         };
         let flux = runtime.spawn(flux);
@@ -321,6 +321,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         pe:     &Array<H::Primitive, Ix2>,
         block:  &BlockData<H::Conserved>,
         solver: &Solver,
+        mesh:     &Mesh,
         time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
     {
         use ndarray::{s, azip};
@@ -330,6 +331,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
         let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
+        let dx = mesh.cell_spacing_x();
+        let dy = mesh.cell_spacing_y();
         let xf = &block.face_centers_x;
         let yf = &block.face_centers_y;
 
@@ -345,14 +348,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             cell_data.slice(s![..-1,1..-1]),
             cell_data.slice(s![ 1..,1..-1]),
             xf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, dx, dy, &two_body_state, Direction::X));
 
         // ============================================================================
         let fy = azip![
             cell_data.slice(s![1..-1,..-1]),
             cell_data.slice(s![1..-1, 1..]),
             yf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, dx, dy, &two_body_state, Direction::Y));
 
         (fx, fy)
     }
@@ -474,7 +477,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
     let solution = state.solution;
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
+    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, mesh, state.time);
     let s1 = scheme.compute_block_updated_solution(solution, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
 
     BlockState::<H::Conserved>{
