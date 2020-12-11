@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()>
         .item("disk_width"      , 1.0    , "Disk width (model-dependent)")
         .item("disk_mass"       , 1.0    , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
-        .item("nu"              , 0.1    , "Kinematic viscosity [Omega a^2]")
+        .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")

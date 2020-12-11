@@ -44,9 +44,12 @@ def conserved(filename, field):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("filename")
+    parser.add_argument('--range', default='None,None', help='vmin and vmax parameters for the relief plot')
     args = parser.parse_args()
 
+    vmin, vmax = eval(args.range)
+
     rho = conserved(args.filename, 0)
-    plt.imshow(np.log10(rho).T, cmap='inferno', origin='lower', extent=extent(args.filename), vmin=-3, vmax=1.5)
+    plt.imshow(np.log10(rho).T, cmap='inferno', origin='lower', extent=extent(args.filename), vmin=vmin, vmax=vmax)
     plt.colorbar()
     plt.show()
