@@ -398,15 +398,29 @@ impl InitialModel for Isothermal
 
 impl InitialModel for Euler
 {
-    fn primitive_at(&self, _model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
     {
-        let (x, y) = xy;
-        let r0 = f64::sqrt(x * x + y * y);
-        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-        let vp = f64::sqrt(ph);
-        let vx = vp * (-y / r0);
-        let vy = vp * ( x / r0);
-        return hydro_euler::euler_2d::Primitive(1.0, vx, vy, 0.0);
+        let (x, y)  = xy;
+
+        let rd: f64 = model.get("disk_radius").into();
+        let dr: f64 = model.get("disk_width").into();
+        let md: f64 = model.get("disk_mass").into();
+        let mach    = model.get("mach_number").into();
+        let gm      = physics::Euler::new().gamma_law_index;
+        let sof     = model.get("softening_length").into();
+
+        let machsq  = mach * mach;
+        let sofsq   = sof * sof;
+        let r0      = f64::sqrt(x * x + y * y);
+        let rsq     = r0 * r0;
+        let rho     = 1.0 * f64::exp(-0.5 * (r0 - rd).powi(2) / dr.powf(2.0));
+        let drlnrho = -(r0 - rd) / (dr * dr);
+        let vsq     = rsq / (rsq + sofsq).powf(1.5) * (1.0 + 1.0 / (gm * machsq) * ((2.0 - 3.0 * rsq / (rsq + sofsq)) + r0 * drlnrho));
+        let vp      = f64::sqrt(vsq);
+        let vx      = vp * (-y / r0);
+        let vy      = vp * ( x / r0);
+        let pres    = rho / (gm * machsq) * rsq / (rsq + sofsq).powf(1.5);
+        return hydro_euler::euler_2d::Primitive(rho, vx, vy, pres)
     }
 }
 
