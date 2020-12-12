@@ -101,7 +101,7 @@ impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
             grav2:   self.grav2   * (-bf + 1.) + s0.grav2   * bf,
             buffer:  self.buffer  * (-bf + 1.) + s0.buffer  * bf,
             cooling: self.cooling * (-bf + 1.) + s0.cooling * bf,
-        }        
+        }
     }
 }
 
@@ -228,7 +228,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let flux = async move {
             let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map_3by3(|i| &pc_map[i])).await;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, time);
+            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
             (fx.to_shared(), fy.to_shared())
         };
         let flux = runtime.spawn(flux);
@@ -317,6 +317,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         pe:     &Array<H::Primitive, Ix2>,
         block:  &BlockData<H::Conserved>,
         solver: &Solver,
+        mesh:     &Mesh,
         time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
     {
         use ndarray::{s, azip};
@@ -326,6 +327,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
         let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
+        let dx = mesh.cell_spacing_x();
+        let dy = mesh.cell_spacing_y();
         let xf = &block.face_centers_x;
         let yf = &block.face_centers_y;
 
@@ -341,14 +344,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             cell_data.slice(s![..-1,1..-1]),
             cell_data.slice(s![ 1..,1..-1]),
             xf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::X));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, dx, dy, &two_body_state, Direction::X));
 
         // ============================================================================
         let fy = azip![
             cell_data.slice(s![1..-1,..-1]),
             cell_data.slice(s![1..-1, 1..]),
             yf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, &two_body_state, Direction::Y));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, dx, dy, &two_body_state, Direction::Y));
 
         (fx, fy)
     }
@@ -368,69 +371,33 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let dy = mesh.cell_spacing_y();
         let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
 
-        let s1 = if ! solver.low_mem {
-            use ndarray::{s, azip};
+        let mut ds = ItemizedChange::zeros();
 
-            let itemized_sources = azip![
-                &solution.conserved,
-                &block.initial_conserved,
-                &block.cell_centers]
-            .apply_collect(|&u, &u0, &(x, y)| self.hydro.source_terms(&solver, u, u0, x, y, dt, &two_body_state));
-
-            let sources = itemized_sources.map(ItemizedChange::total);
-            let ds = itemized_sources.fold(ItemizedChange::zeros(), |a, b| a.add(b)).mul(dx * dy);
-            let de = ds.perturbation(time, solver.orbital_elements);
-
-            let du = if solver.need_flux_communication() {
-                azip![
-                    fx.slice(s![1..-2, 1..-1]),
-                    fx.slice(s![2..-1, 1..-1]),
-                    fy.slice(s![1..-1, 1..-2]),
-                    fy.slice(s![1..-1, 2..-1])]
+        let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
+            let m = if solver.need_flux_communication() {
+                (i.0 + 1, i.1 + 1)
             } else {
-                azip![
-                    fx.slice(s![..-1,..]),
-                    fx.slice(s![ 1..,..]),
-                    fy.slice(s![..,..-1]),
-                    fy.slice(s![.., 1..])]
-            }.apply_collect(|&a, &b, &c, &d| ((b - a) / dx + (d - c) / dy) * -dt);
+                i
+            };
+            let du = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx +
+                      (fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
+            let uc = solution.conserved[i];
+            let u0 = block.initial_conserved[i];
+            let (x, y)  = block.cell_centers[i];
+            let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
 
-            BlockSolution{
-                conserved: solution.conserved + du + sources,
-                integrated_source_terms: solution.integrated_source_terms.add(&ds),
-                orbital_elements_change: solution.orbital_elements_change.add(&de),
-            }
-        } else {
+            ds.add_mut(&sources);
+            uc + du + sources.total()
+        });
 
-            let mut ds = ItemizedChange::zeros();
+        let ds = ds.mul(dx * dy);
+        let de = ds.perturbation(time, solver.orbital_elements);
 
-            let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
-                let m = if solver.need_flux_communication() {
-                    (i.0 + 1, i.1 + 1)
-                } else {
-                    i
-                };
-                let du = ((fx[(m.0 + 1, m.1)] - fx[m]) / dx +
-                          (fy[(m.0, m.1 + 1)] - fy[m]) / dy) * -dt;
-                let uc = solution.conserved[i];
-                let u0 = block.initial_conserved[i];
-                let (x, y)  = block.cell_centers[i];
-                let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
-
-                ds.add_mut(&sources);
-                uc + du + sources.total()
-            });
-
-            let ds = ds.mul(dx * dy);
-            let de = ds.perturbation(time, solver.orbital_elements);
-
-            BlockSolution{
-                conserved: u1,
-                integrated_source_terms: solution.integrated_source_terms.add(&ds),
-                orbital_elements_change: solution.orbital_elements_change.add(&de),
-            }
-        };
-        return s1;
+        BlockSolution{
+            conserved: u1,
+            integrated_source_terms: solution.integrated_source_terms.add(&ds),
+            orbital_elements_change: solution.orbital_elements_change.add(&de),
+        }
     }
 }
 
@@ -470,7 +437,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
     let solution = state.solution;
 
     let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, state.time);
+    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, mesh, state.time);
     let s1 = scheme.compute_block_updated_solution(solution, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
 
     BlockState::<H::Conserved>{

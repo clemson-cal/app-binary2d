@@ -9,6 +9,7 @@ edition = "2018"
 [dependencies]
 crossbeam       = "0.7"
 num             = "0.3"
+libm            = "0.2"
 ndarray         = "0.13"
 hdf5            = "0.7"
 clap            = "3.0.0-beta"

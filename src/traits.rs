@@ -76,6 +76,8 @@ pub trait Hydrodynamics: Copy + Send
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
         f: &(f64, f64),
+        x: f64,
+        y: f64,
         two_body_state: &kepler_two_body::OrbitalState,
         axis: Direction) -> Self::Conserved;
 }
