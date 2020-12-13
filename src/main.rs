@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()>
         .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
-        .item("lambda"          , 0.0    , "Kinematic bulk viscosity [?] {for Farris14, set lambda = -nu / 3.0 }")
+        .item("lambda"          , 0.0    , "Kinematic bulk viscosity [Omega a^2] (for Farris14, lambda=-nu/3.0)")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")

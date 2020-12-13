@@ -126,49 +126,27 @@ impl<'a, P: Primitive> CellData<'_, P>
         }
     }
 
-    pub fn stress_field(&self, kinematic_viscosity: f64, kinematic_bulk_viscosity: f64, dx: f64, dy: f64, row: Direction, col: Direction) -> f64
+    pub fn stress_field(&self, nu: f64, lambda: f64, dx: f64, dy: f64, row: Direction, col: Direction) -> f64
     {
         use Direction::{X, Y};
 
-//        let stress = if dimensionality == 2 {
-//            // This form of the stress tensor comes from Eqn. 7 in Farris+
-//            // (2014). Formally it corresponds a "true" dimensionality of 2.
-//            match (row, col)
-//            {
-//                (X, X) =>  self.gx.velocity_x() / dx - self.gy.velocity_y() / dy,
-//                (X, Y) =>  self.gx.velocity_y() / dx + self.gy.velocity_x() / dy,
-//                (Y, X) =>  self.gx.velocity_y() / dx + self.gy.velocity_x() / dy,
-//                (Y, Y) => -self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
-//            }
-//        } else if dimensionality == 3 {
-//            // This form of the stress tensor is the correct one for vertically
-//            // averaged hydrodynamics, when the bulk viscosity is equal to zero.
-//            match (row, col)
-//            {
-//                (X, X) => 4.0 / 3.0 * self.gx.velocity_x() / dx - 2.0 / 3.0 * self.gy.velocity_y() / dy,
-//                (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
-//                (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
-//                (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() / dx + 4.0 / 3.0 * self.gy.velocity_y() / dy,
-//            }
-//        } else {
-//            panic!("The true dimension must be 2 or 3")
-//        };
         let shear_stress = match (row, col)
-            {
-                (X, X) => 4.0 / 3.0 * self.gx.velocity_x() / dx - 2.0 / 3.0 * self.gy.velocity_y() / dy,
-                (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
-                (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
-                (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() / dx + 4.0 / 3.0 * self.gy.velocity_y() / dy,
-            };
-        let bulk_stress = match (row, col)
-            {
-                (X, X) => self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
-                (X, Y) => 0.0,
-                (Y, X) => 0.0,
-                (Y, Y) => self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
-            };
+        {
+            (X, X) => 4.0 / 3.0 * self.gx.velocity_x() / dx - 2.0 / 3.0 * self.gy.velocity_y() / dy,
+            (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
+            (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
+            (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() / dx + 4.0 / 3.0 * self.gy.velocity_y() / dy,
+        };
 
-        kinematic_viscosity * self.pc.mass_density() * shear_stress + kinematic_bulk_viscosity * self.pc.mass_density() * bulk_stress
+        let bulk_stress = match (row, col)
+        {
+            (X, X) => self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
+            (X, Y) => 0.0,
+            (Y, X) => 0.0,
+            (Y, Y) => self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
+        };
+
+        self.pc.mass_density() * (nu * shear_stress + lambda * bulk_stress)
     }
 
     pub fn gradient_field(&self, axis: Direction) -> &P
