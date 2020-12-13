@@ -15,6 +15,8 @@ mod mesh;
 mod scheme;
 mod traits;
 mod physics;
+mod disks;
+
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 use std::time::Instant;
@@ -367,6 +369,18 @@ trait InitialModel: Hydrodynamics
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive;
 }
 
+impl disks::Torus {
+    fn new(model: &kind_config::Form) -> Self {
+        Self{
+            mach_number:      model.get("mach_number").into(),
+            softening_length: model.get("softening_length").into(),
+            mass:             model.get("disk_mass").into(),
+            radius:           model.get("disk_radius").into(),
+            width:            model.get("disk_width").into(),
+        }
+    }
+}
+
 
 
 
@@ -375,24 +389,14 @@ impl InitialModel for Isothermal
 {
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
-        use std::f64::consts::PI;
-        use libm::{exp, erf, sqrt};
-
+        let disk = disks::Torus::new(model);
         let (x, y) = xy;
-        let r0 = f64::sqrt(x * x + y * y);
-        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-        let vp = f64::sqrt(ph);
-        let vx = vp * (-y / r0);
-        let vy = vp * ( x / r0);
-
-        let rd: f64 = model.get("disk_radius").into();
-        let dr: f64 = model.get("disk_width").into();
-        let md: f64 = model.get("disk_mass").into();
-
-        let total = PI * dr * dr * (exp(-(rd / dr).powi(2)) + sqrt(PI) * rd / dr * (1.0 + erf(rd / dr)));
-        let sigma = md / total * exp(-((r0 - rd) / dr).powi(2));
-
-        return hydro_iso2d::Primitive(sigma, vx, vy);
+        let r = (x * x + y * y).sqrt();
+        let sd = disk.surface_density(r);
+        let vp = disk.phi_velocity_squared(r).sqrt();
+        let vx = vp * (-y / r);
+        let vy = vp * ( x / r);
+        hydro_iso2d::Primitive(sd, vx, vy)
     }
 }
 
@@ -400,26 +404,15 @@ impl InitialModel for Euler
 {
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
-        let (x, y)  = xy;
-
-        let rd: f64  = model.get("disk_radius").into();
-        let dr: f64  = model.get("disk_width").into();
-        let ma: f64  = model.get("mach_number").into();
-        let gm       = physics::Euler::new().gamma_law_index;
-        let sof: f64 = model.get("softening_length").into();
-
-        let machsq  = ma * ma;
-        let sofsq   = sof * sof;
-        let r0      = f64::sqrt(x * x + y * y);
-        let rsq     = r0 * r0;
-        let rho     = 1.0 * f64::exp(-0.5 * (r0 - rd).powi(2) / dr.powf(2.0));
-        let drlnrho = -(r0 - rd) / (dr * dr);
-        let vsq     = rsq / (rsq + sofsq).powf(1.5) * (1.0 + 1.0 / (gm * machsq) * ((2.0 - 3.0 * rsq / (rsq + sofsq)) + r0 * drlnrho));
-        let vp      = f64::sqrt(vsq);
-        let vx      = vp * (-y / r0);
-        let vy      = vp * ( x / r0);
-        let pres    = rho / (gm * machsq) * rsq / (rsq + sofsq).powf(1.5);
-        return hydro_euler::euler_2d::Primitive(rho, vx, vy, pres)
+        let disk = disks::Torus::new(model);
+        let (x, y) = xy;
+        let r = (x * x + y * y).sqrt();
+        let sd = disk.surface_density(r);
+        let vp = disk.phi_velocity_squared(r).sqrt();
+        let pg = disk.vertically_integrated_pressure(r);
+        let vx = vp * (-y / r);
+        let vy = vp * ( x / r);
+        return hydro_euler::euler_2d::Primitive(sd, vx, vy, pg);
     }
 }
 
