@@ -377,6 +377,11 @@ impl disks::Torus {
             mass:             model.get("disk_mass").into(),
             radius:           model.get("disk_radius").into(),
             width:            model.get("disk_width").into(),
+            gamma: match String::from(model.get("hydro")).as_str() {
+                "euler" => Euler::new().gamma_law_index,
+                "iso"   => 1.0,
+                _       => 1.0,
+            }
         }
     }
 }

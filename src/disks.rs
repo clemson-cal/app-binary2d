@@ -17,6 +17,7 @@ pub struct Torus {
 	pub mass: f64,
 	pub radius: f64,
 	pub width: f64,
+	pub gamma: f64,
 }
 
 
@@ -28,7 +29,7 @@ impl Torus {
 	pub fn real_mach_number_squared(&self, r: f64) -> f64 {
 		let ma = self.mach_number;
 		let rs = self.softening_length;
-		ma * ma - ((r * r - 2.0 * rs * rs) / (r * r + rs * rs) - self.dlogrho_dlogr(r))
+		ma * ma - ((r * r - 2.0 * rs * rs) / (r * r + rs * rs) - self.dlogrho_dlogr(r)) / self.gamma
 	}
 
 	pub fn phi_velocity_squared(&self, r: f64) -> f64 {
@@ -36,7 +37,7 @@ impl Torus {
 	}
 
 	pub fn vertically_integrated_pressure(&self, r: f64) -> f64 {
-		self.surface_density(r) * self.sound_speed_squared(r)
+		self.surface_density(r) * self.sound_speed_squared(r) / self.gamma
 	}
 
 	pub fn kepler_speed_squared(&self, r: f64) -> f64 {
