@@ -76,7 +76,6 @@ pub struct Solver
     pub softening_length: f64,
     pub stress_dim: i64,
     pub force_flux_comm: bool,
-    pub low_mem: bool,
     pub orbital_elements: OrbitalElements,
 }
 

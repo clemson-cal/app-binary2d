@@ -75,8 +75,8 @@ fn main() -> anyhow::Result<()>
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
         .item("disk_radius"     , 3.0    , "Disk truncation radius (model-dependent)")
-        .item("disk_width"      , 1.0    , "Disk width (model-dependent)")
-        .item("disk_mass"       , 1.0    , "Total disk mass")
+        .item("disk_width"      , 0.5    , "Disk width (model-dependent)")
+        .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
@@ -130,9 +130,6 @@ struct App
 
     #[clap(long, about="Do flux communication even if it's not needed [benchmarking]")]
     flux_comm: bool,
-
-    #[clap(long, about="Reduce memory footprint [benchmarking]")]
-    low_mem: bool,
 
     #[clap(long, about="Truncate an existing time series file in the output directory")]
     truncate: bool,
@@ -498,7 +495,6 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         softening_length: model.get("softening_length").into(),
         stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
-        low_mem:          app.low_mem,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
 }
