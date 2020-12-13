@@ -398,18 +398,17 @@ impl InitialModel for Isothermal
 
 impl InitialModel for Euler
 {
-    fn primitive_at(&self, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
         let (x, y)  = xy;
 
-        let rd: f64 = model.get("disk_radius").into();
-        let dr: f64 = model.get("disk_width").into();
-        let md: f64 = model.get("disk_mass").into();
-        let mach    = model.get("mach_number").into();
-        let gm      = physics::Euler::new().gamma_law_index;
-        let sof     = model.get("softening_length").into();
+        let rd: f64  = model.get("disk_radius").into();
+        let dr: f64  = model.get("disk_width").into();
+        let ma: f64  = model.get("mach_number").into();
+        let gm       = physics::Euler::new().gamma_law_index;
+        let sof: f64 = model.get("softening_length").into();
 
-        let machsq  = mach * mach;
+        let machsq  = ma * ma;
         let sofsq   = sof * sof;
         let r0      = f64::sqrt(x * x + y * y);
         let rsq     = r0 * r0;
