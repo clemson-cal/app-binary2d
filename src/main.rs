@@ -79,6 +79,7 @@ fn main() -> anyhow::Result<()>
         .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
+        .item("lambda"          , 0.0    , "Kinematic bulk viscosity [?] {for Farris14, set lambda = -nu / 3.0 }")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
@@ -86,7 +87,6 @@ fn main() -> anyhow::Result<()>
         .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
         .item("softening_length", 0.05   , "Gravitational softening length [a]")
-        .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
         .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
@@ -501,12 +501,12 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         domain_radius:    model.get("domain_radius").into(),
         mach_number:      model.get("mach_number").into(),
         nu:               model.get("nu").into(),
+        lambda:           model.get("lambda").into(),
         plm:              model.get("plm").into(),
         rk_order:         model.get("rk_order").into(),
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
-        stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
