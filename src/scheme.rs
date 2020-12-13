@@ -193,6 +193,71 @@ async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
 
 
 // ============================================================================
+fn _advance_rayon<H: 'static + Hydrodynamics>(
+    mut state: State<H::Conserved>,
+    hydro: H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh: &Mesh,
+    solver: &Solver,
+    fold: usize,
+    dt: f64,
+    pool: &rayon::ThreadPool) -> State<H::Conserved>
+{
+    use futures::future::{FutureExt, join_all};
+    use rayon_future::FutureSpawn;
+    use std::rc::Rc;
+
+    for _ in 0..fold {
+        let scheme = UpdateScheme::new(hydro);
+        let time = state.time;
+        let iter = state.iteration;
+
+        let solution = pool.scope(move |scope| {
+
+            let mut pc_map = HashMap::new();
+            let mut s1_vec = Vec::new();
+
+            for (block, solution) in block_data.iter().zip(state.solution.iter()) {
+                let conserved = solution.conserved.clone();
+                let primitive = move || {
+                    scheme.compute_block_primitive(conserved)
+                };
+                pc_map.insert(block.index, scope.run(primitive).shared());
+            }
+
+            let pc_map = Rc::new(pc_map);
+
+            for (block, solution) in block_data.iter().zip(state.solution) {
+                let pc_map = Rc::clone(&pc_map);
+
+                let s1 = async move {
+                    let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &pc_map[i])).await;
+                    let pe = scope.run(move || ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2)).await;
+                    let fg = scope.run(move || scheme.compute_block_fluxes(&pe, block, solver, mesh, time)).await;
+
+                    let (fx, fy) = fg;
+                    let (fx, fy) = (fx.to_shared(), fy.to_shared());
+
+                    scope.run(move || scheme.compute_block_updated_solution(solution, fx, fy, block, solver, mesh, time, dt)).await
+                };
+                s1_vec.push(s1.shared());
+            }
+            futures::executor::block_on(join_all(s1_vec))
+        });
+
+        state = State{
+            time: time + dt,
+            iteration: iter + 1,
+            solution: solution,
+        };
+    }
+    return state;
+}
+
+
+
+
+// ============================================================================
 async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
     state: State<H::Conserved>,
     hydro: H,
