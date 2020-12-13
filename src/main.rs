@@ -107,6 +107,40 @@ fn main() -> anyhow::Result<()>
 
 
 // ============================================================================
+enum Executor {
+    Crossbeam,
+    Tokio(tokio::runtime::Runtime),
+    Rayon(rayon::ThreadPool),
+}
+
+impl Executor {
+    fn new(name: &str, threads: usize) -> anyhow::Result<Executor> {
+        use Executor::*;
+
+        match name {
+            "tokio"     => Ok(Tokio(tokio::runtime::Builder::new_multi_thread().worker_threads(threads).build()?)),
+            "rayon"     => Ok(Rayon(rayon::ThreadPoolBuilder::new().num_threads(threads).build()?)),
+            "crossbeam" => Ok(Crossbeam),
+            _           => Err(anyhow::anyhow!("unknown execution model '{}'", name)),
+        }
+    }
+
+    fn compute_units(&self, num_blocks: usize, threads: usize) -> usize
+    {
+        use Executor::*;
+
+        match self {
+            Tokio(_)  => num_cpus::get_physical().min(threads),
+            Rayon(_)  => num_cpus::get_physical().min(threads),
+            Crossbeam => num_cpus::get_physical().min(num_blocks),
+        }
+    }
+}
+
+
+
+
+// ============================================================================
 #[derive(Clap)]
 struct App
 {
@@ -125,8 +159,8 @@ struct App
     #[clap(long, default_value="1", about="Number of worker threads to use")]
     threads: usize,
 
-    #[clap(long, about="Parallelize on the tokio runtime [default: message passing]")]
-    tokio: bool,
+    #[clap(long, about="Execution stategy [crossbeam|tokio|rayon; default: tokio]")]
+    exec: String,
 
     #[clap(long, about="Do flux communication even if it's not needed [benchmarking]")]
     flux_comm: bool,
@@ -172,15 +206,6 @@ impl App
             Ok(io::read_model(restart)?)
         } else {
             Ok(HashMap::new())
-        }
-    }
-
-    fn compute_units(&self, num_blocks: usize) -> usize
-    {
-        if self.tokio {
-            num_cpus::get_physical().min(self.threads)
-        } else {
-            num_cpus::get_physical().min(num_blocks)
         }
     }
 }
@@ -330,11 +355,12 @@ impl Tasks
         block_data: &Vec<BlockData<C>>,
         mesh: &Mesh,
         model: &kind_config::Form,
+        executor: &Executor,
         app: &App) -> anyhow::Result<()>
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
-        let mzps_per_cu = mzps / app.compute_units(block_data.len()) as f64 * i64::from(model.get("rk_order")) as f64;
+        let mzps_per_cu = mzps / executor.compute_units(block_data.len(), app.threads) as f64 * i64::from(model.get("rk_order")) as f64;
 
         self.tasks_last_performed = Instant::now();
 
@@ -517,6 +543,7 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
     C: Conserved
 {
+    let executor   = Executor::new(&app.exec, app.threads)?;
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh, &model);
@@ -543,29 +570,23 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
 
     println!();
     println!("\trestart file            = {}",      app.restart_file()?.map(|f|f.to_string()).unwrap_or("none".to_string()));
-    println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
+    println!("\tcompute units           = {:.04}",  executor.compute_units(block_data.len(), app.threads));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
-    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
-
-    use tokio::runtime::Builder;
-
-    let runtime = if app.tokio {
-        Some(Builder::new_multi_thread().worker_threads(app.threads).build()?)
-    } else {
-        None
-    };
+    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &executor, &app)?;
 
     while state.time < tfinal * ORBITAL_PERIOD
     {
-        if app.tokio {
-            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
-        } else {
-            scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
+        use Executor::*;
+
+        match &executor {
+            Crossbeam      => scheme::advance_crossbeam(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold),
+            Tokio(runtime) =>  state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime),
+            Rayon(pool)    =>  state = scheme::advance_rayon(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, pool),
         }
-        tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
+        tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &executor, &app)?;
     }
     Ok(())
 }

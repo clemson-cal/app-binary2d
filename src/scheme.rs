@@ -193,19 +193,26 @@ async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
 
 
 // ============================================================================
-fn _advance_rayon<H: 'static + Hydrodynamics>(
+pub fn advance_rayon<H: 'static + Hydrodynamics>(
     mut state: State<H::Conserved>,
     hydro: H,
     block_data: &Vec<BlockData<H::Conserved>>,
     mesh: &Mesh,
     solver: &Solver,
-    fold: usize,
     dt: f64,
+    fold: usize,
     pool: &rayon::ThreadPool) -> State<H::Conserved>
 {
     use futures::future::{FutureExt, join_all};
     use rayon_future::FutureSpawn;
     use std::rc::Rc;
+
+    if solver.rk_order != 1 {
+        todo!("RK != 1 with rayon pool");
+    }
+    if solver.need_flux_communication() {
+        todo!("flux communication with rayon pool");
+    }
 
     for _ in 0..fold {
         let scheme = UpdateScheme::new(hydro);
@@ -232,7 +239,7 @@ fn _advance_rayon<H: 'static + Hydrodynamics>(
 
                 let s1 = async move {
                     let pn = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &pc_map[i])).await;
-                    let pe = scope.run(move || ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2)).await;
+                    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
                     let fg = scope.run(move || scheme.compute_block_fluxes(&pe, block, solver, mesh, time)).await;
 
                     let (fx, fy) = fg;
@@ -489,7 +496,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
 
 // ============================================================================
-fn advance_channels_internal_block<H: Hydrodynamics>(
+fn advance_crossbeam_internal_block<H: Hydrodynamics>(
     state:      BlockState<H::Conserved>,
     hydro:      H,
     block_data: &BlockData<H::Conserved>,
@@ -520,7 +527,7 @@ fn advance_channels_internal_block<H: Hydrodynamics>(
 
 
 // ============================================================================
-fn advance_channels_internal<H: Hydrodynamics>(
+fn advance_crossbeam_internal<H: Hydrodynamics>(
     solution:   &mut BlockSolution<H::Conserved>,
     time:       f64,
     hydro:      H,
@@ -532,7 +539,7 @@ fn advance_channels_internal<H: Hydrodynamics>(
     dt:         f64,
     fold:       usize)
 {
-    let update = |state| advance_channels_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
+    let update = |state| advance_crossbeam_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
     let mut state = BlockState {
         time: time,
         iteration: Rational64::new(0, 1),
@@ -550,7 +557,7 @@ fn advance_channels_internal<H: Hydrodynamics>(
 
 
 // ============================================================================
-pub fn advance_channels<H: Hydrodynamics>(
+pub fn advance_crossbeam<H: Hydrodynamics>(
     state: &mut State<H::Conserved>,
     hydro: H,
     block_data: &Vec<BlockData<H::Conserved>>,
@@ -560,7 +567,7 @@ pub fn advance_channels<H: Hydrodynamics>(
     fold: usize)
 {
     if solver.need_flux_communication() {
-        todo!("flux communication with message-passing parallelization");
+        todo!("flux communication with crossbeam");
     }
     let time = state.time;
 
@@ -578,7 +585,7 @@ pub fn advance_channels<H: Hydrodynamics>(
             senders.push(my_s);
             receivers.push(my_r);
 
-            scope.spawn(move |_| advance_channels_internal(solution, time, hydro, block, solver, mesh, &their_s, &their_r, dt, fold));
+            scope.spawn(move |_| advance_crossbeam_internal(solution, time, hydro, block, solver, mesh, &their_s, &their_r, dt, fold));
         }
 
         for _ in 0..fold
