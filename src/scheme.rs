@@ -203,6 +203,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
     runtime: &tokio::runtime::Runtime) -> State<H::Conserved>
 {
     use futures::future::{FutureExt, join_all};
+    use std::sync::Arc;
 
     let scheme = UpdateScheme::new(hydro);
     let time = state.time;
@@ -213,13 +214,11 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let primitive = async move {
             scheme.compute_block_primitive(uc).to_shared()
         };
-        let primitive = runtime.spawn(primitive);
-        let primitive = async {
-            primitive.await.unwrap()
-        };
-        return (block.index, primitive.shared());
+        return (block.index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
 
     }).collect();
+
+    let pc_map = Arc::new(pc_map);
 
     let flux_map: HashMap<_, _> = block_data.iter().map(|block|
     {
@@ -235,13 +234,10 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
             let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
             (fx.to_shared(), fy.to_shared())
         };
-        let flux = runtime.spawn(flux);
-        let flux = async {
-            flux.await.unwrap()
-        };
-        return (block_index, flux.shared());
-
+        return (block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
     }).collect();
+
+    let flux_map = Arc::new(flux_map);
 
     let s1_vec = state.solution.iter().zip(block_data).map(|(solution, block)|
     {
@@ -264,11 +260,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
             };
             scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt)
         };
-        let s1 = runtime.spawn(s1);
-        let s1 = async {
-            s1.await.unwrap()
-        };
-        return s1;
+        runtime.spawn(s1).map(|f| f.unwrap()).shared()
     });
 
     State {
