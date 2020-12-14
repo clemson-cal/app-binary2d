@@ -122,10 +122,6 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
     }
 }
 
-
-
-
-// ============================================================================
 impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
 {
     fn weighted_average(self, br: Rational64, s0: &Self) -> Self
