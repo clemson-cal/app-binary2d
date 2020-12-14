@@ -59,13 +59,16 @@ fn main() -> anyhow::Result<()>
     let app = App::parse();
 
     let parameters_not_to_supercede_on_restart = vec![
-        "num_blocks",
         "block_size",
-        "one_body",
+        "disk_mass",
+        "disk_radius",
+        "disk_width",
         "domain_radius",
+        "eccentricity",
         "hydro",
         "mass_ratio",
-        "eccentricity",
+        "num_blocks",
+        "one_body",
     ];
 
     let model = kind_config::Form::new()
@@ -74,14 +77,16 @@ fn main() -> anyhow::Result<()>
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
         .item("cfl"             , 0.4    , "CFL parameter [~0.4-0.7]")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
-        .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
-        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
+        .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("disk_radius"     , 3.0    , "Disk truncation radius (model-dependent)")
         .item("disk_width"      , 1.5    , "Disk width (model-dependent)")
-        .item("disk_mass"       , 1e-3   , "Total disk mass")
-        .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
-        .item("nu"              , 0.001  , "Shear viscosity [Omega a^2]")
+        .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
+        .item("eccentricity"    , 0.0    , "Orbital eccentricity")
+        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
         .item("lambda"          , 0.0    , "Bulk viscosity [Omega a^2] (Farris14:lambda=-nu/3; div3d.v=0:lambda=2nu/3")
+        .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
+        .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
+        .item("nu"              , 0.001  , "Shear viscosity [Omega a^2]")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
@@ -91,8 +96,6 @@ fn main() -> anyhow::Result<()>
         .item("softening_length", 0.05   , "Gravitational softening length [a]")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
-        .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
-        .item("eccentricity"    , 0.0    , "Orbital eccentricity")
         .merge_value_map_freezing(&app.restart_model_parameters()?, &parameters_not_to_supercede_on_restart)?
         .merge_string_args(&app.model_parameters)?;
 
@@ -537,10 +540,16 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
+    if disks::Torus::new(&model).failure_radius() < mesh.farthest_point() {
+        return Err(anyhow::anyhow!("disk model fails inside the domain.
+            Use larger mach_number, larger disk_width, or smaller domain_radius."));
+    }
+
     if let Some(last_sample) = time_series.last() {
         if state.time < last_sample.time {
             if ! app.truncate {
-                return Err(anyhow::anyhow!("output directory would lose time series data; run with --truncate to proceed anyway."));
+                return Err(anyhow::anyhow!("output directory would lose time series data.
+            Run with --truncate to proceed anyway."));
             } else {
                 time_series.retain(|s| s.time < state.time);
             }
