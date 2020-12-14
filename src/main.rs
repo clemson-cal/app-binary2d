@@ -1,15 +1,3 @@
-/**
- * @brief      Code to solve gas-driven binary evolution
- *
- *
- * @copyright  Jonathan Zrake, Clemson University (2020)
- *
- */
-
-
-
-
-// ============================================================================
 mod io;
 mod mesh;
 mod scheme;
@@ -17,15 +5,24 @@ mod traits;
 mod physics;
 mod disks;
 
+
+
+
+// ============================================================================
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+static DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 static VERSION_AND_BUILD: &str = git_version::git_version!(
     prefix=concat!("v", env!("CARGO_PKG_VERSION"), " "));
 
+
+
+
+// ============================================================================
 use std::time::Instant;
 use std::collections::HashMap;
 use num::rational::Rational64;
 use clap::Clap;
-use kind_config;
+use kind_config::Form;
 use io_logical::verified;
 
 use traits::{
@@ -73,7 +70,7 @@ fn main() -> anyhow::Result<()>
         "one_body",
     ];
 
-    let model = kind_config::Form::new()
+    let model = Form::new()
         .item("block_size"      , 256    , "Number of grid cells (per direction, per block)")
         .item("buffer_rate"     , 1e3    , "Rate of damping in the buffer region [orbital frequency @ domain radius]")
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
@@ -302,7 +299,7 @@ impl Tasks
     fn record_time_sample<C: Conserved>(&mut self,
         state: &State<C>,
         time_series: &mut Vec<TimeSeriesSample<C>>,
-        model: &kind_config::Form)
+        model: &Form)
     {
         self.record_time_sample.advance(model.get("tsi").into());
 
@@ -323,7 +320,7 @@ impl Tasks
         state: &State<C>,
         time_series: &Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
-        model: &kind_config::Form,
+        model: &Form,
         app: &App) -> anyhow::Result<()>
     {
         let outdir = app.output_directory()?;
@@ -345,7 +342,7 @@ impl Tasks
         time_series: &mut Vec<TimeSeriesSample<C>>,
         block_data: &Vec<BlockData<C>>,
         mesh: &Mesh,
-        model: &kind_config::Form,
+        model: &Form,
         app: &App) -> anyhow::Result<()>
     {
         let elapsed     = self.tasks_last_performed.elapsed().as_secs_f64();
@@ -380,11 +377,11 @@ impl Tasks
 // ============================================================================
 trait InitialModel: Hydrodynamics
 {
-    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive;
+    fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive;
 }
 
 impl disks::Torus {
-    fn new<H: Hydrodynamics>(model: &kind_config::Form, hydro: &H) -> Self {
+    fn new<H: Hydrodynamics>(model: &Form, hydro: &H) -> Self {
         Self{
             mach_number:      model.get("mach_number").into(),
             softening_length: model.get("softening_length").into(),
@@ -402,7 +399,7 @@ impl disks::Torus {
 // ============================================================================
 impl InitialModel for Isothermal
 {
-    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive
     {
         let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
@@ -418,7 +415,7 @@ impl InitialModel for Isothermal
 
 impl InitialModel for Euler
 {
-    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive
     {
         let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
@@ -452,7 +449,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
     {
         Self{system: system}
     }
-    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh, model: &kind_config::Form) -> BlockSolution<System::Conserved>
+    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh, model: &Form) -> BlockSolution<System::Conserved>
     {
         let u0 = mesh.cell_centers(block_index)
             .mapv(|x| self.system.primitive_at(model, x))
@@ -465,7 +462,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
             orbital_elements_change: ItemizedChange::zeros(),
         }
     }
-    fn initial_state(&self, mesh: &Mesh, model: &kind_config::Form) -> State<System::Conserved>
+    fn initial_state(&self, mesh: &Mesh, model: &Form) -> State<System::Conserved>
     {
         State{
             time: 0.0,
@@ -477,7 +474,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
     {
         Vec::new()
     }
-    fn block_data(&self, mesh: &Mesh, model: &kind_config::Form) -> Vec<BlockData<System::Conserved>>
+    fn block_data(&self, mesh: &Mesh, model: &Form) -> Vec<BlockData<System::Conserved>>
     {
         mesh.block_indexes().iter().map(|&block_index| {
             BlockData{
@@ -496,7 +493,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
 
 // ============================================================================
 impl Solver {
-    fn new(model: &kind_config::Form, app: &App) -> Self
+    fn new(model: &Form, app: &App) -> Self
     {
         let one_body: bool = model.get("one_body").into();
 
@@ -529,7 +526,7 @@ impl Solver {
 
 // ============================================================================
 impl Mesh {
-    fn new(model: &kind_config::Form) -> Self {
+    fn new(model: &Form) -> Self {
         Mesh{
             num_blocks: i64::from(model.get("num_blocks")) as usize,
             block_size: i64::from(model.get("block_size")) as usize,
@@ -542,19 +539,20 @@ impl Mesh {
 
 
 // ============================================================================
-fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::Result<()>
+fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     where
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
     C: Conserved
 {
-    use anyhow::anyhow;
+    use anyhow::bail;
 
     let solver     = Solver::new(&model, &app);
     let mesh       = Mesh::new(&model);
 
     if disks::Torus::new(&model, &driver.system).failure_radius() < mesh.farthest_point() {
-        return Err(anyhow!("disk model fails inside the domain.
-            Use larger mach_number, larger disk_width, or smaller domain_radius."));
+        bail!{
+            "disk model fails inside the domain. Use larger mach_number, larger disk_width, or smaller domain_radius."
+        }
     }
 
     let tfinal     = f64::from(model.get("tfinal"));
@@ -565,15 +563,17 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
     if state.time > tfinal * ORBITAL_PERIOD {
-        return Err(anyhow!("that simulation appears to be finished already.
-            Try increasing tfinal."));
+        bail!{
+            "that simulation appears to be finished already. Try increasing tfinal."
+        }
     }
 
     if let Some(last_sample) = time_series.last() {
         if state.time < last_sample.time {
             if ! app.truncate {
-                return Err(anyhow!("output directory would lose time series data.
-            Run with --truncate to proceed anyway."));
+                bail!{
+                    "output directory would lose time series data. Run with --truncate to proceed anyway."
+                }
             } else {
                 time_series.retain(|s| s.time < state.time);
             }
@@ -581,7 +581,7 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     }
 
     println!();
-    println!("\t{}", env!("CARGO_PKG_DESCRIPTION"));
+    println!("\t{}", DESCRIPTION);
     println!("\t{}\n", VERSION_AND_BUILD);
 
     for key in &model.sorted_keys() {
