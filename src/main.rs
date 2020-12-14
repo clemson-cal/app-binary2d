@@ -551,17 +551,18 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
 
     let solver     = Solver::new(&model, &app);
     let mesh       = Mesh::new(&model);
-    let block_data = driver.block_data(&mesh, &model);
-    let tfinal     = f64::from(model.get("tfinal"));
-    let dt         = solver.min_time_step(&mesh);
-    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
-    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
-    let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
     if disks::Torus::new(&model, &driver.system).failure_radius() < mesh.farthest_point() {
         return Err(anyhow!("disk model fails inside the domain.
             Use larger mach_number, larger disk_width, or smaller domain_radius."));
     }
+
+    let tfinal     = f64::from(model.get("tfinal"));
+    let dt         = solver.min_time_step(&mesh);
+    let block_data = driver.block_data(&mesh, &model);
+    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
+    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
+    let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
     if state.time > tfinal * ORBITAL_PERIOD {
         return Err(anyhow!("that simulation appears to be finished already.
