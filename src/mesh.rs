@@ -20,6 +20,10 @@ pub struct Mesh
 
 impl Mesh
 {
+    pub fn farthest_point(&self) -> f64 {
+        self.domain_radius * f64::sqrt(2.0)
+    }
+
     pub fn block_length(&self) -> f64
     {
         2.0 * self.domain_radius / (self.num_blocks as f64)
