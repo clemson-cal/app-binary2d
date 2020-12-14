@@ -15,6 +15,8 @@ mod mesh;
 mod scheme;
 mod traits;
 mod physics;
+mod disks;
+
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 use std::time::Instant;
@@ -75,10 +77,11 @@ fn main() -> anyhow::Result<()>
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
         .item("disk_radius"     , 3.0    , "Disk truncation radius (model-dependent)")
-        .item("disk_width"      , 0.5    , "Disk width (model-dependent)")
+        .item("disk_width"      , 1.5    , "Disk width (model-dependent)")
         .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
-        .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
+        .item("nu"              , 0.001  , "Shear viscosity [Omega a^2]")
+        .item("lambda"          , 0.0    , "Bulk viscosity [Omega a^2] (Farris14:lambda=-nu/3; div3d.v=0:lambda=2nu/3")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
@@ -86,7 +89,6 @@ fn main() -> anyhow::Result<()>
         .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
         .item("softening_length", 0.05   , "Gravitational softening length [a]")
-        .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
         .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
@@ -367,6 +369,23 @@ trait InitialModel: Hydrodynamics
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive;
 }
 
+impl disks::Torus {
+    fn new(model: &kind_config::Form) -> Self {
+        Self{
+            mach_number:      model.get("mach_number").into(),
+            softening_length: model.get("softening_length").into(),
+            mass:             model.get("disk_mass").into(),
+            radius:           model.get("disk_radius").into(),
+            width:            model.get("disk_width").into(),
+            gamma: match String::from(model.get("hydro")).as_str() {
+                "euler" => Euler::new().gamma_law_index,
+                "iso"   => 1.0,
+                _       => 1.0,
+            }
+        }
+    }
+}
+
 
 
 
@@ -375,38 +394,30 @@ impl InitialModel for Isothermal
 {
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
-        use std::f64::consts::PI;
-        use libm::{exp, erf, sqrt};
-
+        let disk = disks::Torus::new(model);
         let (x, y) = xy;
-        let r0 = f64::sqrt(x * x + y * y);
-        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-        let vp = f64::sqrt(ph);
-        let vx = vp * (-y / r0);
-        let vy = vp * ( x / r0);
-
-        let rd: f64 = model.get("disk_radius").into();
-        let dr: f64 = model.get("disk_width").into();
-        let md: f64 = model.get("disk_mass").into();
-
-        let total = PI * dr * dr * (exp(-(rd / dr).powi(2)) + sqrt(PI) * rd / dr * (1.0 + erf(rd / dr)));
-        let sigma = md / total * exp(-((r0 - rd) / dr).powi(2));
-
-        return hydro_iso2d::Primitive(sigma, vx, vy);
+        let r = (x * x + y * y).sqrt();
+        let sd = disk.surface_density(r);
+        let vp = disk.phi_velocity_squared(r).sqrt();
+        let vx = vp * (-y / r);
+        let vy = vp * ( x / r);
+        hydro_iso2d::Primitive(sd, vx, vy)
     }
 }
 
 impl InitialModel for Euler
 {
-    fn primitive_at(&self, _model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
+        let disk = disks::Torus::new(model);
         let (x, y) = xy;
-        let r0 = f64::sqrt(x * x + y * y);
-        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-        let vp = f64::sqrt(ph);
-        let vx = vp * (-y / r0);
-        let vy = vp * ( x / r0);
-        return hydro_euler::euler_2d::Primitive(1.0, vx, vy, 0.0);
+        let r = (x * x + y * y).sqrt();
+        let sd = disk.surface_density(r);
+        let vp = disk.phi_velocity_squared(r).sqrt();
+        let pg = disk.vertically_integrated_pressure(r);
+        let vx = vp * (-y / r);
+        let vy = vp * ( x / r);
+        return hydro_euler::euler_2d::Primitive(sd, vx, vy, pg);
     }
 }
 
@@ -488,12 +499,12 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         domain_radius:    model.get("domain_radius").into(),
         mach_number:      model.get("mach_number").into(),
         nu:               model.get("nu").into(),
+        lambda:           model.get("lambda").into(),
         plm:              model.get("plm").into(),
         rk_order:         model.get("rk_order").into(),
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
-        stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
