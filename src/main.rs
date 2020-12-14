@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()>
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
         .item("disk_radius"     , 3.0    , "Disk truncation radius (model-dependent)")
-        .item("disk_width"      , 0.5    , "Disk width (model-dependent)")
+        .item("disk_width"      , 1.5    , "Disk width (model-dependent)")
         .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.001  , "Shear viscosity [Omega a^2]")
