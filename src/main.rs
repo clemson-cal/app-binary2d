@@ -15,8 +15,12 @@ mod mesh;
 mod scheme;
 mod traits;
 mod physics;
+mod disks;
 mod tracers;
+
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+static VERSION_AND_BUILD: &str = git_version::git_version!(
+    prefix=concat!("v", env!("CARGO_PKG_VERSION"), " "));
 
 use std::time::Instant;
 use std::collections::HashMap;
@@ -61,13 +65,16 @@ fn main() -> anyhow::Result<()>
     let app = App::parse();
 
     let parameters_not_to_supercede_on_restart = vec![
-        "num_blocks",
         "block_size",
-        "one_body",
+        "disk_mass",
+        "disk_radius",
+        "disk_width",
         "domain_radius",
+        "eccentricity",
         "hydro",
         "mass_ratio",
-        "eccentricity",
+        "num_blocks",
+        "one_body",
     ];
 
     let model = kind_config::Form::new()
@@ -76,13 +83,16 @@ fn main() -> anyhow::Result<()>
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
         .item("cfl"             , 0.4    , "CFL parameter [~0.4-0.7]")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
-        .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
-        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
+        .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("disk_radius"     , 3.0    , "Disk truncation radius (model-dependent)")
-        .item("disk_width"      , 1.0    , "Disk width (model-dependent)")
-        .item("disk_mass"       , 1.0    , "Total disk mass")
+        .item("disk_width"      , 1.5    , "Disk width (model-dependent)")
+        .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
+        .item("eccentricity"    , 0.0    , "Orbital eccentricity")
+        .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
+        .item("lambda"          , 0.0    , "Bulk viscosity [Omega a^2] (Farris14:lambda=-nu/3; div3d.v=0:lambda=2nu/3")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
-        .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
+        .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
+        .item("nu"              , 0.001  , "Shear viscosity [Omega a^2]")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("num_tracers"     , 0      , "Number of tracers per block")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
@@ -91,13 +101,10 @@ fn main() -> anyhow::Result<()>
         .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
         .item("softening_length", 0.05   , "Gravitational softening length [a]")
-        .item("stress_dim"      , 2      , "Viscous stress tensor dimensionality [2:Farris14|3:Corrected]")
         .item("tfinal"          , 0.0    , "Time at which to stop the simulation [Orbits]")
         .item("toi"             , 1.0    , "Tracer output interval [Orbits]")
         .item("tor"             , 1.0    , "Tracer output ratio")
         .item("tsi"             , 0.1    , "Time series interval [Orbits]")
-        .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
-        .item("eccentricity"    , 0.0    , "Orbital eccentricity")
         .merge_value_map_freezing(&app.restart_model_parameters()?, &parameters_not_to_supercede_on_restart)?
         .merge_string_args(&app.model_parameters)?;
 
@@ -115,6 +122,7 @@ fn main() -> anyhow::Result<()>
 
 // ============================================================================
 #[derive(Clap)]
+#[clap(version=VERSION_AND_BUILD, author=clap::crate_authors!(", "))]
 struct App
 {
     #[clap(about="Model parameters")]
@@ -399,6 +407,19 @@ trait InitialModel: Hydrodynamics
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive;
 }
 
+impl disks::Torus {
+    fn new<H: Hydrodynamics>(model: &kind_config::Form, hydro: &H) -> Self {
+        Self{
+            mach_number:      model.get("mach_number").into(),
+            softening_length: model.get("softening_length").into(),
+            mass:             model.get("disk_mass").into(),
+            radius:           model.get("disk_radius").into(),
+            width:            model.get("disk_width").into(),
+            gamma:            hydro.gamma_law_index(),
+        }
+    }
+}
+
 
 
 
@@ -407,38 +428,32 @@ impl InitialModel for Isothermal
 {
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
-        use std::f64::consts::PI;
-        use libm::{exp, erf, sqrt};
-
+        let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
-        let r0 = f64::sqrt(x * x + y * y);
-        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-        let vp = f64::sqrt(ph);
-        let vx = vp * (-y / r0);
-        let vy = vp * ( x / r0);
-
-        let rd: f64 = model.get("disk_radius").into();
-        let dr: f64 = model.get("disk_width").into();
-        let md: f64 = model.get("disk_mass").into();
-
-        let total = PI * dr * dr * (exp(-(rd / dr).powi(2)) + sqrt(PI) * rd / dr * (1.0 + erf(rd / dr)));
-        let sigma = md / total * exp(-((r0 - rd) / dr).powi(2));
-
-        return hydro_iso2d::Primitive(sigma, vx, vy);
+        let r = (x * x + y * y).sqrt();
+        let sd = disk.surface_density(r);
+        let vp = disk.phi_velocity_squared(r).sqrt();
+        let vx = vp * (-y / r);
+        let vy = vp * ( x / r);
+        assert!(! vp.is_nan());
+        hydro_iso2d::Primitive(sd, vx, vy)
     }
 }
 
 impl InitialModel for Euler
 {
-    fn primitive_at(&self, _model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
+        let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
-        let r0 = f64::sqrt(x * x + y * y);
-        let ph = f64::sqrt(1.0 / (r0 * r0 + 0.01));
-        let vp = f64::sqrt(ph);
-        let vx = vp * (-y / r0);
-        let vy = vp * ( x / r0);
-        return hydro_euler::euler_2d::Primitive(1.0, vx, vy, 0.0);
+        let r = (x * x + y * y).sqrt();
+        let sd = disk.surface_density(r);
+        let vp = disk.phi_velocity_squared(r).sqrt();
+        let pg = disk.vertically_integrated_pressure(r);
+        let vx = vp * (-y / r);
+        let vy = vp * ( x / r);
+        assert!(! vp.is_nan());
+        return hydro_euler::euler_2d::Primitive(sd, vx, vy, pg);
     }
 }
 
@@ -545,12 +560,12 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         mach_number:      model.get("mach_number").into(),
         num_tracers:      model.get("num_tracers").into(),
         nu:               model.get("nu").into(),
+        lambda:           model.get("lambda").into(),
         plm:              model.get("plm").into(),
         rk_order:         model.get("rk_order").into(),
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
-        stress_dim:       model.get("stress_dim").into(),
         force_flux_comm:  app.flux_comm,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
@@ -575,6 +590,8 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
     C: Conserved
 {
+    use anyhow::anyhow;
+
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh, &model);
@@ -584,10 +601,21 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
+    if disks::Torus::new(&model, &driver.system).failure_radius() < mesh.farthest_point() {
+        return Err(anyhow!("disk model fails inside the domain.
+            Use larger mach_number, larger disk_width, or smaller domain_radius."));
+    }
+
+    if state.time > tfinal * ORBITAL_PERIOD {
+        return Err(anyhow!("that simulation appears to be finished already.
+            Try increasing tfinal."));
+    }
+
     if let Some(last_sample) = time_series.last() {
         if state.time < last_sample.time {
             if ! app.truncate {
-                return Err(anyhow::anyhow!("output directory would lose time series data; run with --truncate to proceed anyway."));
+                return Err(anyhow!("output directory would lose time series data.
+            Run with --truncate to proceed anyway."));
             } else {
                 time_series.retain(|s| s.time < state.time);
             }
@@ -595,6 +623,9 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     }
 
     println!();
+    println!("\t{}", env!("CARGO_PKG_DESCRIPTION"));
+    println!("\t{}\n", VERSION_AND_BUILD);
+
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
     }

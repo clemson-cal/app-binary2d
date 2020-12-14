@@ -132,6 +132,16 @@ pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
     Vec::<T>::read(&file, "time_series")
 }
 
+fn write_build(group: &Group) -> hdf5::Result<()> {
+    use hdf5::types::VarLenAscii;
+
+    group.new_dataset::<VarLenAscii>()
+        .create("version", ())?
+        .write_scalar(&VarLenAscii::from_ascii(crate::VERSION_AND_BUILD).unwrap())?;
+
+    Ok(())
+}
+
 
 
 
@@ -176,6 +186,7 @@ pub fn write_checkpoint<C: Conserved>(
     write_state(&file, &state, block_data)?;
     write_tasks(&file, &tasks)?;
     write_model(&file, &model)?;
+    write_build(&file)?;
 
     Ok(())
 }

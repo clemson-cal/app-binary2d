@@ -142,10 +142,6 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
     }
 }
 
-
-
-
-// ============================================================================
 impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
 {
     fn weighted_average(self, br: Rational64, s0: &Self) -> Self
@@ -236,13 +232,11 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
         let primitive = async move {
             scheme.compute_block_primitive(uc).to_shared()
         };
-        let primitive = runtime.spawn(primitive);
-        let primitive = async {
-            primitive.await.unwrap()
-        };
-        return (block.index, primitive.shared());
+        return (block.index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
 
     }).collect();
+
+    let pc_map = Arc::new(pc_map);
 
     let fv_map: HashMap<_, _> = block_data.iter().map(|block|
     {
@@ -266,19 +260,17 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
                 (fx.to_shared(), fy.to_shared(), None, None)
             }
         };
-        let fv = runtime.spawn(fv);
-        let fv = async {
-            fv.await.unwrap()
-        };
-        return (block_index, fv.shared());
 
+        return (block_index, runtime.spawn(fv).map(|fv| fv.unwrap()).shared());
     }).collect();
+
+    let fv_map = Arc::new(fv_map);
 
     let s1_vec = state.solution.iter().zip(block_data).map(|(solution, block)|
     {
         let solver   = solver.clone();
         let mesh     = mesh.clone();
-        let fv_map = fv_map.clone();
+        let fv_map   = fv_map.clone();
         let block    = block.clone();
         let solution = solution.clone();
 
@@ -299,11 +291,7 @@ async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
             };
             scheme.compute_block_updated_solution(solution, fx, fy, vx, vy, &block, &solver, &mesh, time, dt)
         };
-        let s1 = runtime.spawn(s1);
-        let s1 = async {
-            s1.await.unwrap()
-        };
-        return s1;
+        runtime.spawn(s1).map(|f| f.unwrap()).shared()
     });
 
     State {

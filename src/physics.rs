@@ -70,12 +70,12 @@ pub struct Solver
     pub mach_number: f64,
     pub num_tracers: i64,
     pub nu: f64,
+    pub lambda: f64,
     pub plm: f64,
     pub rk_order: i64,
     pub sink_radius: f64,
     pub sink_rate: f64,
     pub softening_length: f64,
-    pub stress_dim: i64,
     pub force_flux_comm: bool,
     pub orbital_elements: OrbitalElements,
 }
@@ -109,7 +109,7 @@ pub struct Isothermal {
 // ============================================================================
 #[derive(Clone, Copy)]
 pub struct Euler {
-    gamma_law_index: f64,
+    pub gamma_law_index: f64,
 }
 
 
@@ -127,35 +127,27 @@ impl<'a, P: Primitive> CellData<'_, P>
         }
     }
 
-    pub fn stress_field(&self, kinematic_viscosity: f64, dx: f64, dy: f64, dimensionality: i64, row: Direction, col: Direction) -> f64
+    pub fn stress_field(&self, nu: f64, lambda: f64, dx: f64, dy: f64, row: Direction, col: Direction) -> f64
     {
         use Direction::{X, Y};
 
-        let stress = if dimensionality == 2 {
-            // This form of the stress tensor comes from Eqn. 7 in Farris+
-            // (2014). Formally it corresponds a "true" dimensionality of 2.
-            match (row, col)
-            {
-                (X, X) =>  self.gx.velocity_x() / dx - self.gy.velocity_y() / dy,
-                (X, Y) =>  self.gx.velocity_y() / dx + self.gy.velocity_x() / dy,
-                (Y, X) =>  self.gx.velocity_y() / dx + self.gy.velocity_x() / dy,
-                (Y, Y) => -self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
-            }
-        } else if dimensionality == 3 {
-            // This form of the stress tensor is the correct one for vertically
-            // averaged hydrodynamics, when the bulk viscosity is equal to zero.
-            match (row, col)
-            {
-                (X, X) => 4.0 / 3.0 * self.gx.velocity_x() / dx - 2.0 / 3.0 * self.gy.velocity_y() / dy,
-                (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
-                (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
-                (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() / dx + 4.0 / 3.0 * self.gy.velocity_y() / dy,
-            }
-        } else {
-            panic!("The true dimension must be 2 or 3")
+        let shear_stress = match (row, col)
+        {
+            (X, X) => 4.0 / 3.0 * self.gx.velocity_x() / dx - 2.0 / 3.0 * self.gy.velocity_y() / dy,
+            (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
+            (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
+            (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() / dx + 4.0 / 3.0 * self.gy.velocity_y() / dy,
         };
 
-        kinematic_viscosity * self.pc.mass_density() * stress
+        let bulk_stress = match (row, col)
+        {
+            (X, X) => self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
+            (X, Y) => 0.0,
+            (Y, X) => 0.0,
+            (Y, Y) => self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
+        };
+
+        self.pc.mass_density() * (nu * shear_stress + lambda * bulk_stress)
     }
 
     pub fn gradient_field(&self, axis: Direction) -> &P
@@ -374,6 +366,10 @@ impl Hydrodynamics for Isothermal
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
 
+    fn gamma_law_index(&self) -> f64 {
+        1.0
+    }
+
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
     {
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
@@ -426,9 +422,9 @@ impl Hydrodynamics for Isothermal
         let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
         let nu  = solver.nu;
-        let dim = solver.stress_dim;
-        let tau_x = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::X) + r.stress_field(nu, dx, dy, dim, axis, Direction::X));
-        let tau_y = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::Y) + r.stress_field(nu, dx, dy, dim, axis, Direction::Y));
+        let lam = solver.lambda;
+        let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
         let iso2d_axis = match axis {
             Direction::X => hydro_iso2d::Direction::X,
             Direction::Y => hydro_iso2d::Direction::Y,
@@ -451,9 +447,9 @@ impl Hydrodynamics for Isothermal
         let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
         let nu  = solver.nu;
-        let dim = solver.stress_dim;
-        let tau_x = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::X) + r.stress_field(nu, dx, dy, dim, axis, Direction::X));
-        let tau_y = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::Y) + r.stress_field(nu, dx, dy, dim, axis, Direction::Y));
+        let lam = solver.lambda;
+        let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
         let iso2d_axis = match axis {
             Direction::X => hydro_iso2d::Direction::X,
             Direction::Y => hydro_iso2d::Direction::Y,
@@ -484,6 +480,10 @@ impl Hydrodynamics for Euler
 {
     type Conserved = hydro_euler::euler_2d::Conserved;
     type Primitive = hydro_euler::euler_2d::Primitive;
+
+    fn gamma_law_index(&self) -> f64 {
+        self.gamma_law_index
+    }
 
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
     {
@@ -540,11 +540,11 @@ impl Hydrodynamics for Euler
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
 
         let nu    = solver.nu;
-        let dim   = solver.stress_dim;
-        let tau_x = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::X) + r.stress_field(nu, dx, dy, dim, axis, Direction::X));
-        let tau_y = 0.5 * (l.stress_field(nu, dx, dy, dim, axis, Direction::Y) + r.stress_field(nu, dx, dy, dim, axis, Direction::Y));
-        let vx = 0.5 * (l.pc.velocity_x() + l.pc.velocity_x());
-        let vy = 0.5 * (l.pc.velocity_y() + l.pc.velocity_y());
+        let lam   = solver.lambda;
+        let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
+        let vx = 0.5 * (l.pc.velocity_x() + r.pc.velocity_x());
+        let vy = 0.5 * (l.pc.velocity_y() + r.pc.velocity_y());
         let viscous_flux = hydro_euler::euler_2d::Conserved(0.0, -tau_x, -tau_y, -(tau_x * vx + tau_y * vy));
 
         let euler_axis = match axis {
