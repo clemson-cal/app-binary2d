@@ -18,6 +18,7 @@ mod physics;
 mod disks;
 
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
+static VERSION_AND_BUILD: &str = git_version::git_version!(prefix="v0.1.8 build:");
 
 use std::time::Instant;
 use std::collections::HashMap;
@@ -113,6 +114,7 @@ fn main() -> anyhow::Result<()>
 
 // ============================================================================
 #[derive(Clap)]
+#[clap(version = VERSION_AND_BUILD, author = "J. Zrake, C. Tiede, J.R. Westernacher-Schneider; Clemson (2020)")]
 struct App
 {
     #[clap(about="Model parameters")]
@@ -533,6 +535,7 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
 {
     use anyhow::anyhow;
 
+
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh, &model);
@@ -541,6 +544,8 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
+
+    println!("\n\tThe Clemson CAL Circumbinary Disk Code (CDC): {}\n", VERSION_AND_BUILD);
 
     if disks::Torus::new(&model).failure_radius() < mesh.farthest_point() {
         return Err(anyhow!("disk model fails inside the domain.
@@ -563,7 +568,6 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
         }
     }
 
-    println!();
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));
     }
