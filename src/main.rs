@@ -18,7 +18,8 @@ mod physics;
 mod disks;
 
 static ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
-static VERSION_AND_BUILD: &str = git_version::git_version!(prefix="v0.1.8 build:");
+static VERSION_AND_BUILD: &str = git_version::git_version!(
+    prefix=concat!("v", env!("CARGO_PKG_VERSION"), " "));
 
 use std::time::Instant;
 use std::collections::HashMap;
@@ -114,7 +115,7 @@ fn main() -> anyhow::Result<()>
 
 // ============================================================================
 #[derive(Clap)]
-#[clap(version = VERSION_AND_BUILD, author = "J. Zrake, C. Tiede, J.R. Westernacher-Schneider; Clemson (2020)")]
+#[clap(version=VERSION_AND_BUILD, author=clap::crate_authors!(", "))]
 struct App
 {
     #[clap(about="Model parameters")]
@@ -375,18 +376,14 @@ trait InitialModel: Hydrodynamics
 }
 
 impl disks::Torus {
-    fn new(model: &kind_config::Form) -> Self {
+    fn new<H: Hydrodynamics>(model: &kind_config::Form, hydro: &H) -> Self {
         Self{
             mach_number:      model.get("mach_number").into(),
             softening_length: model.get("softening_length").into(),
             mass:             model.get("disk_mass").into(),
             radius:           model.get("disk_radius").into(),
             width:            model.get("disk_width").into(),
-            gamma: match String::from(model.get("hydro")).as_str() {
-                "euler" => Euler::new().gamma_law_index,
-                "iso"   => 1.0,
-                _       => 1.0,
-            }
+            gamma:            hydro.gamma_law_index(),
         }
     }
 }
@@ -399,13 +396,14 @@ impl InitialModel for Isothermal
 {
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
-        let disk = disks::Torus::new(model);
+        let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
         let r = (x * x + y * y).sqrt();
         let sd = disk.surface_density(r);
         let vp = disk.phi_velocity_squared(r).sqrt();
         let vx = vp * (-y / r);
         let vy = vp * ( x / r);
+        assert!(! vp.is_nan());
         hydro_iso2d::Primitive(sd, vx, vy)
     }
 }
@@ -414,7 +412,7 @@ impl InitialModel for Euler
 {
     fn primitive_at(&self, model: &kind_config::Form, xy: (f64, f64)) -> Self::Primitive
     {
-        let disk = disks::Torus::new(model);
+        let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
         let r = (x * x + y * y).sqrt();
         let sd = disk.surface_density(r);
@@ -422,6 +420,7 @@ impl InitialModel for Euler
         let pg = disk.vertically_integrated_pressure(r);
         let vx = vp * (-y / r);
         let vy = vp * ( x / r);
+        assert!(! vp.is_nan());
         return hydro_euler::euler_2d::Primitive(sd, vx, vy, pg);
     }
 }
@@ -535,7 +534,6 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
 {
     use anyhow::anyhow;
 
-
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh, &model);
@@ -545,9 +543,7 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
-    println!("\n\tThe Clemson CAL Circumbinary Disk Code (CDC): {}\n", VERSION_AND_BUILD);
-
-    if disks::Torus::new(&model).failure_radius() < mesh.farthest_point() {
+    if disks::Torus::new(&model, &driver.system).failure_radius() < mesh.farthest_point() {
         return Err(anyhow!("disk model fails inside the domain.
             Use larger mach_number, larger disk_width, or smaller domain_radius."));
     }
@@ -567,6 +563,10 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
             }
         }
     }
+
+    println!();
+    println!("\t{}", env!("CARGO_PKG_DESCRIPTION"));
+    println!("\t{}\n", VERSION_AND_BUILD);
 
     for key in &model.sorted_keys() {
         println!("\t{:.<25} {: <8} {}", key, model.get(key), model.about(key));

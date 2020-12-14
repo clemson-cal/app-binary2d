@@ -355,6 +355,10 @@ impl Hydrodynamics for Isothermal
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
 
+    fn gamma_law_index(&self) -> f64 {
+        1.0
+    }
+
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
     {
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
@@ -438,6 +442,10 @@ impl Hydrodynamics for Euler
 {
     type Conserved = hydro_euler::euler_2d::Conserved;
     type Primitive = hydro_euler::euler_2d::Primitive;
+
+    fn gamma_law_index(&self) -> f64 {
+        self.gamma_law_index
+    }
 
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
     {

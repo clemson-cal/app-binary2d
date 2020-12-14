@@ -1,10 +1,12 @@
 [package]
-name = "binary2d"
-version = "0.1.8"
-authors = ["Jonathan Zrake <jonathan.zrake@gmail.com>"]
-edition = "2018"
+name        = "binary2d"
+version     = "0.1.8"
+edition     = "2018"
+description = "Clemson CAL Circumbinary Disk Code (CDC)"
+authors     = ["J. Zrake", "C. Tiede", "J.R. Westernacher-Schneider"]
+readme      = "README.md"
+repository  = "https://github.com/clemson-cal/app-binary2d"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 crossbeam       = "0.7"
@@ -28,6 +30,7 @@ hydro-euler     = { git = "https://github.com/clemson-cal/hydro-euler",     feat
 godunov-core    = { git = "https://github.com/clemson-cal/godunov-core" }
 ndarray-ops     = { git = "https://github.com/clemson-cal/ndarray-ops" }
 io-logical      = { path = "io-logical" }
+
 
 [profile.release]
 lto = "thin"
