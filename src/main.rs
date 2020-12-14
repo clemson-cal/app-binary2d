@@ -531,6 +531,8 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     S: 'static + Hydrodynamics<Conserved=C> + InitialModel,
     C: Conserved
 {
+    use anyhow::anyhow;
+
     let solver     = create_solver(&model, &app);
     let mesh       = create_mesh(&model);
     let block_data = driver.block_data(&mesh, &model);
@@ -541,14 +543,19 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
     let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
     if disks::Torus::new(&model).failure_radius() < mesh.farthest_point() {
-        return Err(anyhow::anyhow!("disk model fails inside the domain.
+        return Err(anyhow!("disk model fails inside the domain.
             Use larger mach_number, larger disk_width, or smaller domain_radius."));
+    }
+
+    if state.time > tfinal * ORBITAL_PERIOD {
+        return Err(anyhow!("that simulation appears to be finished already.
+            Try increasing tfinal."));
     }
 
     if let Some(last_sample) = time_series.last() {
         if state.time < last_sample.time {
             if ! app.truncate {
-                return Err(anyhow::anyhow!("output directory would lose time series data.
+                return Err(anyhow!("output directory would lose time series data.
             Run with --truncate to proceed anyway."));
             } else {
                 time_series.retain(|s| s.time < state.time);
