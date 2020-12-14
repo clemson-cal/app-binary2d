@@ -143,6 +143,10 @@ struct App
     truncate: bool,
 }
 
+
+
+
+// ============================================================================
 impl App
 {
     fn restart_file(&self) -> anyhow::Result<Option<verified::File>>
@@ -218,16 +222,20 @@ pub struct RecurringTask
     next_time: f64,
 }
 
+
+
+
+// ============================================================================
 impl RecurringTask
 {
-    pub fn new() -> Self
+    fn new() -> Self
     {
         Self{
             count: 0,
             next_time: 0.0,
         }
     }
-    pub fn advance(&mut self, interval: f64)
+    fn advance(&mut self, interval: f64)
     {
         self.count += 1;
         self.next_time += interval;
@@ -487,39 +495,46 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
 
 
 // ============================================================================
-fn create_solver(model: &kind_config::Form, app: &App) -> Solver
-{
-    let one_body: bool = model.get("one_body").into();
+impl Solver {
+    fn new(model: &kind_config::Form, app: &App) -> Self
+    {
+        let one_body: bool = model.get("one_body").into();
 
-    let a = if one_body {1e-9} else {1.0};
-    let m = 1.0;
-    let q:f64 = model.get("mass_ratio").into();
-    let e:f64 = model.get("eccentricity").into();
+        let a = if one_body {1e-9} else {1.0};
+        let m = 1.0;
+        let q:f64 = model.get("mass_ratio").into();
+        let e:f64 = model.get("eccentricity").into();
 
-    Solver{
-        buffer_rate:      model.get("buffer_rate").into(),
-        buffer_scale:     model.get("buffer_scale").into(),
-        cfl:              model.get("cfl").into(),
-        domain_radius:    model.get("domain_radius").into(),
-        mach_number:      model.get("mach_number").into(),
-        nu:               model.get("nu").into(),
-        lambda:           model.get("lambda").into(),
-        plm:              model.get("plm").into(),
-        rk_order:         model.get("rk_order").into(),
-        sink_radius:      model.get("sink_radius").into(),
-        sink_rate:        model.get("sink_rate").into(),
-        softening_length: model.get("softening_length").into(),
-        force_flux_comm:  app.flux_comm,
-        orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
+        Self{
+            buffer_rate:      model.get("buffer_rate").into(),
+            buffer_scale:     model.get("buffer_scale").into(),
+            cfl:              model.get("cfl").into(),
+            domain_radius:    model.get("domain_radius").into(),
+            mach_number:      model.get("mach_number").into(),
+            nu:               model.get("nu").into(),
+            lambda:           model.get("lambda").into(),
+            plm:              model.get("plm").into(),
+            rk_order:         model.get("rk_order").into(),
+            sink_radius:      model.get("sink_radius").into(),
+            sink_rate:        model.get("sink_rate").into(),
+            softening_length: model.get("softening_length").into(),
+            force_flux_comm:  app.flux_comm,
+            orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
+        }
     }
 }
 
-fn create_mesh(model: &kind_config::Form) -> Mesh
-{
-    Mesh{
-        num_blocks: i64::from(model.get("num_blocks")) as usize,
-        block_size: i64::from(model.get("block_size")) as usize,
-        domain_radius: model.get("domain_radius").into(),
+
+
+
+// ============================================================================
+impl Mesh {
+    fn new(model: &kind_config::Form) -> Self {
+        Mesh{
+            num_blocks: i64::from(model.get("num_blocks")) as usize,
+            block_size: i64::from(model.get("block_size")) as usize,
+            domain_radius: model.get("domain_radius").into(),
+        }
     }
 }
 
@@ -534,8 +549,8 @@ fn run<S, C>(driver: Driver<S>, app: App, model: kind_config::Form) -> anyhow::R
 {
     use anyhow::anyhow;
 
-    let solver     = create_solver(&model, &app);
-    let mesh       = create_mesh(&model);
+    let solver     = Solver::new(&model, &app);
+    let mesh       = Mesh::new(&model);
     let block_data = driver.block_data(&mesh, &model);
     let tfinal     = f64::from(model.get("tfinal"));
     let dt         = solver.min_time_step(&mesh);
