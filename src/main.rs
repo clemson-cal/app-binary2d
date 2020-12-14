@@ -81,8 +81,7 @@ fn main() -> anyhow::Result<()>
         .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("nu"              , 0.001  , "Kinematic viscosity [Omega a^2]")
-        .item("lambda"          , 0.0    , "Kinematic bulk viscosity [Omega a^2] (for Farris14, lambda=-nu/3.0)")
-        .item("vertical_stress" , false  , "Whether to turn on vertical term in the viscous stress tensor")
+        .item("lambda"          , 0.0    , "Kinematic bulk viscosity [Omega a^2] (for Farris14, lambda=-nu/3.0) (for vertical term with div.v=0, lambda=nu*(2.0/3.0)")
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
@@ -506,7 +505,6 @@ fn create_solver(model: &kind_config::Form, app: &App) -> Solver
         sink_radius:      model.get("sink_radius").into(),
         sink_rate:        model.get("sink_rate").into(),
         softening_length: model.get("softening_length").into(),
-        vertical_stress:  model.get("vertical_stress").into(),
         force_flux_comm:  app.flux_comm,
         orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
     }
