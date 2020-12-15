@@ -65,6 +65,17 @@ impl Tracer
 
 
 // ============================================================================
+impl PartialEq for Tracer
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+
+
+
+// ============================================================================
 pub fn update_tracer(
     tracer: &Tracer,
     mesh: &Mesh,
@@ -102,22 +113,26 @@ pub fn update_tracer(
 
 
 // ============================================================================
-pub fn push_new_tracers(mut tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Tracer>>; 3]; 3], mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
+pub fn push_new_tracers(tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Tracer>>; 3]; 3], mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
+    let mut new = Vec::new();
 
-    for block_tracers in neigh_tracers.iter().flat_map(|r| r.iter())
+    for block_tracers in neigh_tracers.iter().flatten()
     {
         for t in block_tracers.iter()
         {
             if (t.x >= x0) && (t.x < x0 + r) && (t.y >= y0) && (t.y < y0 + r) 
             {
-                tracers.push(t.clone());
+                new.push(t.clone());
             }
         }
     }
-    return tracers;
+    new.sort_by(|a, b| b.id.cmp(&a.id));
+    new.dedup();
+    new.extend(tracers);
+    return new;
 }
 
 
