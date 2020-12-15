@@ -246,11 +246,12 @@ impl RecurringTask
 #[derive(Clone)]
 pub struct Tasks
 {
-    pub write_checkpoint: RecurringTask,
-    pub record_time_sample: RecurringTask,
-
-    pub call_count_this_run: usize,
+    pub write_checkpoint:     RecurringTask,
+    pub record_time_sample:   RecurringTask,
+    pub report_progress:      RecurringTask,
+    pub last_report_progress: Instant,
     pub tasks_last_performed: Instant,
+    pub call_count_this_run:  usize,
 }
 
 
@@ -263,6 +264,7 @@ impl From<Tasks> for Vec<(String, RecurringTask)>
         vec![
             ("write_checkpoint".into(), tasks.write_checkpoint),
             ("record_time_sample".into(), tasks.record_time_sample),
+            ("report_progress".into(), tasks.report_progress),
         ]
     }
 }
@@ -271,12 +273,11 @@ impl From<Vec<(String, RecurringTask)>> for Tasks
 {
     fn from(a: Vec<(String, RecurringTask)>) -> Tasks {
         let task_map: HashMap<_, _> = a.into_iter().collect();
-        Tasks {
-            write_checkpoint:   task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new),
-            record_time_sample: task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new),
-            call_count_this_run: 0,
-            tasks_last_performed: Instant::now(),
-        }
+        let mut tasks = Tasks::new();
+        tasks.write_checkpoint   = task_map.get("write_checkpoint")  .cloned().unwrap_or_else(RecurringTask::new);
+        tasks.record_time_sample = task_map.get("record_time_sample").cloned().unwrap_or_else(RecurringTask::new);
+        tasks.report_progress    = task_map.get("report_progress")   .cloned().unwrap_or_else(RecurringTask::new);
+        tasks
     }
 }
 
@@ -289,11 +290,27 @@ impl Tasks
     fn new() -> Self
     {
         Self{
-            write_checkpoint: RecurringTask::new(),
-            record_time_sample: RecurringTask::new(),
-            call_count_this_run: 0,
+            write_checkpoint:     RecurringTask::new(),
+            record_time_sample:   RecurringTask::new(),
+            report_progress:      RecurringTask::new(),
+            last_report_progress: Instant::now(),
             tasks_last_performed: Instant::now(),
+            call_count_this_run:  0,
         }
+    }
+
+    fn report_progress(&mut self, time: f64, number_of_orbits: f64)
+    {
+        if self.call_count_this_run > 0 {
+            let hours = self.last_report_progress.elapsed().as_secs_f64() / 3600.0;
+            println!("");
+            println!("\torbits / hour ........ {:0.2}", 1.0 / hours);
+            println!("\ttime to completion ... {:0.2} hours", (number_of_orbits - time / ORBITAL_PERIOD) * hours);
+            println!("");
+        }
+
+        self.last_report_progress = Instant::now();
+        self.report_progress.advance(ORBITAL_PERIOD);
     }
 
     fn record_time_sample<C: Conserved>(&mut self,
@@ -301,7 +318,7 @@ impl Tasks
         time_series: &mut Vec<TimeSeriesSample<C>>,
         model: &Form)
     {
-        self.record_time_sample.advance(model.get("tsi").into());
+        self.record_time_sample.advance(ORBITAL_PERIOD * f64::from(model.get("tsi")));
 
         let totals = state.solution
             .iter()
@@ -327,7 +344,7 @@ impl Tasks
         let fname_chkpt       = outdir.child(&format!("chkpt.{:04}.h5", self.write_checkpoint.count));
         let fname_time_series = outdir.child("time_series.h5");
 
-        self.write_checkpoint.advance(model.get("cpi").into());
+        self.write_checkpoint.advance(ORBITAL_PERIOD * f64::from(model.get("cpi")));
 
         println!("write checkpoint {}", fname_chkpt);
         io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
@@ -349,23 +366,20 @@ impl Tasks
         let mzps        = (mesh.total_zones() as f64) * (app.fold as f64) * 1e-6 / elapsed;
         let mzps_per_cu = mzps / app.compute_units(block_data.len()) as f64 * i64::from(model.get("rk_order")) as f64;
 
-        self.tasks_last_performed = Instant::now();
-
-        if self.call_count_this_run > 0
-        {
+        if self.call_count_this_run > 0 {
             println!("[{:05}] orbit={:.3} Mzps={:.2} (per cu-rk={:.2})", state.iteration, state.time / ORBITAL_PERIOD, mzps, mzps_per_cu);
         }
-
-        if state.time / ORBITAL_PERIOD >= self.record_time_sample.next_time
-        {
+        if state.time >= self.report_progress.next_time {
+            self.report_progress(state.time, model.get("tfinal").into());
+        }
+        if state.time >= self.record_time_sample.next_time {
             self.record_time_sample(state, time_series, model);
         }
-
-        if state.time / ORBITAL_PERIOD >= self.write_checkpoint.next_time
-        {
+        if state.time >= self.write_checkpoint.next_time {
             self.write_checkpoint(state, time_series, block_data, model, app)?;
         }
 
+        self.tasks_last_performed = Instant::now();
         self.call_count_this_run += 1;
         Ok(())
     }
@@ -555,14 +569,14 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
         }
     }
 
-    let tfinal     = f64::from(model.get("tfinal"));
+    let tfinal     = f64::from(model.get("tfinal")) * ORBITAL_PERIOD;
     let dt         = solver.min_time_step(&mesh);
     let block_data = driver.block_data(&mesh, &model);
     let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
     let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
     let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
 
-    if state.time > tfinal * ORBITAL_PERIOD {
+    if state.time > tfinal {
         bail!{
             "that simulation appears to be finished already. Try increasing tfinal."
         }
@@ -605,7 +619,7 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
         None
     };
 
-    while state.time < tfinal * ORBITAL_PERIOD
+    while state.time < tfinal
     {
         if app.tokio {
             state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
