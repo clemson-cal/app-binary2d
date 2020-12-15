@@ -29,6 +29,8 @@ use crate::traits::{
 use crate::tracers::{
     Tracer,
     update_tracer,
+    push_new_tracers,
+    tracers_on_and_off_block,
 };
 
 
@@ -334,22 +336,22 @@ fn rebin_tracers_sync<C: Conserved>(state: State<C>, mesh: &Mesh, block_data: &V
 {
     let tracer_map: HashMap<_, _> = state.solution.iter().zip(block_data).map(|(s, block)|
     {
-        let (mine, theirs) = crate::tracers::tracers_on_and_off_block(&s.tracers, &mesh, block.index);
-        (block.index, (mine, Arc::new(theirs)))
+        let (on, off) = tracers_on_and_off_block(&s.tracers, &mesh, block.index);
+        (block.index, (on, Arc::new(off)))
     }).collect();
 
-    let s1_vec = state.solution.iter().zip(block_data).map(|(solution, block)|
+    let solution = state.solution.iter().zip(block_data).map(|(s, block)|
     {
         let my_tracers            = tracer_map[&block.index].clone().0;
         let tracers_on_off_n      = mesh.neighbor_block_indexes(block.index).map_3by3(|i| &tracer_map[i]);
         let tracers_to_be_claimed = tracers_on_off_n.map_3by3(|(_, off)| off.clone());
-        solution.with_tracers(crate::tracers::push_new_tracers(my_tracers, tracers_to_be_claimed, &mesh, block.index))
+        s.with_tracers(push_new_tracers(my_tracers, tracers_to_be_claimed, &mesh, block.index))
     });
 
     State {
         time: state.time,
         iteration: state.iteration,
-        solution: s1_vec.collect(),
+        solution: solution.collect(),
     }
 }
 

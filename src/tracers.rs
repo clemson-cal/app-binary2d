@@ -113,26 +113,31 @@ pub fn update_tracer(
 
 
 // ============================================================================
-pub fn push_new_tracers(tracers: Vec<Tracer>, neigh_tracers: [[Arc<Vec<Tracer>>; 3]; 3], mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
+pub fn push_new_tracers(mut tracers: Vec<Tracer>, neighbors: [[Arc<Vec<Tracer>>; 3]; 3], mesh: &Mesh, index: BlockIndex) -> Vec<Tracer>
 {
     let r = mesh.block_length();
     let (x0, y0) = mesh.block_start(index);
-    let mut new = Vec::new();
+    let mut indexes = Vec::new();
 
-    for block_tracers in neigh_tracers.iter().flatten()
+    for (block_tracers, n) in neighbors.iter().flatten().zip(mesh.neighbor_block_indexes(index).iter().flatten())
     {
+        if indexes.contains(n)
+        {
+            continue
+        }
+        else {
+            indexes.push(n.clone());
+        }
+
         for t in block_tracers.iter()
         {
             if (t.x >= x0) && (t.x < x0 + r) && (t.y >= y0) && (t.y < y0 + r) 
             {
-                new.push(t.clone());
+                tracers.push(t.clone());
             }
         }
     }
-    new.sort_by(|a, b| b.id.cmp(&a.id));
-    new.dedup();
-    new.extend(tracers);
-    return new;
+    return tracers;
 }
 
 
