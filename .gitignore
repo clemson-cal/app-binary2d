@@ -4,8 +4,6 @@ data
 <<<<<<< HEAD
 *.pbs
 *.txt
-logfile_parse.py
-output_parse.py
 *.ipynb
 *.png
 =======
