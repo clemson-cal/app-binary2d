@@ -496,7 +496,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
         let tracers_per_row = f64::sqrt(ntracers as f64).ceil();
         let tracer_spacing  = mesh.block_length() / tracers_per_row;
         let total_tracers   = (tracers_per_row * tracers_per_row) as usize;
-        let get_id = |i| self.linear_index(block_index, mesh.num_blocks) * ntracers + i;
+        let get_id = |i| self.linear_index(block_index, mesh.num_blocks) * total_tracers + i;
 
         let make_grid = |n|
         {
