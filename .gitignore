@@ -1,5 +1,5 @@
 target
-ndarray-ops/Cargo.lock
+data
 *.h5
 <<<<<<< HEAD
 *.pbs

@@ -38,20 +38,25 @@ except OSError as e:
     exit()
 
 for group in old_file:
-    if group != 'conserved':
-        new_file.copy(old_file[group], group)
+    new_file.copy(old_file[group], group, shallow=True)
 
 # Make sure the new block size is reflected in the model parameters
 new_file['model']['block_size'][()] = new_bs
+old_solution = old_file['state']['solution']
+new_solution = new_file['state']['solution']
 
-old_conserved = old_file['conserved']
-new_conserved = new_file.create_group('conserved')
+for block in old_solution:
+    old_solution_block = old_solution[block]
+    new_solution_block = new_solution.require_group(block)
+    old_conserved = old_solution_block['conserved']
+    new_conserved = new_solution_block.create_dataset('conserved', (new_bs, new_bs), dtype=old_conserved.dtype)
 
-for group in old_conserved:
-    dtype = old_conserved[group].dtype
-    u = old_conserved[group][()]
-    new_dataset = new_conserved.create_dataset(group, (new_bs, new_bs), dtype=dtype)
-    new_dataset[0::2, 0::2] = u
-    new_dataset[0::2, 1::2] = u
-    new_dataset[1::2, 0::2] = u
-    new_dataset[1::2, 1::2] = u
+    u = old_conserved[()]
+    new_conserved[0::2, 0::2] = u
+    new_conserved[0::2, 1::2] = u
+    new_conserved[1::2, 0::2] = u
+    new_conserved[1::2, 1::2] = u
+
+    for key in old_solution_block:
+        if key != 'conserved':
+            new_solution_block.copy(old_solution_block[key], key)
