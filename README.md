@@ -140,7 +140,7 @@ grav2   # Gravitational forces from the secondary
 buffer  # Source terms due to driving in the buffer region
 cooling # Energy losses due to cooling (zeros in isothermal mode)
 ```
-Each of these data members represents the time-integrated conserved quantities added a given block by one of the source terms. The data type is the same as the data structure of conserved quantities: 3-component or isothermal or 4-component energy-conserving. For example, to load the amount of x and y momentum added to block (0, 0) by the gravitational force of the primary, you would write
+Each of these data members represents the time-integrated conserved quantities added to a given block by one of the source terms. The data type is the same as the data structure of conserved quantities: 3 components in isothermal mode and 4 components in energy-conserving mode. To load the amount of x and y momentum added to block (0, 0) by the gravitational force of the primary, you would write
 ```Python
 source_t = h5f['state']['solution']['0:000-000']['integrated_source_terms']
 fx_grav1 = source_t['grav1']['1']
@@ -149,12 +149,12 @@ fy_grav1 = source_t['grav1']['2']
 
 _Orbital evolution_
 
-The dataset `orbital_elements_change` tabulates the accumulated perturbation to the binary orbit, resulting from the transfer of mass and momentum between the disk and the binary. Its format parallels the source terms dataset: there is one orbital evolution measure term per block, per source term category (note that the buffer and cooling terms will be zeros). Each measure of the orbital evolution is a `kepler_two_body::OrbitalElements` struct from the [Kepler two-body crate](https://github.com/clemson-cal/kepler-two-body). The order of the elements is `(a, M, q, e)` where `a` is the semi-major axis, `M` is the binary total mass, `q` is the mass ratio, and `e` is the eccentricity. These items are also accessed with the key indexes `'0'`, `'1'`, etc.
+The dataset `orbital_elements_change` tabulates the accumulated perturbation to the binary orbit, resulting from the transfer of mass and momentum between the disk and the binary. Its format parallels the source terms dataset: there is one orbital evolution measure per block, per source term category (note that the buffer and cooling terms will be zeros). Each measure of the orbital evolution is a `kepler_two_body::OrbitalElements` struct from the [Kepler two-body crate](https://github.com/clemson-cal/kepler-two-body). The order of the elements is `(a, M, q, e)` where `a` is the semi-major axis, `M` is the binary total mass, `q` is the mass ratio, and `e` is the eccentricity. These items are also accessed like the conserved variable structs, with the key indexes `'0'`, `'1'`, etc.
 
 
 __Time series data__
 
-The code generates HDF5 time series data at runtime, and stores it as `time_series.h5` in the `--outdir` location. The time series data is an immediate science product, useful mainly to track the binary orbital evolution, although the itemized source terms are also included. Each time series sample is global: it is obtained by totaling the values of `integrated_source_terms` and `orbital_elements_change` over all the blocks. The data structure for the time series sample type can be found in the source code at `main::TimeSeriesSample`.
+The code generates HDF5 time series data at runtime, and stores it as `time_series.h5` in the `--outdir` location. The time series data is an immediate science product, useful mainly to track the binary orbital evolution, although the itemized source terms are also a part of the time series output. Each time series sample is global: it is obtained by totaling the values of `integrated_source_terms` and `orbital_elements_change` over all the blocks. The data structure for the time series sample type can be found in the source code at `main::TimeSeriesSample`.
 
 The time series will continue where it left off in restarted runs (see the section below on restarts). However, if there is already a time series file in your output directory, and you try to start a fresh run (or a less-evolved one), the code will not destroy your existing time series data, unless you run it with the `--truncate` flag.
 
