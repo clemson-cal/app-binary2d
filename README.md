@@ -51,13 +51,10 @@ After saving the .bashrc file, go back to the default directory and source it. N
 > binary2d --help
 ```
 
-<<<<<<< HEAD
 Note that the checkpoint files will be saved to `data/temp` in the directory that you run the executable. 
 
-This will print a list of _command line options_ for things like the data output directory and the execution strategy. You also have a list of _model parameters_, which control things like the physical setup, the mesh parameters, and the output cadence. When run without anything on the command line, the code will print the model parameters default values and brief description:
 =======
 This will print a list of _flags_ for things like the data output directory and the execution strategy. You also have a list of _model parameters_, which control things like the physical setup, the mesh parameters, and the output cadence. When run without anything on the command line, the code will print the model parameters default values and brief description:
->>>>>>> 1456b0cfb57c95bab6f58b9ae97e35c9ffb77730
 
 ```
 > binary2d
