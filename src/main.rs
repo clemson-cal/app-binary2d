@@ -249,6 +249,7 @@ pub struct Tasks
     pub write_checkpoint:     RecurringTask,
     pub record_time_sample:   RecurringTask,
     pub report_progress:      RecurringTask,
+    pub run_initiated:        Instant,
     pub last_report_progress: Instant,
     pub tasks_last_performed: Instant,
     pub call_count_this_run:  usize,
@@ -293,6 +294,7 @@ impl Tasks
             write_checkpoint:     RecurringTask::new(),
             record_time_sample:   RecurringTask::new(),
             report_progress:      RecurringTask::new(),
+            run_initiated:        Instant::now(),
             last_report_progress: Instant::now(),
             tasks_last_performed: Instant::now(),
             call_count_this_run:  0,
@@ -305,7 +307,8 @@ impl Tasks
             let hours = self.last_report_progress.elapsed().as_secs_f64() / 3600.0;
             println!("");
             println!("\torbits / hour ........ {:0.2}", 1.0 / hours);
-            println!("\ttime to completion ... {:0.2} hours", (number_of_orbits - time / ORBITAL_PERIOD) * hours);
+            println!("\ttime to completion ... {:0.3} hours", (number_of_orbits - time / ORBITAL_PERIOD) * hours);
+            println!("\truntime so far ....... {:0.3} hours", self.run_initiated.elapsed().as_secs_f64() / 3600.0);
             println!("");
         }
 
