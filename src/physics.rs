@@ -70,6 +70,7 @@ pub struct Solver
     pub mach_number: f64,
     pub nu: f64,
     pub lambda: f64,
+    pub beta: f64,
     pub plm: f64,
     pub rk_order: i64,
     pub sink_radius: f64,
@@ -477,6 +478,11 @@ impl Hydrodynamics for Euler
         let primitive = conserved.to_primitive(self.gamma_law_index);
         let vx        = primitive.velocity_1();
         let vy        = primitive.velocity_2();
+        let rsq       = x * x + y * y;
+        let rs        = solver.softening_length;
+        let omega     = 1.0 / (rsq + rs * rs).powf(3.0 / 4.0);
+        let beta      = solver.beta;
+        let cooling   = -conserved.energy_density() * beta * omega;
 
         ItemizedChange{
             grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
@@ -484,7 +490,7 @@ impl Hydrodynamics for Euler
             sink1:   conserved * (-st.sink_rate1 * dt),
             sink2:   conserved * (-st.sink_rate2 * dt),
             buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
-            cooling: Self::Conserved::zeros(),
+            cooling: hydro_euler::euler_2d::Conserved(0.0, 0.0, 0.0, cooling) * dt,
         }
     }
 
