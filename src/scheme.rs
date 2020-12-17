@@ -301,7 +301,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
     fn compute_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
     {
-        conserved.mapv(|u| self.hydro.to_primitive(u))
+        use crate::traits::Primitive;
+        conserved.mapv(|u| self.hydro.to_primitive(u).validate())
     }
 
     fn compute_block_fluxes(

@@ -374,6 +374,11 @@ impl Hydrodynamics for Isothermal
         p.to_conserved()
     }
 
+    fn validate(&self, p: Self::Primitive) -> Self::Primitive
+    {
+        p.validate()
+    }
+
     fn source_terms(
         &self,
         solver: &Solver,
@@ -460,6 +465,11 @@ impl Hydrodynamics for Euler
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
     {
         p.to_conserved(self.gamma_law_index)
+    }
+
+    fn validate(&self, p: Self::Primitive) -> Self::Primitive
+    {
+        p.validate()
     }
 
     fn source_terms(
@@ -585,6 +595,8 @@ impl Primitive for hydro_iso2d::Primitive
     fn velocity_x(self) -> f64   { self.velocity_x() }
     fn velocity_y(self) -> f64   { self.velocity_y() }
     fn mass_density(self) -> f64 { self.density() }
+    fn gas_pressure(self) -> f64 { if 1==1 {panic!("Pressure method not implemented in isothermal mode.")}; 1.0 }
+    fn validate(self)   -> Self  { self }
 }
 
 impl Primitive for hydro_euler::euler_2d::Primitive
@@ -592,4 +604,6 @@ impl Primitive for hydro_euler::euler_2d::Primitive
     fn velocity_x(self) -> f64 { self.velocity(hydro_euler::geometry::Direction::X) }
     fn velocity_y(self) -> f64 { self.velocity(hydro_euler::geometry::Direction::Y) }
     fn mass_density(self) -> f64 { self.mass_density() }
+    fn gas_pressure(self) -> f64 { self.gas_pressure() }
+    fn validate(self)   -> Self { if self.gas_pressure() < 0.0 {panic!("Pressure = {}",self.gas_pressure())}; self }
 }
