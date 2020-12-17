@@ -62,34 +62,32 @@ fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<B
     Ok(())
 }
 
-pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(_: &H) -> impl Fn(verified::File) -> hdf5::Result<State<C>>
+pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(file: &verified::File, _: &H) -> hdf5::Result<State<C>>
 {
-    |file| {
-        let file = File::open(file.to_string())?;
-        let state_group = file.group("state")?;
-        let solution_group = state_group.group("solution")?;
-        let mut solution = Vec::new();
+    let file = File::open(file.as_str())?;
+    let state_group = file.group("state")?;
+    let solution_group = state_group.group("solution")?;
+    let mut solution = Vec::new();
 
-        for key in solution_group.member_names()?
-        {
-            let block_group = solution_group.group(&key)?;
-            let s = BlockSolution{
-                conserved: ndarray::Array::read(&block_group, "conserved")?.to_shared(),
-                integrated_source_terms: block_group.dataset("integrated_source_terms")?.read_scalar()?,
-                orbital_elements_change: block_group.dataset("orbital_elements_change")?.read_scalar()?,
-            };
-            solution.push(s);
-        }
-        let time      = f64::read(&state_group, "time")?;
-        let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
-
-        let result = State{
-            solution: solution,
-            time: time,
-            iteration: iteration,
+    for key in solution_group.member_names()?
+    {
+        let block_group = solution_group.group(&key)?;
+        let s = BlockSolution{
+            conserved: ndarray::Array::read(&block_group, "conserved")?.to_shared(),
+            integrated_source_terms: block_group.dataset("integrated_source_terms")?.read_scalar()?,
+            orbital_elements_change: block_group.dataset("orbital_elements_change")?.read_scalar()?,
         };
-        Ok(result)
+        solution.push(s);
     }
+    let time      = f64::read(&state_group, "time")?;
+    let iteration = num::rational::Ratio::<i64>::read(&state_group, "iteration")?;
+
+    let result = State{
+        solution: solution,
+        time: time,
+        iteration: iteration,
+    };
+    Ok(result)
 }
 
 fn write_tasks(group: &Group, tasks: &Tasks) -> hdf5::Result<()>
@@ -97,9 +95,9 @@ fn write_tasks(group: &Group, tasks: &Tasks) -> hdf5::Result<()>
     tasks.write(group, "tasks")
 }
 
-pub fn read_tasks(file: verified::File) -> hdf5::Result<Tasks>
+pub fn read_tasks(file: &verified::File) -> hdf5::Result<Tasks>
 {
-    let file = File::open(file.to_string())?;
+    let file = File::open(file.as_str())?;
     Tasks::read(&file, "tasks")
 }
 
@@ -108,9 +106,9 @@ fn write_model(group: &Group, model: &HashMap::<String, kind_config::Value>) -> 
     kind_config::io::write_to_hdf5(&group.create_group("model")?, &model)
 }
 
-pub fn read_model(file: verified::File) -> hdf5::Result<HashMap::<String, kind_config::Value>>
+pub fn read_model(file: &verified::File) -> hdf5::Result<HashMap::<String, kind_config::Value>>
 {
-    kind_config::io::read_from_hdf5(&File::open(file.to_string())?.group("model")?)
+    kind_config::io::read_from_hdf5(&File::open(file.as_str())?.group("model")?)
 }
 
 pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>) -> hdf5::Result<()>
