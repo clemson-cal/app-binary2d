@@ -178,7 +178,7 @@ impl App
     fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
         if let Some(restart) = self.restart_file()? {
-            Ok(io::read_model(restart)?)
+            Ok(io::read_model(&restart)?)
         } else {
             Ok(HashMap::new())
         }
@@ -394,6 +394,7 @@ impl Tasks
 // ============================================================================
 trait InitialModel: Hydrodynamics
 {
+    fn validate(&self, model: &Form) -> anyhow::Result<()>;
     fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive;
 }
 
@@ -408,6 +409,16 @@ impl disks::Torus {
             gamma:            hydro.gamma_law_index(),
         }
     }
+    fn validate(&self, domain_radius: f64) -> anyhow::Result<()> {
+        if self.failure_radius() < domain_radius * f64::sqrt(2.0) {
+            anyhow::bail!{concat!{
+                "equilibrium disk model fails inside the domain, ",
+                "use a larger mach_number, larger disk_width, or a smaller domain_radius."}
+            }
+        } else {
+            Ok(())
+        }
+    }
 }
 
 
@@ -416,6 +427,9 @@ impl disks::Torus {
 // ============================================================================
 impl InitialModel for Isothermal
 {
+    fn validate(&self, model: &Form) -> anyhow::Result<()> {
+        disks::Torus::new(model, self).validate(model.get("domain_radius").into())
+    }
     fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive
     {
         let disk = disks::Torus::new(model, self);
@@ -432,6 +446,9 @@ impl InitialModel for Isothermal
 
 impl InitialModel for Euler
 {
+    fn validate(&self, model: &Form) -> anyhow::Result<()> {
+        disks::Torus::new(model, self).validate(model.get("domain_radius").into())
+    }
     fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive
     {
         let disk = disks::Torus::new(model, self);
@@ -466,41 +483,49 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
     {
         Self{system: system}
     }
-    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh, model: &Form) -> BlockSolution<System::Conserved>
+    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh, model: &Form) -> anyhow::Result<BlockSolution<System::Conserved>>
     {
+        self.system.validate(model)?;
+
         let u0 = mesh.cell_centers(block_index)
             .mapv(|x| self.system.primitive_at(model, x))
             .mapv(|p| self.system.to_conserved(p))
             .to_shared();
 
-        BlockSolution{
+        Ok(BlockSolution{
             conserved: u0,
             integrated_source_terms: ItemizedChange::zeros(),
             orbital_elements_change: ItemizedChange::zeros(),
-        }
+        })
     }
-    fn initial_state(&self, mesh: &Mesh, model: &Form) -> State<System::Conserved>
+    fn initial_state(&self, mesh: &Mesh, model: &Form) -> anyhow::Result<State<System::Conserved>>
     {
-        State{
+        let solution: anyhow::Result<_> = mesh
+            .block_indexes()
+            .iter()
+            .map(|&i| self.initial_solution(i, mesh, model))
+            .collect();
+
+        Ok(State{
             time: 0.0,
             iteration: Rational64::new(0, 1),
-            solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh, model)).collect()
-        }
+            solution: solution?,
+        })
     }
     fn initial_time_series(&self) -> Vec<TimeSeriesSample<System::Conserved>>
     {
         Vec::new()
     }
-    fn block_data(&self, mesh: &Mesh, model: &Form) -> Vec<BlockData<System::Conserved>>
+    fn block_data(&self, mesh: &Mesh, model: &Form) -> anyhow::Result<Vec<BlockData<System::Conserved>>>
     {
         mesh.block_indexes().iter().map(|&block_index| {
-            BlockData{
+            Ok(BlockData{
                 cell_centers:      mesh.cell_centers(block_index).to_shared(),
                 face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
                 face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
-                initial_conserved: self.initial_solution(block_index, mesh, model).conserved,
+                initial_conserved: self.initial_solution(block_index, mesh, model)?.conserved,
                 index: block_index,
-            }
+            })
         }).collect()
     }
 }
@@ -562,34 +587,55 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     C: Conserved
 {
     use anyhow::bail;
+    use tokio::runtime::Builder;
+
 
     let solver     = Solver::new(&model, &app);
     let mesh       = Mesh::new(&model);
-
-    if disks::Torus::new(&model, &driver.system).failure_radius() < mesh.farthest_point() {
-        bail!{
-            "disk model fails inside the domain. Use larger mach_number, larger disk_width, or smaller domain_radius."
-        }
-    }
-
-    let tfinal     = f64::from(model.get("tfinal")) * ORBITAL_PERIOD;
     let dt         = solver.min_time_step(&mesh);
-    let block_data = driver.block_data(&mesh, &model);
-    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
-    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
-    let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
+    let block_data = driver.block_data(&mesh, &model)?;
+    let tfinal = f64::from(model.get("tfinal")) * ORBITAL_PERIOD;
+    let mut time_series;
+    let mut state;
+    let mut tasks;
 
-    if state.time > tfinal {
-        bail!{
-            "that simulation appears to be finished already. Try increasing tfinal."
-        }
+
+    // Load or create the initial state and tasks
+    // ========================================================================
+    if let Some(restart_file) = app.restart_file()? {
+        state = io::read_state(&restart_file, &driver.system)?;
+        tasks = io::read_tasks(&restart_file)?;
+    } else {
+        state = driver.initial_state(&mesh, &model)?;
+        tasks = Tasks::new();
+    };
+
+
+    // Load or create the initial time series data
+    // ========================================================================
+    if let Some(time_series_file) = app.output_rundir_child("time_series.h5")? {
+        time_series = io::read_time_series(time_series_file)?;
+    } else {
+        time_series = driver.initial_time_series();
     }
 
+
+    // Validate restart logic, don't truncate time series (unless forced)
+    // ========================================================================
+    if state.time > tfinal {
+        bail!{concat!{
+            "that simulation appears to be finished already, ",
+            "set tfinal to something > {:.6}."},
+            state.time / ORBITAL_PERIOD
+        }
+    }
     if let Some(last_sample) = time_series.last() {
         if state.time < last_sample.time {
             if ! app.truncate {
-                bail!{
-                    "output directory would lose time series data. Run with --truncate to proceed anyway."
+                bail!{concat!{
+                    "output directory '{}' would lose time series data, ",
+                    "run with --truncate to proceed anyway."},
+                    app.output_directory()?.as_str(),
                 }
             } else {
                 time_series.retain(|s| s.time < state.time);
@@ -597,6 +643,9 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
         }
     }
 
+
+    // All good so far. Print code version, model parameters, and workflow.
+    // ========================================================================
     println!();
     println!("\t{}", DESCRIPTION);
     println!("\t{}\n", VERSION_AND_BUILD);
@@ -607,25 +656,27 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
 
     println!();
     println!("\trestart file            = {}",      app.restart_file()?.map(|f|f.to_string()).unwrap_or("none".to_string()));
-    println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
+    println!("\tcompute units           = {:.04}",  app.compute_units(state.solution.len()));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
-    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
-    use tokio::runtime::Builder;
-
+    // Create the Tokio runtime, if we're using it
+    // ========================================================================
     let runtime = if app.tokio {
         Some(Builder::new_multi_thread().worker_threads(app.threads).build()?)
     } else {
         None
     };
 
+
+    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
+
     while state.time < tfinal
     {
-        if app.tokio {
-            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
+        if let Some(runtime) = &runtime {
+            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime);
         } else {
             scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }
