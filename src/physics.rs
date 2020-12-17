@@ -355,7 +355,8 @@ impl Hydrodynamics for Isothermal
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
 
-    fn gamma_law_index(&self) -> f64 {
+    fn gamma_law_index(&self) -> f64
+    {
         1.0
     }
 
@@ -372,11 +373,6 @@ impl Hydrodynamics for Isothermal
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
     {
         p.to_conserved()
-    }
-
-    fn validate(&self, p: Self::Primitive) -> Self::Primitive
-    {
-        p.validate()
     }
 
     fn source_terms(
@@ -465,11 +461,6 @@ impl Hydrodynamics for Euler
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
     {
         p.to_conserved(self.gamma_law_index)
-    }
-
-    fn validate(&self, p: Self::Primitive) -> Self::Primitive
-    {
-        p.validate()
     }
 
     fn source_terms(
@@ -563,7 +554,8 @@ impl Zeros for hydro_euler::euler_2d::Conserved
     }
 }
 
-impl Zeros for kepler_two_body::OrbitalElements {
+impl Zeros for kepler_two_body::OrbitalElements
+{
     fn zeros() -> Self
     {
         Self(0.0, 0.0, 0.0, 0.0)
@@ -596,7 +588,7 @@ impl Primitive for hydro_iso2d::Primitive
     fn velocity_y(self) -> f64   { self.velocity_y() }
     fn mass_density(self) -> f64 { self.density() }
     fn gas_pressure(self) -> f64 { if 1==1 {panic!("Pressure method not implemented in isothermal mode.")}; 1.0 }
-    fn validate(self)   -> Self  { self }
+    fn validate(self) -> Self { self }
 }
 
 impl Primitive for hydro_euler::euler_2d::Primitive
@@ -605,5 +597,11 @@ impl Primitive for hydro_euler::euler_2d::Primitive
     fn velocity_y(self) -> f64 { self.velocity(hydro_euler::geometry::Direction::Y) }
     fn mass_density(self) -> f64 { self.mass_density() }
     fn gas_pressure(self) -> f64 { self.gas_pressure() }
-    fn validate(self)   -> Self { if self.gas_pressure() < 0.0 {panic!("Pressure = {}",self.gas_pressure())}; self }
+    fn validate(self) -> Self {
+        if self.gas_pressure() < 0.0 {
+            panic!("negative pressure: p = {}", self.gas_pressure())
+        } else {
+            self
+        }
+    }
 }

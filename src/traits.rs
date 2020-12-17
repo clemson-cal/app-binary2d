@@ -62,7 +62,6 @@ pub trait Hydrodynamics: Copy + Send
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
-    fn validate(&self, p: Self::Primitive) -> Self::Primitive;
 
     fn source_terms(
         &self,
