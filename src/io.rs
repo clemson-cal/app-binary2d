@@ -117,9 +117,9 @@ pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>) -> hdf
     time_series.write(&file, "time_series")
 }
 
-pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
+pub fn read_time_series<T: H5Type>(file: &verified::File) -> hdf5::Result<Vec<T>>
 {
-    let file = File::open(file.to_string())?;
+    let file = File::open(file.as_str())?;
     Vec::<T>::read(&file, "time_series")
 }
 
