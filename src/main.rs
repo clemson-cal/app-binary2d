@@ -351,7 +351,7 @@ impl Tasks
 
         println!("write checkpoint {}", fname_chkpt);
         io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
-        io::write_time_series(&fname_time_series, time_series)?;
+        io::write_time_series(&fname_time_series, time_series, &model.value_map())?;
 
         Ok(())
     }
