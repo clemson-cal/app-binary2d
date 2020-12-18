@@ -50,30 +50,31 @@ def ts_file_parse(fname):
     return adot_acc, adot_grac, adot_total, orbit
 
 
-# TODO: Figure out how to parse multiple files into one graph.
-
-
 parser = argparse.ArgumentParser()
 parser.add_argument("filename", nargs='*')
 args = parser.parse_args()
 
 fig = plt.figure()
-ax1 = fig.add_subplot(1, 1, 1)
+ax1 = fig.add_subplot(2, 1, 1)
+ax2 = fig.add_subplot(2, 1, 2)
 
 count = 1
 for name in args.filename:
     a1, a2, a3, t = ts_file_parse(name)
+    name_list = name.split('/')
+    act_name = name_list[len(name_list) - 1]
 
-    # label_name_grac = "a_grac" + str(count)
-    label_name_accr = "a_accr" + str(count)
-    # label_name_totl = "a_totl" + str(count)
+    label_name_grac = act_name + " a_grac" + str(count)
+    label_name_accr = act_name + " a_accr" + str(count)
+    label_name_totl = act_name + " a_totl" + str(count)
     ax1.plot(t[1:], a1, label=label_name_accr)
-    # ax1.plot(t[1:], a2, label=label_name_grac)
-    # ax1.plot(t[1:], a3, label=label_name_totl)
+    ax2.plot(t[1:], a2, label=label_name_grac)
+    # ax2.plot(t[1:], a3, label=label_name_totl)
     ax1.legend()
+    ax2.legend()
     count += 1
 
+plt.suptitle('app-binary2d disk mass sensitivity analysis')
 plt.xlabel('Number of Orbits')
-plt.ylabel(r'$\dot a$')
-plt.title('app-binary2d sensitivity chart')
+plt.ylabel(r'$\frac{\dot a}{\dot M_{total}}$', loc='top').set_rotation(0)
 plt.show()
