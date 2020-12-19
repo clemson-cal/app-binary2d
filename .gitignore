@@ -5,3 +5,4 @@ data
 *.pbs
 *.png
 *.txt
+__pycache__

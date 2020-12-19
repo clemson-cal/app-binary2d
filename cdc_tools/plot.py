@@ -6,8 +6,6 @@ import h5py
 import matplotlib.pyplot as plt
 
 
-
-
 def extent(filename):
     """
     Return the domain extent for a checkpoint named `filename` in the format
@@ -15,8 +13,6 @@ def extent(filename):
     """
     r0 = h5py.File(filename, 'r')['model']['domain_radius'][()]
     return [-r0, r0, -r0, r0]
-
-
 
 
 def conserved(filename, field):
@@ -39,9 +35,7 @@ def conserved(filename, field):
     return result
 
 
-
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("filenames", nargs='+')
     parser.add_argument('--range', default='None,None', help='vmin and vmax parameters for the relief plot')
@@ -56,3 +50,7 @@ if __name__ == "__main__":
         ax1.imshow(np.log10(rho).T, cmap='inferno', origin='lower', extent=extent(filename), vmin=vmin, vmax=vmax)
         # plt.colorbar()
     plt.show()
+
+
+if __name__ == "__main__":
+    main()
