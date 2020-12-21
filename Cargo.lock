@@ -483,7 +483,7 @@ dependencies = [
 [[package]]
 name = "kepler-two-body"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/kepler-two-body#93f89ec53482edfeec7c6ebf52abffc63ac3aaaa"
+source = "git+https://github.com/clemson-cal/kepler-two-body#d6853fa041cba6e8a24c63dfbc990e0384bc59e9"
 dependencies = [
  "hdf5",
 ]
