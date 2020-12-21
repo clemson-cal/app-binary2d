@@ -27,27 +27,27 @@ def ts_file_parse(fname):
     tme = h5f['time_series']['time'][i::skip]
     m1 = h5f['time_series']['orbital_elements_change']['sink1']['1'][i::skip]
     m2 = h5f['time_series']['orbital_elements_change']['sink2']['1'][i::skip]
-    a_sink_1 = h5f['time_series']['orbital_elements_change']['sink1']['0'][
+    e_sink_1 = h5f['time_series']['orbital_elements_change']['sink1']['3'][
                i::skip]
-    a_sink_2 = h5f['time_series']['orbital_elements_change']['sink2']['0'][
+    e_sink_2 = h5f['time_series']['orbital_elements_change']['sink2']['3'][
                i::skip]
-    a_grav_1 = h5f['time_series']['orbital_elements_change']['grav1']['0'][
+    e_grav_1 = h5f['time_series']['orbital_elements_change']['grav1']['3'][
                i::skip]
-    a_grav_2 = h5f['time_series']['orbital_elements_change']['grav2']['0'][
+    e_grav_2 = h5f['time_series']['orbital_elements_change']['grav2']['3'][
                i::skip]
 
     orbit = tme / 2.0 / np.pi
     m = m1 + m2
-    a_sink = a_sink_1 + a_sink_2
-    a_grav = a_grav_1 + a_grav_2
+    e_sink = e_sink_1 + e_sink_2
+    e_grav = e_grav_1 + e_grav_2
     mean_mdot = td(m) / td(tme)
 
-    adot_acc = smooth(np.diff(a_sink) / np.diff(tme)) / mean_mdot
-    adot_grac = smooth(np.diff(a_grav) / np.diff(tme)) / mean_mdot
-    adot_total = smooth(np.diff(a_sink + a_grav) / np.diff(tme)) / mean_mdot
+    edot_acc = smooth(np.diff(e_sink) / np.diff(tme)) / mean_mdot
+    edot_grac = smooth(np.diff(e_grav) / np.diff(tme)) / mean_mdot
+    edot_total = smooth(np.diff(e_sink + e_grav) / np.diff(tme)) / mean_mdot
 
     h5f.close()
-    return adot_acc, adot_grac, adot_total, orbit
+    return edot_acc, edot_grac, edot_total, orbit
 
 
 parser = argparse.ArgumentParser()
@@ -55,26 +55,27 @@ parser.add_argument("filename", nargs='*')
 args = parser.parse_args()
 
 fig = plt.figure()
-ax1 = fig.add_subplot(2, 1, 1)
-ax2 = fig.add_subplot(2, 1, 2)
+# ax1 = fig.add_subplot(2, 1, 1)
+# ax2 = fig.add_subplot(2, 1, 2)
+ax3 = fig.add_subplot(1, 1, 1)
 
-count = 1
+
 for name in args.filename:
-    a1, a2, a3, t = ts_file_parse(name)
+    e1, e2, e3, t = ts_file_parse(name)
     name_list = name.split('/')
     act_name = name_list[len(name_list) - 1]
 
-    label_name_grac = act_name + " a_grac" + str(count)
-    label_name_accr = act_name + " a_accr" + str(count)
-    label_name_totl = act_name + " a_totl" + str(count)
-    ax1.plot(t[1:], a1, label=label_name_accr)
-    ax2.plot(t[1:], a2, label=label_name_grac)
-    # ax2.plot(t[1:], a3, label=label_name_totl)
-    ax1.legend()
-    ax2.legend()
-    count += 1
+    # label_name_grac = act_name + " e_grac" + str(count)
+    # label_name_accr = act_name + " e_accr" + str(count)
+    label_name_totl = act_name + " e_totl"
+    # ax1.plot(t[1:], e1, label=label_name_accr)
+    # ax2.plot(t[1:], e2, label=label_name_grac)
+    ax3.plot(t[1:], e3, label=label_name_totl)
+    # ax1.legend()
+    # ax2.legend()
+    ax3.legend()
 
-plt.suptitle('app-binary2d disk mass sensitivity analysis')
+plt.suptitle('binary orbit eccentricity, disk_radius = 10')
 plt.xlabel('Number of Orbits')
-plt.ylabel(r'$\frac{\dot a}{\dot M_{total}}$', loc='top').set_rotation(0)
+plt.ylabel(r'$\frac{\dot e}{\dot M_{total}}$', fontsize=15).set_rotation(0)
 plt.show()
