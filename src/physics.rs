@@ -482,7 +482,8 @@ impl Hydrodynamics for Euler
         let rs        = solver.softening_length;
         let omega     = 1.0 / (rsq + rs * rs).powf(3.0 / 4.0);
         let beta      = solver.beta;
-        let cooling   = -conserved.energy_density() * beta * omega;
+        let ethermal  = primitive.gas_pressure() / (self.gamma_law_index - 1.0);
+        let cooling   = -ethermal * beta * omega;
 
         ItemizedChange{
             grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
@@ -604,8 +605,8 @@ impl Primitive for hydro_euler::euler_2d::Primitive
     fn mass_density(self) -> f64 { self.mass_density() }
     fn gas_pressure(self) -> f64 { self.gas_pressure() }
     fn validate(self) -> Self {
-        if self.gas_pressure() < 0.0 {
-            panic!("negative pressure: p = {}", self.gas_pressure())
+        if !{self.gas_pressure() > 0.0} {
+            panic!("non-positive pressure: p = {}", self.gas_pressure())
         } else {
             self
         }
