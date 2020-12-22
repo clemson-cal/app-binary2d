@@ -352,7 +352,7 @@ impl Tasks
 
         println!("write checkpoint {}", fname_chkpt);
         io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
-        io::write_time_series(&fname_time_series, time_series)?;
+        io::write_time_series(&fname_time_series, time_series, &model.value_map())?;
 
         Ok(())
     }
@@ -597,9 +597,9 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     let dt         = solver.min_time_step(&mesh);
     let block_data = driver.block_data(&mesh, &model)?;
     let tfinal = f64::from(model.get("tfinal")) * ORBITAL_PERIOD;
-    let mut time_series;
-    let mut state;
-    let mut tasks;
+    let mut state: State<C>;
+    let mut time_series: Vec<TimeSeriesSample<C>>;
+    let mut tasks: Tasks;
 
 
     // Load or create the initial state and tasks
@@ -616,7 +616,23 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     // Load or create the initial time series data
     // ========================================================================
     if let Some(time_series_file) = app.output_rundir_child("time_series.h5")? {
-        time_series = io::read_time_series(time_series_file)?;
+        time_series = io::read_time_series(&time_series_file)?;
+
+        if let Some(last_sample) = time_series.last() {
+            if state.time < last_sample.time {
+                if ! app.truncate {
+                    bail!{concat!{
+                        "time series file '{}' extends past the current time ({:.6} > {:.6}), ",
+                        "run with --truncate to lose the future data ",
+                        "or select a different --outdir."},
+                        time_series_file.as_str(),
+                        last_sample.time / ORBITAL_PERIOD,
+                        state.time / ORBITAL_PERIOD,
+                    }
+                }
+                time_series.retain(|s| s.time < state.time);
+            }
+        }
     } else {
         time_series = driver.initial_time_series();
     }
@@ -629,19 +645,6 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
             "that simulation appears to be finished already, ",
             "set tfinal to something > {:.6}."},
             state.time / ORBITAL_PERIOD
-        }
-    }
-    if let Some(last_sample) = time_series.last() {
-        if state.time < last_sample.time {
-            if ! app.truncate {
-                bail!{concat!{
-                    "output directory '{}' would lose time series data, ",
-                    "run with --truncate to proceed anyway."},
-                    app.output_directory()?.as_str(),
-                }
-            } else {
-                time_series.retain(|s| s.time < state.time);
-            }
         }
     }
 

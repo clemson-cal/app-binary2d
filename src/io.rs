@@ -111,15 +111,17 @@ pub fn read_model(file: &verified::File) -> hdf5::Result<HashMap::<String, kind_
     kind_config::io::read_from_hdf5(&File::open(file.as_str())?.group("model")?)
 }
 
-pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>) -> hdf5::Result<()>
+pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>, model: &HashMap::<String, kind_config::Value>) -> hdf5::Result<()>
 {
     let file = File::create(filename)?;
-    time_series.write(&file, "time_series")
+    time_series.write(&file, "time_series")?;
+    kind_config::io::write_to_hdf5(&file.create_group("model")?, &model)?;
+    Ok(())
 }
 
-pub fn read_time_series<T: H5Type>(file: verified::File) -> hdf5::Result<Vec<T>>
+pub fn read_time_series<T: H5Type>(file: &verified::File) -> hdf5::Result<Vec<T>>
 {
-    let file = File::open(file.to_string())?;
+    let file = File::open(file.as_str())?;
     Vec::<T>::read(&file, "time_series")
 }
 
