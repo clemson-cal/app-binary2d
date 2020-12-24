@@ -1,4 +1,4 @@
-use libm::{erf, exp, sqrt};
+use libm::{erf, exp, sqrt, tgamma, log};
 use std::f64::consts::PI;
 
 
@@ -106,27 +106,52 @@ impl Torus {
 
 
 // ============================================================================
-pub struct Pringle81 {
+pub struct Pringle81 
+{
+    pub mass: f64,
+    pub radius: f64,
+    pub gamma: f64,
+    pub softening_length: f64,
+    pub dimless_time: f64,
 }
 
 
 
 
 // ============================================================================
-impl DiskModel for Pringle81 {
+impl DiskModel for Pringle81 
+{
     fn validation_message(&self) -> Option<String> {
         None
     }
 
-    fn phi_velocity_squared(&self, _r: f64) -> f64 {
-        todo!()
+    fn phi_velocity_squared(&self, r: f64) -> f64 {
+        let rs = self.softening_length;
+        r * r / (r * r + rs * rs).powf(1.5)
     }
 
-    fn vertically_integrated_pressure(&self, _r: f64) -> f64 {
-        todo!()
+    fn vertically_integrated_pressure(&self, r: f64) -> f64 {
+        let kappa: f64 = 1e-4;
+        kappa * self.surface_density(r).powf(self.gamma)
     }
 
-    fn surface_density(&self, _r: f64) -> f64 {
-        todo!()
+    fn surface_density(&self, r: f64) -> f64 {
+        let mass = self.mass;
+        let r0 = self.radius;
+        let tau = self.dimless_time;
+        let x = r/r0;
+        mass / (PI * r0 * r0) / tau / x.powf(0.25) * exp(-(1.0 + x * x) / tau) * self.iv(0.25, 2.0 * x / tau) + 1e-15
+    }
+}
+
+impl Pringle81
+{
+    fn iv(&self, v: f64, z: f64) -> f64 {
+        let mut out: f64 = 0.0;
+        for mm in 1..201 {
+            let m = mm as f64;
+            out += exp( (2.0 * m + v) * log(z / 2.0) - log(tgamma(m + 1.0)) - log(tgamma(m + v + 1.0)) )
+        };
+        out
     }
 }

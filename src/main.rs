@@ -83,6 +83,7 @@ fn main() -> anyhow::Result<()>
         .item("disk_type"       , "torus", "Disk model [torus|pringle81]")
         .item("disk_mass"       , 1e-3   , "Total disk mass")
         .item("disk_radius"     , 3.0    , "Disk truncation radius (meaning depends on disk_type)")
+        .item("pr81_time"       , 0.01   , "Dimensionless time to initialize Pringle81 disk type")
         .item("disk_width"      , 1.5    , "Disk width (model-dependent)")
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("eccentricity"    , 0.0    , "Orbital eccentricity")
@@ -412,7 +413,11 @@ fn make_disk_model<H: Hydrodynamics>(model: &Form, hydro: &H) -> anyhow::Result<
             gamma:            hydro.gamma_law_index(),
         }),
         "pringle81" => Box::new(disks::Pringle81{
-            // load model parameters here
+            softening_length: model.get("softening_length").into(),
+            mass:             model.get("disk_mass").into(),
+            radius:           model.get("disk_radius").into(),
+            dimless_time:     model.get("pr81_time").into(),
+            gamma:            hydro.gamma_law_index(),
         }),
         _ => Err(anyhow::anyhow!("unknown disk_type={}", disk_type))?,
     };
