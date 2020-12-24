@@ -595,7 +595,13 @@ impl Primitive for hydro_iso2d::Primitive
     fn velocity_y(self) -> f64   { self.velocity_y() }
     fn mass_density(self) -> f64 { self.density() }
     fn gas_pressure(self) -> f64 { if 1==1 {panic!("Pressure method not implemented in isothermal mode.")}; 1.0 }
-    fn validate(self) -> Self { self }
+    fn validate(self) -> Self {
+        if !{self.mass_density() > 0.0} {
+            panic!("non-positive mass density: Sigma = {}", self.mass_density())
+        } else {
+            self
+        }
+    }
 }
 
 impl Primitive for hydro_euler::euler_2d::Primitive
