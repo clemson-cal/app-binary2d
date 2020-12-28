@@ -17,7 +17,7 @@ setuptools.setup(
         'console_scripts': [
             'cdc-plot     = cdc_tools.plot:main',
             'cdc-model    = cdc_tools.model:main',
-            'cdc-tseries  = cdc_tools.tseries :main',
+            'cdc-tseries  = cdc_tools.tseries:main',
             'cdc-upsample = cdc_tools.upsample:main',
         ]
     },
