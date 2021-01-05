@@ -90,6 +90,7 @@ fn main() -> anyhow::Result<()>
         .item("hydro"           , "iso"  , "Hydrodynamics mode: [iso|euler]")
         .item("lambda"          , 0.0    , "Bulk viscosity [Omega a^2] (Farris14:lambda=-nu/3; div3d.v=0:lambda=2nu/3")
         .item("beta"            , 0.05   , "Beta cooling strength [dimensionless, ~0.05]")
+        .item("fake_heat_thresh", 0.00   , "Add heat if specific internal energy is below this (euler only)")
         .item("mach_number"     , 10.0   , "Orbital Mach number of the disk")
         .item("mass_ratio"      , 1.0    , "Binary mass ratio (M2 / M1)")
         .item("nu"              , 0.001  , "Shear viscosity [Omega a^2]")
@@ -565,6 +566,7 @@ impl Solver {
             sink_rate:        model.get("sink_rate").into(),
             softening_length: model.get("softening_length").into(),
             beta:             model.get("beta").into(),
+            fake_heat_thresh: model.get("fake_heat_thresh").into(),
             force_flux_comm:  app.flux_comm,
             orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
         }

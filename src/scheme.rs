@@ -100,6 +100,7 @@ impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
             grav1:   self.grav1   * (-bf + 1.) + s0.grav1   * bf,
             grav2:   self.grav2   * (-bf + 1.) + s0.grav2   * bf,
             buffer:  self.buffer  * (-bf + 1.) + s0.buffer  * bf,
+            heating: self.heating * (-bf + 1.) + s0.heating * bf,
             cooling: self.cooling * (-bf + 1.) + s0.cooling * bf,
         }
     }
