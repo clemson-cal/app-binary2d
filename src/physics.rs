@@ -489,18 +489,31 @@ impl Hydrodynamics for Euler
         let rs        = solver.softening_length;
         let omega     = 1.0 / (rsq + rs * rs).powf(3.0 / 4.0);
         let beta      = solver.beta;
-        let uthermal  = primitive.gas_pressure() / (self.gamma_law_index - 1.0);
         let thresh_e  = solver.fake_heat_thresh;
+        let uthermal  = primitive.gas_pressure() / (self.gamma_law_index - 1.0);
         let utarget   = thresh_e * primitive.mass_density(); // Add a model parameter target_temp
         let heating   = if uthermal < utarget {  utarget  * beta * omega } else { 0.0 };
         let cooling   = if uthermal > utarget { -uthermal * beta * omega } else { 0.0 };
+
+        let drive_toward_background_state = false;
+
+        let buffer_conserved = if drive_toward_background_state {
+            background_conserved
+        } else {
+            hydro_euler::euler_2d::Conserved(
+                conserved.0,
+                conserved.0 *  -y * omega,
+                conserved.0 *   x * omega,
+                conserved.0 * rsq * omega * omega * 0.5 + uthermal,
+            )
+        };
 
         ItemizedChange{
             grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
             grav2:   hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
             sink1:   conserved * (-st.sink_rate1 * dt),
             sink2:   conserved * (-st.sink_rate2 * dt),
-            buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
+            buffer: (conserved - buffer_conserved) * (-dt * st.buffer_rate),
             heating: hydro_euler::euler_2d::Conserved(0.0, 0.0, 0.0, heating) * dt,
             cooling: hydro_euler::euler_2d::Conserved(0.0, 0.0, 0.0, cooling) * dt,
         }
