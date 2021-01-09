@@ -22,7 +22,7 @@ def td(x):
 def ts_file_parse(fname):
     skip = 1
     h5f = h5py.File(fname, 'r')
-    e_c = h5f['model']['eccentricity'][()]
+    gem = h5f['model']['mach_number'][()]
     i = np.where(h5f['time_series']['time'] / 2 / np.pi < 200)[0][-1]
 
     # tme = h5f['time_series']['time'][i::skip]
@@ -52,7 +52,7 @@ def ts_file_parse(fname):
 
     h5f.close()
     # edot_acc, edot_grac, edot_total, orbit
-    return e_c, mean_edot / mean_mdot
+    return gem, mean_edot / mean_mdot
 
 
 parser = argparse.ArgumentParser()
@@ -86,7 +86,7 @@ for name in args.filename:
 
 ax3.scatter(e_list, De_Dm_list)
 
-plt.suptitle('binary orbit eccentricity, disk_radius = 10')
-plt.xlabel('e')
+plt.suptitle('binary orbit eccentricity threshold rework - Mach number')
+plt.xlabel(r'$N_{M}$')
 plt.ylabel(r'$\frac{\Delta e}{\Delta M_{total}}$', fontsize=15).set_rotation(0)
 plt.show()
