@@ -1,15 +1,9 @@
 target
 data
 *.h5
-<<<<<<< HEAD
 *.pbs
 *.txt
 *.ipynb
 *.png
-=======
-*.ipynb
-*.pbs
-*.png
-*.txt
->>>>>>> master
 *.mp4
+tseries_modded.py
