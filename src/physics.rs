@@ -350,6 +350,7 @@ impl Isothermal
 
 
 // ============================================================================
+// TODO: Implement density floor feature here.
 impl Hydrodynamics for Isothermal
 {
     type Conserved = hydro_iso2d::Conserved;
@@ -384,6 +385,7 @@ impl Hydrodynamics for Isothermal
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
+        if conserved.density() < 0.0 { panic!("Density is negative!") }
         let st = solver.source_terms(two_body_state, x, y, conserved.density());
         
         ItemizedChange{
