@@ -92,30 +92,79 @@ Some detail on the model parameters affecting the mesh:
 - `block_size=64` means the blocks all have shape 64x64
 - `num_blocks=8` means there are 8x8 blocks in the domain
 
-Upon startup the code will output the corresponding grid resolution in terms of cell size per semi-major axis.
+When it starts up, the code will print the grid spacing in units of the semi-major axis. Low, medium, and high resolution should aim for `dx=0.04a`, `dx=0.02a` and `dx=0.01a` respectively.
 
-__Data outputs__
+__Checkpoint files__
 
-The code's data products are a series of _checkpoint_ files in HDF5 format. Checkpoints are written at a cadence given by the `cpi` model parameter (for checkpoint interval), and will appear in the directory specified by the `--outdir` flag.
+Checkpoints are HDF5 files containing a snapshot of the simulation state. They are written at a cadence given by the `cpi` model parameter (for checkpoint interval), and will appear in the directory specified by the `--outdir` flag.
 
 Checkpoint files may be inspected either with the `h5ls` utility or with the `h5py` Python module. Checkpoints have the following group structure:
-
 ```
-- model            Group              # The model parameters
-- tasks            Group              # Times when analysis and output tasks were last performed
-- state            Group              # Solution state
-    + iteration    Dataset {SCALAR}   # Iteration number
-    + time         Dataset {SCALAR}   # Simulation time
-    + conserved    Group              # 2D arrays of the conserved quantities, one for each block
+model                    Group            # Model parameters
+state                    Group            # Simulaton time, iteration, fields, orbital elements
+tasks                    Group            # Schedule of side-effects (outputs, etc.)
+version                  Dataset {SCALAR} # The code version and git SHA
 ```
 
-In isothermal mode, the 2D arrays of conserved quantities have element type `[f64; 3]`. The order of these floats is (surface density, x-momentum, y-momentum). When the energy equation is being solved, the type is `[f64; 4]` and the final element is the total energy.
+The `/state` group of the checkpoint file has the structure
+```
+time                     Dataset {SCALAR}
+iteration                Dataset {SCALAR}
+solution                 Group
+```
+
+The `/state/solution` group is a list of blocks in the domain. A block with the name `0:022-010` means "block index (22, 10) on mesh level 0" (note that until the FMR feature is written, all blocks are at level 0). Each block is a group with the following datasets:
+```
+conserved                Dataset {64, 64} # 2D array of conserved densities
+integrated_source_terms  Dataset {SCALAR} # Accumulated source terms on this block
+orbital_elements_change  Dataset {SCALAR} # Change in the binary orbit from forcing on this block
+```
+
+_Conserved variable arrays_
+
+In isothermal mode, the 2D arrays of conserved quantities have element type `(f64, f64, f64)`. The order of these floats is (surface density, x-momentum, y-momentum). When the energy equation is being solved, the type is `(f64, f64, f64, f64)` with the final element being the total energy density. When loaded into Python via `h5py`, the numpy `dtype` will read `[('0', '<f8'), ('1', '<f8'), ('2', '<f8')]`. This means you must access the conserved variable fields using the strings `'0'`, `'1'`, etc. For example, to load the 2D array of surface density, you would write
+
+```Python
+h5f = h5py.File('data/chkpt.0000.h5', 'r')
+sigma = h5f['state']['solution']['0:000-000']['conserved']['0']
+```
+
+_Source terms_
+
+The dataset `integrated_source_terms` is a nested struct, containing at the outermost level a list of 6 types of source terms:
+```
+sink1   # Accretion source terms associated with the primary
+sink2   # Accretion source terms associated with the secondary
+grav1   # Gravitational forces from the primary
+grav2   # Gravitational forces from the secondary
+buffer  # Source terms due to driving in the buffer region
+cooling # Energy losses due to cooling (zeros in isothermal mode)
+```
+Each of these data members represents the time-integrated conserved quantities added to a given block by one of the source terms. The data type is the same as the data structure of conserved quantities: 3 components in isothermal mode and 4 components in energy-conserving mode. To load the amount of x and y momentum added to block (0, 0) by the gravitational force of the primary, you would write
+```Python
+source_t = h5f['state']['solution']['0:000-000']['integrated_source_terms']
+fx_grav1 = source_t['grav1']['1']
+fy_grav1 = source_t['grav1']['2']
+```
+
+_Orbital evolution_
+
+The dataset `orbital_elements_change` tabulates the accumulated perturbation to the binary orbit, resulting from the transfer of mass and momentum between the disk and the binary. Its format parallels the source terms dataset: there is one orbital evolution measure per block, per source term category (note that the buffer and cooling terms will be zeros). Each measure of the orbital evolution is a `kepler_two_body::OrbitalElements` struct from the [Kepler two-body crate](https://github.com/clemson-cal/kepler-two-body). The order of the elements is `(a, M, q, e)` where `a` is the semi-major axis, `M` is the binary total mass, `q` is the mass ratio, and `e` is the eccentricity. These items are also accessed like the conserved variable structs, with the key indexes `'0'`, `'1'`, etc.
+
+
+__Time series data__
+
+The code generates HDF5 time series data at runtime, and stores it as `time_series.h5` in the `--outdir` location. The time series data is an immediate science product, useful mainly to track the binary orbital evolution, although the itemized source terms are also a part of the time series output. Each time series sample is global: it is obtained by totaling the values of `integrated_source_terms` and `orbital_elements_change` over all the blocks. The data structure for the time series sample type can be found in the source code at `main::TimeSeriesSample`.
+
+The time series will continue where it left off in restarted runs (see the section below on restarts). However, if there is already a time series file in your output directory, and you try to start a fresh run (or a less-evolved one), the code will not destroy your existing time series data, unless you run it with the `--truncate` flag.
+
 
 __Restarting runs__
 
 Runs can be restarted from HDF5 checkpoint files. These files contain a complete snapshot of the simulation state, such that a run which was restarted will be identical to one that ran uninterrupted. A run can be restarted by supplying the name of the checkpoint file, e.g. `--restart=my-run/chkpt.0000.h5`. Alternatively, setting the flag `--restart=my-run` will find the most recent checkpoint file in that directory, and continue from it. In a restarted run, subsequent outputs are placed in the same directory as the checkpoint file, unless a different directory is given with the `--outdir` flag.
 
 All the model parameters are stored in the checkpoint file. Model parameters you provide on the command line when restarting a run will supersede those in the checkpoint, although some, such as the block size and domain radius, can only be specified when a new initial condition is being generated. You'll see an error message if you try to supersede those on a restart. Superseding physical conditions (e.g. disk Mach number or viscosity) or solver parameters (CFL, etc) can be very useful, for example if you want to see how an already well-evolved run responds to these changes.
+
 
 __Restarting at higher resolution__
 

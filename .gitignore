@@ -7,3 +7,4 @@ data
 *.txt
 output_parse.py
 .idea
+*.mp4

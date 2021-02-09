@@ -48,6 +48,10 @@ use scheme::{
     BlockData,
 };
 
+use disks::{
+    DiskModel
+};
+
 
 
 
@@ -76,8 +80,9 @@ fn main() -> anyhow::Result<()>
         .item("buffer_scale"    , 1.0    , "Length scale of the buffer transition region [a]")
         .item("cfl"             , 0.4    , "CFL parameter [~0.4-0.7]")
         .item("cpi"             , 1.0    , "Checkpoint interval [Orbits]")
+        .item("disk_type"       , "torus", "Disk model [torus|pringle81]")
         .item("disk_mass"       , 1e-3   , "Total disk mass")
-        .item("disk_radius"     , 3.0    , "Disk truncation radius (model-dependent)")
+        .item("disk_radius"     , 3.0    , "Disk truncation radius (meaning depends on disk_type)")
         .item("disk_width"      , 1.5    , "Disk width (model-dependent)")
         .item("domain_radius"   , 6.0    , "Half-size of the domain [a]")
         .item("eccentricity"    , 0.0    , "Orbital eccentricity")
@@ -178,7 +183,7 @@ impl App
     fn restart_model_parameters(&self) -> anyhow::Result<HashMap<String, kind_config::Value>>
     {
         if let Some(restart) = self.restart_file()? {
-            Ok(io::read_model(restart)?)
+            Ok(io::read_model(&restart)?)
         } else {
             Ok(HashMap::new())
         }
@@ -249,6 +254,7 @@ pub struct Tasks
     pub write_checkpoint:     RecurringTask,
     pub record_time_sample:   RecurringTask,
     pub report_progress:      RecurringTask,
+    pub run_initiated:        Instant,
     pub last_report_progress: Instant,
     pub tasks_last_performed: Instant,
     pub call_count_this_run:  usize,
@@ -293,6 +299,7 @@ impl Tasks
             write_checkpoint:     RecurringTask::new(),
             record_time_sample:   RecurringTask::new(),
             report_progress:      RecurringTask::new(),
+            run_initiated:        Instant::now(),
             last_report_progress: Instant::now(),
             tasks_last_performed: Instant::now(),
             call_count_this_run:  0,
@@ -305,7 +312,8 @@ impl Tasks
             let hours = self.last_report_progress.elapsed().as_secs_f64() / 3600.0;
             println!("");
             println!("\torbits / hour ........ {:0.2}", 1.0 / hours);
-            println!("\ttime to completion ... {:0.2} hours", (number_of_orbits - time / ORBITAL_PERIOD) * hours);
+            println!("\ttime to completion ... {:0.3} hours", (number_of_orbits - time / ORBITAL_PERIOD) * hours);
+            println!("\truntime so far ....... {:0.3} hours", self.run_initiated.elapsed().as_secs_f64() / 3600.0);
             println!("");
         }
 
@@ -348,7 +356,7 @@ impl Tasks
 
         println!("write checkpoint {}", fname_chkpt);
         io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
-        io::write_time_series(&fname_time_series, time_series)?;
+        io::write_time_series(&fname_time_series, time_series, &model.value_map())?;
 
         Ok(())
     }
@@ -389,22 +397,37 @@ impl Tasks
 
 
 // ============================================================================
-trait InitialModel: Hydrodynamics
-{
-    fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive;
-}
+fn make_disk_model<H: Hydrodynamics>(model: &Form, hydro: &H) -> anyhow::Result<Box<dyn DiskModel>> {
+    let disk_type: String = model.get("disk_type").into();
 
-impl disks::Torus {
-    fn new<H: Hydrodynamics>(model: &Form, hydro: &H) -> Self {
-        Self{
+    let disk: Box<dyn DiskModel> = match disk_type.as_str() {
+        "torus" => Box::new(disks::Torus{
             mach_number:      model.get("mach_number").into(),
             softening_length: model.get("softening_length").into(),
             mass:             model.get("disk_mass").into(),
             radius:           model.get("disk_radius").into(),
             width:            model.get("disk_width").into(),
+            domain_radius:    model.get("domain_radius").into(),
             gamma:            hydro.gamma_law_index(),
-        }
+        }),
+        "pringle81" => Box::new(disks::Pringle81{
+            // load model parameters here
+        }),
+        _ => Err(anyhow::anyhow!("unknown disk_type={}", disk_type))?,
+    };
+    if let Some(message) = disk.validation_message() {
+        anyhow::bail!(message)
     }
+    Ok(disk)
+}
+
+
+
+
+// ============================================================================
+trait InitialModel: Hydrodynamics
+{
+    fn primitive_at(&self, disk: &Box<dyn DiskModel>, xy: (f64, f64)) -> Self::Primitive;
 }
 
 
@@ -413,9 +436,8 @@ impl disks::Torus {
 // ============================================================================
 impl InitialModel for Isothermal
 {
-    fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, disk: &Box<dyn DiskModel>, xy: (f64, f64)) -> Self::Primitive
     {
-        let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
         let r = (x * x + y * y).sqrt();
         let sd = disk.surface_density(r);
@@ -429,9 +451,8 @@ impl InitialModel for Isothermal
 
 impl InitialModel for Euler
 {
-    fn primitive_at(&self, model: &Form, xy: (f64, f64)) -> Self::Primitive
+    fn primitive_at(&self, disk: &Box<dyn DiskModel>, xy: (f64, f64)) -> Self::Primitive
     {
-        let disk = disks::Torus::new(model, self);
         let (x, y) = xy;
         let r = (x * x + y * y).sqrt();
         let sd = disk.surface_density(r);
@@ -463,41 +484,49 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
     {
         Self{system: system}
     }
-    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh, model: &Form) -> BlockSolution<System::Conserved>
+    fn initial_solution(&self, block_index: BlockIndex, mesh: &Mesh, model: &Form) -> anyhow::Result<BlockSolution<System::Conserved>>
     {
+        let disk = make_disk_model(model, &self.system)?;
+
         let u0 = mesh.cell_centers(block_index)
-            .mapv(|x| self.system.primitive_at(model, x))
+            .mapv(|x| self.system.primitive_at(&disk, x))
             .mapv(|p| self.system.to_conserved(p))
             .to_shared();
 
-        BlockSolution{
+        Ok(BlockSolution{
             conserved: u0,
             integrated_source_terms: ItemizedChange::zeros(),
             orbital_elements_change: ItemizedChange::zeros(),
-        }
+        })
     }
-    fn initial_state(&self, mesh: &Mesh, model: &Form) -> State<System::Conserved>
+    fn initial_state(&self, mesh: &Mesh, model: &Form) -> anyhow::Result<State<System::Conserved>>
     {
-        State{
+        let solution: anyhow::Result<_> = mesh
+            .block_indexes()
+            .iter()
+            .map(|&i| self.initial_solution(i, mesh, model))
+            .collect();
+
+        Ok(State{
             time: 0.0,
             iteration: Rational64::new(0, 1),
-            solution: mesh.block_indexes().iter().map(|&i| self.initial_solution(i, mesh, model)).collect()
-        }
+            solution: solution?,
+        })
     }
     fn initial_time_series(&self) -> Vec<TimeSeriesSample<System::Conserved>>
     {
         Vec::new()
     }
-    fn block_data(&self, mesh: &Mesh, model: &Form) -> Vec<BlockData<System::Conserved>>
+    fn block_data(&self, mesh: &Mesh, model: &Form) -> anyhow::Result<Vec<BlockData<System::Conserved>>>
     {
         mesh.block_indexes().iter().map(|&block_index| {
-            BlockData{
+            Ok(BlockData{
                 cell_centers:      mesh.cell_centers(block_index).to_shared(),
                 face_centers_x:    mesh.face_centers_x(block_index).to_shared(),
                 face_centers_y:    mesh.face_centers_y(block_index).to_shared(),
-                initial_conserved: self.initial_solution(block_index, mesh, model).conserved,
+                initial_conserved: self.initial_solution(block_index, mesh, model)?.conserved,
                 index: block_index,
-            }
+            })
         }).collect()
     }
 }
@@ -559,41 +588,68 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     C: Conserved
 {
     use anyhow::bail;
+    use tokio::runtime::Builder;
+
 
     let solver     = Solver::new(&model, &app);
     let mesh       = Mesh::new(&model);
-
-    if disks::Torus::new(&model, &driver.system).failure_radius() < mesh.farthest_point() {
-        bail!{
-            "disk model fails inside the domain. Use larger mach_number, larger disk_width, or smaller domain_radius."
-        }
-    }
-
-    let tfinal     = f64::from(model.get("tfinal")) * ORBITAL_PERIOD;
     let dt         = solver.min_time_step(&mesh);
-    let block_data = driver.block_data(&mesh, &model);
-    let mut state  = app.restart_file()?.map(io::read_state(&driver.system)).unwrap_or_else(|| Ok(driver.initial_state(&mesh, &model)))?;
-    let mut tasks  = app.restart_file()?.map(io::read_tasks).unwrap_or_else(|| Ok(Tasks::new()))?;
-    let mut time_series = app.output_rundir_child("time_series.h5")?.map(io::read_time_series).unwrap_or_else(|| Ok(driver.initial_time_series()))?;
+    let block_data = driver.block_data(&mesh, &model)?;
+    let tfinal = f64::from(model.get("tfinal")) * ORBITAL_PERIOD;
+    let mut state: State<C>;
+    let mut time_series: Vec<TimeSeriesSample<C>>;
+    let mut tasks: Tasks;
 
-    if state.time > tfinal {
-        bail!{
-            "that simulation appears to be finished already. Try increasing tfinal."
-        }
-    }
 
-    if let Some(last_sample) = time_series.last() {
-        if state.time < last_sample.time {
-            if ! app.truncate {
-                bail!{
-                    "output directory would lose time series data. Run with --truncate to proceed anyway."
+    // Load or create the initial state and tasks
+    // ========================================================================
+    if let Some(restart_file) = app.restart_file()? {
+        state = io::read_state(&restart_file, &driver.system)?;
+        tasks = io::read_tasks(&restart_file)?;
+    } else {
+        state = driver.initial_state(&mesh, &model)?;
+        tasks = Tasks::new();
+    };
+
+
+    // Load or create the initial time series data
+    // ========================================================================
+    if let Some(time_series_file) = app.output_rundir_child("time_series.h5")? {
+        time_series = io::read_time_series(&time_series_file)?;
+
+        if let Some(last_sample) = time_series.last() {
+            if state.time < last_sample.time {
+                if ! app.truncate {
+                    bail!{concat!{
+                        "time series file '{}' extends past the current time ({:.6} > {:.6}), ",
+                        "run with --truncate to lose the future data ",
+                        "or select a different --outdir."},
+                        time_series_file.as_str(),
+                        last_sample.time / ORBITAL_PERIOD,
+                        state.time / ORBITAL_PERIOD,
+                    }
                 }
-            } else {
                 time_series.retain(|s| s.time < state.time);
             }
         }
+    } else {
+        time_series = driver.initial_time_series();
     }
 
+
+    // Validate restart logic, don't truncate time series (unless forced)
+    // ========================================================================
+    if state.time > tfinal {
+        bail!{concat!{
+            "that simulation appears to be finished already, ",
+            "set tfinal to something > {:.6}."},
+            state.time / ORBITAL_PERIOD
+        }
+    }
+
+
+    // All good so far. Print code version, model parameters, and workflow.
+    // ========================================================================
     println!();
     println!("\t{}", DESCRIPTION);
     println!("\t{}\n", VERSION_AND_BUILD);
@@ -604,25 +660,27 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
 
     println!();
     println!("\trestart file            = {}",      app.restart_file()?.map(|f|f.to_string()).unwrap_or("none".to_string()));
-    println!("\tcompute units           = {:.04}",  app.compute_units(block_data.len()));
+    println!("\tcompute units           = {:.04}",  app.compute_units(state.solution.len()));
     println!("\teffective grid spacing  = {:.04}a", solver.effective_resolution(&mesh));
     println!("\tsink radius / grid cell = {:.04}",  solver.sink_radius / solver.effective_resolution(&mesh));
     println!();
 
-    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
-    use tokio::runtime::Builder;
-
+    // Create the Tokio runtime, if we're using it
+    // ========================================================================
     let runtime = if app.tokio {
         Some(Builder::new_multi_thread().worker_threads(app.threads).build()?)
     } else {
         None
     };
 
+
+    tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
+
     while state.time < tfinal
     {
-        if app.tokio {
-            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime.as_ref().unwrap());
+        if let Some(runtime) = &runtime {
+            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime);
         } else {
             scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
         }

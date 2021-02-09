@@ -20,10 +20,6 @@ pub struct Mesh
 
 impl Mesh
 {
-    pub fn farthest_point(&self) -> f64 {
-        self.domain_radius * f64::sqrt(2.0)
-    }
-
     pub fn block_length(&self) -> f64
     {
         2.0 * self.domain_radius / (self.num_blocks as f64)
@@ -97,12 +93,12 @@ impl Mesh
     pub fn neighbor_block_indexes(&self, block_index: BlockIndex) -> [[BlockIndex; 3]; 3]
     {
         let b = self.num_blocks;
-        let m = |i, j| (i % b, j % b);
+        let m = |i, j| ((i + b) % b, (j + b) % b);
         let (i, j) = block_index;
         [
-            [m(i + b - 1, j + b - 1), m(i + b - 1, j + b + 0), m(i + b - 0, j + b + 1)],
-            [m(i + b + 0, j + b - 1), m(i + b + 0, j + b + 0), m(i + b + 0, j + b + 1)],
-            [m(i + b + 1, j + b - 1), m(i + b + 1, j + b + 0), m(i + b + 1, j + b + 1)],
+            [m(i - 1, j - 1), m(i - 1, j + 0), m(i - 1, j + 1)],
+            [m(i + 0, j - 1), m(i + 0, j + 0), m(i + 0, j + 1)],
+            [m(i + 1, j - 1), m(i + 1, j + 0), m(i + 1, j + 1)],
         ]
     }
 }
