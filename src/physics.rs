@@ -54,6 +54,7 @@ pub struct ItemizedChange<C: ItemizeData>
     pub grav2:   C,
     pub buffer:  C,
     pub cooling: C,
+    pub fake_mass: C,
 }
 
 
@@ -92,6 +93,7 @@ pub struct SourceTerms
     pub sink_rate1: f64,
     pub sink_rate2: f64,
     pub buffer_rate: f64,
+    pub fake_mass: f64
 }
 
 
@@ -175,12 +177,13 @@ impl<C: ItemizeData> ItemizedChange<C>
             grav2:   C::zeros(),
             buffer:  C::zeros(),
             cooling: C::zeros(),
+            fake_mass: C::zeros(),
         }
     }
 
     pub fn total(&self) -> C
     {
-        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling
+        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling + self.fake_mass
     }
 
     pub fn add_mut(&mut self, s0: &Self)
@@ -191,6 +194,7 @@ impl<C: ItemizeData> ItemizedChange<C>
         self.grav2   =  self.grav2   + s0.grav2;
         self.buffer  =  self.buffer  + s0.buffer;
         self.cooling =  self.cooling + s0.cooling;
+        self.fake_mass = self.fake_mass + s0.fake_mass;
     }
 
     pub fn mul_mut(&mut self, s: f64)
@@ -201,6 +205,7 @@ impl<C: ItemizeData> ItemizedChange<C>
         self.grav2   =  self.grav2   * s;
         self.buffer  =  self.buffer  * s;
         self.cooling =  self.cooling * s;
+        self.fake_mass = self.fake_mass * s;
     }
 
     pub fn add(&self, s0: &Self) -> Self
@@ -243,6 +248,7 @@ impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
             grav2:    Self::pert2(time, self.grav2.mass_and_momentum(), elements),
             buffer:   OrbitalElements::zeros(),
             cooling:  OrbitalElements::zeros(),
+            fake_mass: OrbitalElements::zeros(),
         }
     }
 }
@@ -330,6 +336,7 @@ impl Solver
             sink_rate1: sink_rate1,
             sink_rate2: sink_rate2,
             buffer_rate: buffer_rate,
+            fake_mass: 0.0,
         }
     }
 }
@@ -385,7 +392,20 @@ impl Hydrodynamics for Isothermal
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        if conserved.density() < 0.0 { panic!("Density is negative!") }
+        if conserved.density() < 0.0 { panic!("Density {} is negative!", conserved.density()) }
+
+
+        // Experimental density floor feature. fake_mass is updated based on
+        // how close the density is to this floor value.
+        let density_floor = 0.0;
+        let fake_mass = if conserved.density() < density_floor {
+            1e-5
+        } else {
+            0.0
+        };
+        let conserved = hydro_iso2d::Conserved (conserved.0 + fake_mass, conserved.1, conserved.2);
+
+
         let st = solver.source_terms(two_body_state, x, y, conserved.density());
         
         ItemizedChange{
@@ -395,6 +415,7 @@ impl Hydrodynamics for Isothermal
             sink2:   conserved * (-st.sink_rate2 * dt),
             buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
+            fake_mass: Self::Conserved::zeros(),
         }
     }
 
@@ -486,6 +507,7 @@ impl Hydrodynamics for Euler
             sink2:   conserved * (-st.sink_rate2 * dt),
             buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
+            fake_mass: Self::Conserved::zeros(),
         }
     }
 
