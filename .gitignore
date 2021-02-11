@@ -1,10 +1,12 @@
 target
 data
 *.h5
-*.ipynb
 *.pbs
-*.png
 *.txt
 output_parse.py
 .idea
 *.mp4
+*.ipynb
+*.png
+*.mp4
+tseries_modded.py

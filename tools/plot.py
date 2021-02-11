@@ -54,5 +54,6 @@ if __name__ == "__main__":
         ax1 = fig.add_subplot(1, 1, 1)
         rho = conserved(filename, 0)
         ax1.imshow(np.log10(rho).T, cmap='inferno', origin='lower', extent=extent(filename), vmin=vmin, vmax=vmax)
+        # plt.savefig(filename + '.jpg', dpi=600, format='jpg')
         # plt.colorbar()
     plt.show()

@@ -31,13 +31,29 @@ __Build and install__:
 > cargo install --path .
 ```
 
-This will install an executable at `.cargo/bin/binary2d`, which should be in your system path. You should now be able to run the code from anywhere on your machine:
+This will install an executable at `.cargo/bin/binary2d`. Before using the executable, it is necessary to add the path of the excutable to the system PATH variable. To do this, first navigate to the .bashrc file located in your default directory. 
+
+```
+cd
+vi .bashrc
+```
+
+Within the file, there should be a variable named PATH already ( if there isn't one, you can add one using the same format below ). On Palmetto, the PATH to the binary2d executable is: `$HOME/.cargo/bin`. Add this to the end of the line but within the quotation marks so it will look something like this:
+
+```
+PATH="$HOME/.local/bin:$HOME/bin:$PATH:$HOME/.cargo/bin"
+```
+
+After saving the .bashrc file, go back to the default directory and source it. Now the executable is ready to run. On any Unix machine in general, the `.cargo` directory path will be that of your default directory. To run the executable, use the commands here:
 
 ```Bash
 > cd
 > binary2d --help
 ```
 
+Note that the checkpoint files will be saved to `data/temp` in the directory that you run the executable. 
+
+=======
 This will print a list of _flags_ for things like the data output directory and the execution strategy. You also have a list of _model parameters_, which control things like the physical setup, the mesh parameters, and the output cadence. When run without anything on the command line, the code will print the model parameters default values and brief description:
 
 ```
