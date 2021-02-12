@@ -94,6 +94,8 @@ fn main() -> anyhow::Result<()>
         .item("num_blocks"      , 1      , "Number of blocks per (per direction)")
         .item("one_body"        , false  , "Collapse the binary to a single body (validation of central potential)")
         .item("plm"             , 1.5    , "PLM parameter theta [1.0, 2.0] (0.0 reverts to PCM)")
+        .item("rdf"             , 0.0    , "Relative density floor")
+        .item("rfmr"            , 0.0    , "Relative fake mass rate")
         .item("rk_order"        , 2      , "Runge-Kutta time integration order [1|2|3]")
         .item("sink_radius"     , 0.05   , "Radius of the sink region [a]")
         .item("sink_rate"       , 10.0   , "Sink rate to model accretion [Omega]")
@@ -560,6 +562,8 @@ impl Solver {
             softening_length: model.get("softening_length").into(),
             force_flux_comm:  app.flux_comm,
             orbital_elements: kepler_two_body::OrbitalElements(a, m, q, e),
+            relative_density_floor: model.get("rdf").into(),
+            relative_fake_mass_rate: model.get("rfmr").into(),
         }
     }
 }
