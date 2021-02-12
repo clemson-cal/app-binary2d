@@ -3,7 +3,10 @@ data
 *.h5
 *.pbs
 *.txt
+tools/output_parse.py
+.idea
+*.mp4
 *.ipynb
 *.png
 *.mp4
-tseries_modded.py
+tools/tseries_modded.py
