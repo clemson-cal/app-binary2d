@@ -54,6 +54,7 @@ pub struct ItemizedChange<C: ItemizeData>
     pub grav2:   C,
     pub buffer:  C,
     pub cooling: C,
+    pub fake_mass: C,
 }
 
 
@@ -77,6 +78,8 @@ pub struct Solver
     pub softening_length: f64,
     pub force_flux_comm: bool,
     pub orbital_elements: OrbitalElements,
+    pub relative_density_floor: f64,
+    pub relative_fake_mass_rate: f64,
 }
 
 
@@ -175,12 +178,13 @@ impl<C: ItemizeData> ItemizedChange<C>
             grav2:   C::zeros(),
             buffer:  C::zeros(),
             cooling: C::zeros(),
+            fake_mass: C::zeros(),
         }
     }
 
     pub fn total(&self) -> C
     {
-        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling
+        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling + self.fake_mass
     }
 
     pub fn add_mut(&mut self, s0: &Self)
@@ -191,6 +195,7 @@ impl<C: ItemizeData> ItemizedChange<C>
         self.grav2   =  self.grav2   + s0.grav2;
         self.buffer  =  self.buffer  + s0.buffer;
         self.cooling =  self.cooling + s0.cooling;
+        self.fake_mass = self.fake_mass + s0.fake_mass;
     }
 
     pub fn mul_mut(&mut self, s: f64)
@@ -201,6 +206,7 @@ impl<C: ItemizeData> ItemizedChange<C>
         self.grav2   =  self.grav2   * s;
         self.buffer  =  self.buffer  * s;
         self.cooling =  self.cooling * s;
+        self.fake_mass = self.fake_mass * s;
     }
 
     pub fn add(&self, s0: &Self) -> Self
@@ -243,6 +249,7 @@ impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
             grav2:    Self::pert2(time, self.grav2.mass_and_momentum(), elements),
             buffer:   OrbitalElements::zeros(),
             cooling:  OrbitalElements::zeros(),
+            fake_mass: OrbitalElements::zeros(),
         }
     }
 }
@@ -332,6 +339,14 @@ impl Solver
             buffer_rate: buffer_rate,
         }
     }
+
+    pub fn relative_density_floor(&self) -> f64 {
+        self.relative_density_floor
+    }
+
+    pub fn relative_fake_mass_rate(&self) -> f64 {
+        self.relative_fake_mass_rate
+    }
 }
 
 
@@ -350,6 +365,7 @@ impl Isothermal
 
 
 // ============================================================================
+// TODO: Implement density floor feature here.
 impl Hydrodynamics for Isothermal
 {
     type Conserved = hydro_iso2d::Conserved;
@@ -384,6 +400,23 @@ impl Hydrodynamics for Isothermal
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
+        if conserved.density() < 0.0 { panic!("Density {} is negative!", conserved.density()) }
+
+
+        // Experimental density floor feature. fake_mass is updated based on
+        // how close the density is to this floor value.
+        // let relative_density_floor = 1e-5;
+        // let relative_fake_mass_rate = 1e-3;
+        let omega = 1.0; // BAD! Probably needs function to return actual omega.
+        let density_floor = background_conserved.density() * solver.relative_density_floor();
+        let fake_mass_rate = background_conserved.density() * omega * solver.relative_fake_mass_rate();
+
+        let fake_mdot = if conserved.density() < density_floor {
+            0.0
+        } else {
+            fake_mass_rate
+        };
+
         let st = solver.source_terms(two_body_state, x, y, conserved.density());
         
         ItemizedChange{
@@ -393,6 +426,7 @@ impl Hydrodynamics for Isothermal
             sink2:   conserved * (-st.sink_rate2 * dt),
             buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
+            fake_mass: hydro_iso2d::Conserved(fake_mdot * dt, 0.0, 0.0),
         }
     }
 
@@ -484,6 +518,7 @@ impl Hydrodynamics for Euler
             sink2:   conserved * (-st.sink_rate2 * dt),
             buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
+            fake_mass: Self::Conserved::zeros(),
         }
     }
 
