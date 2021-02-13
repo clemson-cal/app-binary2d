@@ -343,6 +343,20 @@ impl Tasks
         Ok(())
     }
 
+    fn write_failed_checkpoint<C: Conserved>(&mut self,
+        state: &State<C>,
+        block_data: &Vec<BlockData<C>>,
+        model: &Form,
+        app: &App) -> anyhow::Result<()>
+    {
+        let outdir = app.output_directory()?;
+        let fname_chkpt       = outdir.child("chkpt.fail.h5");
+
+        println!("write checkpoint {}", fname_chkpt);
+        io::write_checkpoint(&fname_chkpt, &state, &block_data, &model.value_map(), &self)?;
+        Ok(())
+    }
+
     fn perform<C: Conserved>(
         &mut self,
         state: &State<C>,
@@ -652,7 +666,13 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
     while state.time < tfinal {
-        state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, &runtime)?;
+        state = match scheme::advance_tokio(state.clone(), driver.system, &block_data, &mesh, &solver, dt, app.fold, &runtime) {
+            Ok(s) => s,
+            Err(e) => {
+                tasks.write_failed_checkpoint(&state, &block_data, &model, &app)?;
+                return Err(e)?
+            }
+        };
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
     Ok(())
