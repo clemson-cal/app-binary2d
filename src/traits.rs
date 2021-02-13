@@ -59,10 +59,9 @@ pub trait Hydrodynamics: Copy + Send
 
     fn gamma_law_index(&self) -> f64;
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive;
+    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError>;
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
-
-    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError>;
 
     fn source_terms(
         &self,
