@@ -267,15 +267,15 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     solver:     &Solver,
     dt:         f64,
     fold:       usize,
-    runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
+    runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroErrorAtPosition>
 {
     let try_update = |state| try_advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
     let rk = solver.runge_kutta();
 
     for _ in 0..fold {
-        state = runtime.block_on(rk.try_advance_async(state, try_update, runtime)).unwrap();
+        state = runtime.block_on(rk.try_advance_async(state, try_update, runtime))?;
     }
-    state
+    Ok(state)
 }
 
 

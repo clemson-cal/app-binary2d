@@ -652,7 +652,7 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
     while state.time < tfinal {
-        state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, &runtime);
+        state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, &runtime)?;
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
     Ok(())

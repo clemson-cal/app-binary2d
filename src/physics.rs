@@ -21,13 +21,13 @@ use crate::traits::{
 // ============================================================================
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum HydroError {
-    #[error("negative density")]
-    NegativeDensity
+    #[error("negative surface density {0:.4e}")]
+    NegativeDensity(f64)
 }
 
 impl HydroError {
     pub fn at_position(self, position: (f64, f64)) -> HydroErrorAtPosition {
-        HydroErrorAtPosition{source: self, position_x: position.0, position_y: position.1}
+        HydroErrorAtPosition{source: self, position}
     }
 }
 
@@ -36,11 +36,10 @@ impl HydroError {
 
 // ============================================================================
 #[derive(thiserror::Error, Debug, Clone)]
-#[error("{source} at position ({position_x}, {position_y})")]
+#[error("at position ({:.4}, {:.4})", position.0, position.1)]
 pub struct HydroErrorAtPosition {
     source: HydroError,
-    position_x: f64,
-    position_y: f64,
+    position: (f64, f64),
 }
 
 
@@ -378,7 +377,7 @@ impl Hydrodynamics for Isothermal
 
     fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
         if u.density() < 0.0 {
-            return Err(HydroError::NegativeDensity)
+            return Err(HydroError::NegativeDensity(u.density()))
         }
         Ok(u.to_primitive())
     }
@@ -480,7 +479,7 @@ impl Hydrodynamics for Euler {
 
     fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
         if u.mass_density() < 0.0 {
-            return Err(HydroError::NegativeDensity)
+            return Err(HydroError::NegativeDensity(u.mass_density()))
         }
         Ok(u.to_primitive(self.gamma_law_index))
     }
