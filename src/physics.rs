@@ -375,13 +375,13 @@ impl Isothermal
 
 
 // ============================================================================
-// TODO: Implement density floor feature here.
 impl Hydrodynamics for Isothermal
 {
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
 
-    fn gamma_law_index(&self) -> f64 {
+    fn gamma_law_index(&self) -> f64
+    {
         1.0
     }
 
@@ -417,9 +417,6 @@ impl Hydrodynamics for Isothermal
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        if conserved.density() < 0.0 { panic!("Density {} is negative!", conserved.density()) }
-
-
         // Experimental density floor feature. fake_mass is updated based on
         // how close the density is to this floor value.
         // let relative_density_floor = 1e-5;
