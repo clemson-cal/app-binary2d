@@ -52,8 +52,7 @@ pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type {
 
 
 // ============================================================================
-pub trait Hydrodynamics: Copy + Send
-{
+pub trait Hydrodynamics: Copy + Send {
     type Conserved: Conserved;
     type Primitive: Primitive;
 

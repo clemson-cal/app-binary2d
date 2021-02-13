@@ -6,7 +6,6 @@ use ndarray::{Axis, Array, ArcArray, Ix2};
 use ndarray_ops::MapArray3by3;
 use godunov_core::runge_kutta;
 use kepler_two_body::OrbitalElements;
-
 use crate::physics::{
     Direction,
     CellData,
@@ -14,12 +13,10 @@ use crate::physics::{
     ItemizedChange,
     Solver,
 };
-
 use crate::mesh::{
     Mesh,
     BlockIndex,
 };
-
 use crate::traits::{
     Hydrodynamics,
     Conserved,
@@ -31,8 +28,7 @@ use crate::traits::{
 
 // ============================================================================
 #[derive(Clone)]
-pub struct BlockData<C: Conserved>
-{
+pub struct BlockData<C: Conserved> {
     pub initial_conserved: ArcArray<C, Ix2>,
     pub cell_centers:      ArcArray<(f64, f64), Ix2>,
     pub face_centers_x:    ArcArray<(f64, f64), Ix2>,
@@ -45,8 +41,7 @@ pub struct BlockData<C: Conserved>
 
 // ============================================================================
 #[derive(Clone)]
-pub struct BlockSolution<C: Conserved>
-{
+pub struct BlockSolution<C: Conserved> {
     pub conserved: ArcArray<C, Ix2>,
     pub integrated_source_terms: ItemizedChange<C>,
     pub orbital_elements_change: ItemizedChange<OrbitalElements>,
@@ -57,8 +52,7 @@ pub struct BlockSolution<C: Conserved>
 
 // ============================================================================
 #[derive(Clone)]
-struct BlockState<C: Conserved>
-{
+struct BlockState<C: Conserved> {
     pub time: f64,
     pub iteration: Rational64,
     pub solution: BlockSolution<C>,
@@ -69,8 +63,7 @@ struct BlockState<C: Conserved>
 
 // ============================================================================
 #[derive(Clone)]
-pub struct State<C: Conserved>
-{
+pub struct State<C: Conserved> {
     pub time: f64,
     pub iteration: Rational64,
     pub solution: Vec<BlockSolution<C>>,
@@ -81,8 +74,7 @@ pub struct State<C: Conserved>
 
 // ============================================================================
 #[derive(Copy, Clone)]
-struct UpdateScheme<H: Hydrodynamics>
-{
+struct UpdateScheme<H: Hydrodynamics> {
     hydro: H,
 }
 
@@ -90,12 +82,10 @@ struct UpdateScheme<H: Hydrodynamics>
 
 
 // ============================================================================
-impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
-{
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
-    {
+impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C> {
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self {
         let bf = br.to_f64().unwrap();
-        Self{
+        Self {
             sink1:   self.sink1   * (-bf + 1.) + s0.sink1   * bf,
             sink2:   self.sink2   * (-bf + 1.) + s0.sink2   * bf,
             grav1:   self.grav1   * (-bf + 1.) + s0.grav1   * bf,
@@ -111,12 +101,10 @@ impl<C: ItemizeData> runge_kutta::WeightedAverage for ItemizedChange<C>
 
 
 // ============================================================================
-impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
-{
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
-    {
+impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C> {
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self {
         let bf = br.to_f64().unwrap();
-        Self{
+        Self {
             time:      self.time      * (-bf + 1.) + s0.time      * bf,
             iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
             solution:  self.solution.weighted_average(br, &s0.solution),
@@ -124,10 +112,8 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C>
     }
 }
 
-impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
-{
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self
-    {
+impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C> {
+    fn weighted_average(self, br: Rational64, s0: &Self) -> Self {
         let s1 = self;
         let bf = br.to_f64().unwrap();
         let u0 = s0.conserved.clone();
@@ -136,8 +122,7 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
         let t1 = &s1.integrated_source_terms;
         let e0 = &s0.orbital_elements_change;
         let e1 = &s1.orbital_elements_change;
-
-        BlockSolution{
+        BlockSolution {
             conserved: u1 * (-bf + 1.) + u0 * bf,
             integrated_source_terms: t1.weighted_average(br, t0),
             orbital_elements_change: e1.weighted_average(br, e0),
@@ -150,11 +135,10 @@ impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C>
 
 // ============================================================================
 #[async_trait::async_trait]
-impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C>
-{
+impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C> {
     type Runtime = tokio::runtime::Runtime;
-    async fn weighted_average(self, br: Rational64, s0: &Self, runtime: &Self::Runtime) -> Self
-    {
+
+    async fn weighted_average(self, br: Rational64, s0: &Self, runtime: &Self::Runtime) -> Self {
         use futures::future::join_all;
         use godunov_core::runge_kutta::WeightedAverage;
 
@@ -166,7 +150,7 @@ impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C>
             .map(|(s1, s0)| runtime.spawn(async move { s1.weighted_average(br, &s0) }))
             .map(|f| async { f.await.unwrap() });
 
-        State{
+        State {
             time:      self.time      * (-bf + 1.) + s0.time      * bf,
             iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
             solution: join_all(s_avg).await,
@@ -299,24 +283,17 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
 // ============================================================================
 impl<H: Hydrodynamics> UpdateScheme<H>
 {
-    fn new(hydro: H) -> Self
-    {
-        Self{hydro: hydro}
+    fn new(hydro: H) -> Self {
+        Self{hydro}
     }
 
-    fn try_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Result<Array<H::Primitive, Ix2>, HydroError>
-    {
+    fn try_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Result<Array<H::Primitive, Ix2>, HydroError> {
         let x: Result<Vec<_>, _> = conserved
             .iter()
             .map(|&u| self.hydro.try_to_primitive(u))
             .collect();
         Ok(Array::from_shape_vec(conserved.dim(), x?).unwrap())
     }
-
-    // fn compute_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
-    // {
-    //     conserved.mapv(|u| self.hydro.to_primitive(u))
-    // }
 
     fn compute_block_fluxes(
         &self,
@@ -399,7 +376,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let ds = ds.mul(dx * dy);
         let de = ds.perturbation(time, solver.orbital_elements);
 
-        BlockSolution{
+        BlockSolution {
             conserved: u1,
             integrated_source_terms: solution.integrated_source_terms.add(&ds),
             orbital_elements_change: solution.orbital_elements_change.add(&de),
