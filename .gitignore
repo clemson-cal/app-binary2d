@@ -3,9 +3,7 @@ data
 *.h5
 *.pbs
 *.txt
-tools/output_parse.py
 .idea
-*.mp4
 *.ipynb
 *.png
 *.mp4
