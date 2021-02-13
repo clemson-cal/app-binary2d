@@ -187,6 +187,17 @@ async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
     ]
 }
 
+async fn try_join_3by3<F, T, E>(a: [[&F; 3]; 3]) -> Result<[[T; 3]; 3], E>
+where
+    F: Clone + Future<Output = Result<T, E>>
+{
+    Ok([
+        [a[0][0].clone().await?, a[0][1].clone().await?, a[0][2].clone().await?],
+        [a[1][0].clone().await?, a[1][1].clone().await?, a[1][2].clone().await?],
+        [a[2][0].clone().await?, a[2][1].clone().await?, a[2][2].clone().await?],
+    ])
+}
+
 
 
 
