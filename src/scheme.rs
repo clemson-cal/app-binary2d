@@ -212,7 +212,8 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
     runtime: &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
 {
     use futures::future::{FutureExt, join_all};
-    
+    use std::sync::Arc;
+
     let scheme = UpdateScheme::new(hydro);
     let time = state.time;
     let mut pc_map = HashMap::new();
@@ -226,6 +227,7 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
         };
         pc_map.insert(block.index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
     }
+    let pc_map = Arc::new(pc_map);
 
     for block in block_data {
         let solver      = solver.clone();
@@ -242,6 +244,7 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
         };
         fg_map.insert(block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
     }
+    let fg_map = Arc::new(fg_map);
 
     for (solution, block) in state.solution.iter().zip(block_data) {
         let solver   = solver.clone();
@@ -370,12 +373,20 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     fold:       usize,
     runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
 {
-    let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
+    // let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
+
+    // for _ in 0..fold {
+    //     state = runtime.block_on(solver.runge_kutta().advance_async(state, update, runtime));
+    // }
+    // return state;
+
+    assert_eq!(solver.rk_order, 1);
 
     for _ in 0..fold {
-        state = runtime.block_on(solver.runge_kutta().advance_async(state, update, runtime));
+        state = runtime.block_on(try_advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime)).unwrap()
+        // state = runtime.block_on(advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime))
     }
-    return state;
+    state
 }
 
 
