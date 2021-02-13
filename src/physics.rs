@@ -25,6 +25,24 @@ pub enum HydroError {
     NegativeDensity
 }
 
+impl HydroError {
+    pub fn at_position(self, position: (f64, f64)) -> HydroErrorAtPosition {
+        HydroErrorAtPosition{source: self, position_x: position.0, position_y: position.1}
+    }
+}
+
+
+
+
+// ============================================================================
+#[derive(thiserror::Error, Debug, Clone)]
+#[error("{source} at position ({position_x}, {position_y})")]
+pub struct HydroErrorAtPosition {
+    source: HydroError,
+    position_x: f64,
+    position_y: f64,
+}
+
 
 
 
@@ -359,7 +377,7 @@ impl Hydrodynamics for Isothermal
     }
 
     fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
-   if u.density() < 0.0 {
+        if u.density() < 0.0 {
             return Err(HydroError::NegativeDensity)
         }
         Ok(u.to_primitive())

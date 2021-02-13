@@ -9,7 +9,7 @@ use kepler_two_body::OrbitalElements;
 use crate::physics::{
     Direction,
     CellData,
-    HydroError,
+    HydroErrorAtPosition,
     ItemizedChange,
     Solver,
 };
@@ -184,7 +184,7 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
     mesh: &Mesh,
     solver: &Solver,
     dt: f64,
-    runtime: &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
+    runtime: &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroErrorAtPosition>
 {
     use futures::future::{FutureExt, join_all};
     use std::sync::Arc;
@@ -197,10 +197,12 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
 
     for (solution, block) in state.solution.iter().zip(block_data) {
         let uc = solution.conserved.clone();
+        let block = block.clone();
+        let block_index = block.index;
         let primitive = async move {
-            scheme.try_block_primitive(uc.clone()).map(|p| p.to_shared())
+            scheme.try_block_primitive(uc, block).map(|p| p.to_shared())
         };
-        pc_map.insert(block.index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
+        pc_map.insert(block_index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
     }
     let pc_map = Arc::new(pc_map);
 
@@ -215,7 +217,7 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
             let pn = try_join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &pc_map[i])).await?;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
             let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
-            Ok::<_, HydroError>((fx.to_shared(), fy.to_shared()))
+            Ok::<_, HydroErrorAtPosition>((fx.to_shared(), fy.to_shared()))
         };
         fg_map.insert(block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
     }
@@ -239,7 +241,7 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            Ok::<_, HydroError>(scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt))
+            Ok::<_, HydroErrorAtPosition>(scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt))
         };
         s1_vec.push(runtime.spawn(s1).map(|f| f.unwrap()))
     }
@@ -252,7 +254,6 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
         solution: solution?,
     })
 }
-
 
 
 
@@ -287,10 +288,18 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         Self{hydro}
     }
 
-    fn try_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Result<Array<H::Primitive, Ix2>, HydroError> {
+    fn try_block_primitive(
+        &self,
+        conserved: ArcArray<H::Conserved, Ix2>,
+        block: BlockData<H::Conserved>) -> Result<Array<H::Primitive, Ix2>, HydroErrorAtPosition>
+    {
         let x: Result<Vec<_>, _> = conserved
             .iter()
-            .map(|&u| self.hydro.try_to_primitive(u))
+            .zip(block.cell_centers.iter())
+            .map(|(&u, &xy)| self
+                .hydro
+                .try_to_primitive(u)
+                .map_err(|e| e.at_position(xy)))
             .collect();
         Ok(Array::from_shape_vec(conserved.dim(), x?).unwrap())
     }
@@ -300,7 +309,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         pe:     &Array<H::Primitive, Ix2>,
         block:  &BlockData<H::Conserved>,
         solver: &Solver,
-        mesh:     &Mesh,
+        mesh:   &Mesh,
         time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
     {
         use ndarray::{s, azip};
