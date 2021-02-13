@@ -313,10 +313,10 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         Ok(Array::from_shape_vec(conserved.dim(), x?).unwrap())
     }
 
-    fn compute_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
-    {
-        conserved.mapv(|u| self.hydro.to_primitive(u))
-    }
+    // fn compute_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
+    // {
+    //     conserved.mapv(|u| self.hydro.to_primitive(u))
+    // }
 
     fn compute_block_fluxes(
         &self,
@@ -405,140 +405,4 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             orbital_elements_change: solution.orbital_elements_change.add(&de),
         }
     }
-}
-
-
-
-
-
-
-
-
-/**
- * The code below advances the state using the old message-passing
- * parallelization strategy based on channels. I would prefer to either
- * deprecate it, since it duplicates msot of the update scheme, and will
- * thus need to be kept in sync manually as the scheme evolves. The only
- * reason to retain it is for benchmarking purposes.
- */
-
-
-
-
-// ============================================================================
-fn advance_channels_internal_block<H: Hydrodynamics>(
-    state:      BlockState<H::Conserved>,
-    hydro:      H,
-    block_data: &BlockData<H::Conserved>,
-    solver:     &Solver,
-    mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<H::Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<[[ArcArray<H::Primitive, Ix2>; 3]; 3]>,
-    dt:         f64) -> BlockState<H::Conserved>
-{
-    let scheme = UpdateScheme::new(hydro);
-
-    sender.send(scheme.compute_block_primitive(state.solution.conserved.clone())).unwrap();
-
-    let solution = state.solution;
-
-    let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&receiver.recv().unwrap(), 2, 2, 2, 2);
-    let (fx, fy) = scheme.compute_block_fluxes(&pe, block_data, solver, mesh, state.time);
-    let s1 = scheme.compute_block_updated_solution(solution, fx.to_shared(), fy.to_shared(), block_data, solver, mesh, state.time, dt);
-
-    BlockState::<H::Conserved>{
-        time: state.time + dt,
-        iteration: state.iteration + 1,
-        solution: s1,
-    }
-}
-
-
-
-
-// ============================================================================
-fn advance_channels_internal<H: Hydrodynamics>(
-    solution:   &mut BlockSolution<H::Conserved>,
-    time:       f64,
-    hydro:      H,
-    block_data: &BlockData<H::Conserved>,
-    solver:     &Solver,
-    mesh:       &Mesh,
-    sender:     &crossbeam::Sender<Array<H::Primitive, Ix2>>,
-    receiver:   &crossbeam::Receiver<[[ArcArray<H::Primitive, Ix2>; 3]; 3]>,
-    dt:         f64,
-    fold:       usize)
-{
-    let update = |state| advance_channels_internal_block(state, hydro, block_data, solver, mesh, sender, receiver, dt);
-    let mut state = BlockState {
-        time: time,
-        iteration: Rational64::new(0, 1),
-        solution: solution.clone(),
-    };
-
-    for _ in 0..fold
-    {
-        state = solver.runge_kutta().advance(state, update);
-    }
-    *solution = state.solution;
-}
-
-
-
-
-// ============================================================================
-pub fn advance_channels<H: Hydrodynamics>(
-    state: &mut State<H::Conserved>,
-    hydro: H,
-    block_data: &Vec<BlockData<H::Conserved>>,
-    mesh: &Mesh,
-    solver: &Solver,
-    dt: f64,
-    fold: usize)
-{
-    if solver.need_flux_communication() {
-        todo!("flux communication with message-passing parallelization");
-    }
-    let time = state.time;
-
-    crossbeam::scope(|scope|
-    {
-        let mut receivers       = Vec::new();
-        let mut senders         = Vec::new();
-        let mut block_primitive = HashMap::new();
-
-        for (solution, block) in state.solution.iter_mut().zip(block_data)
-        {
-            let (their_s, my_r) = crossbeam::channel::unbounded();
-            let (my_s, their_r) = crossbeam::channel::unbounded();
-
-            senders.push(my_s);
-            receivers.push(my_r);
-
-            scope.spawn(move |_| advance_channels_internal(solution, time, hydro, block, solver, mesh, &their_s, &their_r, dt, fold));
-        }
-
-        for _ in 0..fold
-        {
-            for _ in 0..solver.rk_order
-            {
-                for (block_data, r) in block_data.iter().zip(receivers.iter())
-                {
-                    block_primitive.insert(block_data.index, r.recv().unwrap().to_shared());
-                }
-
-                for (block_data, s) in block_data.iter().zip(senders.iter())
-                {
-                    s.send(mesh.neighbor_block_indexes(block_data.index).map_3by3(|i| block_primitive
-                        .get(i)
-                        .unwrap()
-                        .clone()))
-                    .unwrap();
-                }
-            }
-
-            state.iteration += 1;
-            state.time += dt;
-        }
-    }).unwrap();
 }

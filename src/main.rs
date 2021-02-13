@@ -137,7 +137,7 @@ struct App
     #[clap(long, default_value="1", about="Number of worker threads to use")]
     threads: usize,
 
-    #[clap(long, about="Parallelize on the tokio runtime [default: message passing]")]
+    #[clap(long, about="Parallelize on the tokio runtime [legacy: this is now the only option]")]
     tokio: bool,
 
     #[clap(long, about="Do flux communication even if it's not needed [benchmarking]")]
@@ -670,24 +670,21 @@ fn run<S, C>(driver: Driver<S>, app: App, model: Form) -> anyhow::Result<()>
     println!();
 
 
-    // Create the Tokio runtime, if we're using it
+    if app.tokio {
+        println!("Note: the --tokio flag is deprecated, it's now the only option");
+    }
+
+
+    // Create the Tokio runtime
     // ========================================================================
-    let runtime = if app.tokio {
-        Some(Builder::new_multi_thread().worker_threads(app.threads).build()?)
-    } else {
-        None
-    };
+    let runtime = Builder::new_multi_thread().worker_threads(app.threads).build()?;
 
 
     tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
 
     while state.time < tfinal
     {
-        if let Some(runtime) = &runtime {
-            state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, runtime);
-        } else {
-            scheme::advance_channels(&mut state, driver.system, &block_data, &mesh, &solver, dt, app.fold);
-        }
+        state = scheme::advance_tokio(state, driver.system, &block_data, &mesh, &solver, dt, app.fold, &runtime);
         tasks.perform(&state, &mut time_series, &block_data, &mesh, &model, &app)?;
     }
     Ok(())
