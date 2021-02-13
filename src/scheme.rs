@@ -186,8 +186,9 @@ async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
     ]
 }
 
-
-
+#[derive(Debug)]
+struct Failure {
+}
 
 // ============================================================================
 async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
