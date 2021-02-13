@@ -22,7 +22,7 @@ use crate::traits::{
 
 
 // ============================================================================
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum HydroError {
     #[error("negative density")]
     NegativeDensity

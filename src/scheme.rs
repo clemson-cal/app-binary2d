@@ -202,6 +202,83 @@ where
 
 
 // ============================================================================
+async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
+    state: State<H::Conserved>,
+    hydro: H,
+    block_data: &Vec<BlockData<H::Conserved>>,
+    mesh: &Mesh,
+    solver: &Solver,
+    dt: f64,
+    runtime: &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
+{
+    use futures::future::{FutureExt, join_all};
+    
+    let scheme = UpdateScheme::new(hydro);
+    let time = state.time;
+    let mut pc_map = HashMap::new();
+    let mut fg_map = HashMap::new();
+    let mut s1_vec = Vec::new();
+
+    for (solution, block) in state.solution.iter().zip(block_data) {
+        let uc = solution.conserved.clone();
+        let primitive = async move {
+            scheme.try_block_primitive(uc.clone()).map(|p| p.to_shared())
+        };
+        pc_map.insert(block.index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
+    }
+
+    for block in block_data {
+        let solver      = solver.clone();
+        let mesh        = mesh.clone();
+        let pc_map      = pc_map.clone();
+        let block       = block.clone();
+        let block_index = block.index;
+
+        let flux = async move {
+            let pn = try_join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &pc_map[i])).await?;
+            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
+            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
+            Ok::<_, HydroError>((fx.to_shared(), fy.to_shared()))
+        };
+        fg_map.insert(block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
+    }
+
+    for (solution, block) in state.solution.iter().zip(block_data) {
+        let solver   = solver.clone();
+        let mesh     = mesh.clone();
+        let fg_map   = fg_map.clone();
+        let block    = block.clone();
+        let solution = solution.clone();
+
+        let s1 = async move {
+            let (fx, fy) = if ! solver.need_flux_communication() {
+                fg_map[&block.index].clone().await?
+            } else {
+                let flux_n = try_join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &fg_map[i])).await?;
+                let fx_n = flux_n.map_3by3(|f| f.0.clone());
+                let fy_n = flux_n.map_3by3(|f| f.1.clone());
+                let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
+                let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
+                (fx_e.to_shared(), fy_e.to_shared())
+            };
+            Ok::<_, HydroError>(scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt))
+        };
+        s1_vec.push(runtime.spawn(s1).map(|f| f.unwrap()))
+    }
+
+    let solution: Result<Vec<_>, _> = join_all(s1_vec).await.iter().cloned().collect();
+
+    Ok(State {
+        time: state.time + dt,
+        iteration: state.iteration + 1,
+        solution: solution?,
+    })
+}
+
+
+
+
+// ============================================================================
 async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
     state: State<H::Conserved>,
     hydro: H,
