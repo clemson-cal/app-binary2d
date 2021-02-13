@@ -22,6 +22,16 @@ use crate::traits::{
 
 
 // ============================================================================
+#[derive(thiserror::Error, Debug)]
+pub enum HydroError {
+    #[error("negative density")]
+    NegativeDensity
+}
+
+
+
+
+// ============================================================================
 #[derive(Copy, Clone)]
 pub struct CellData<'a, P: Primitive>
 {
@@ -380,6 +390,13 @@ impl Hydrodynamics for Isothermal
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
     }
 
+    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
+        if u.density() < 0.0 {
+            return Err(HydroError::NegativeDensity)
+        }
+        Ok(u.to_primitive())
+    }
+
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive
     {
         u.to_primitive()
@@ -484,6 +501,13 @@ impl Hydrodynamics for Euler
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
     {
         godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
+    }
+
+    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
+        if u.mass_density() < 0.0 {
+            return Err(HydroError::NegativeDensity)
+        }
+        Ok(u.to_primitive(self.gamma_law_index))
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive

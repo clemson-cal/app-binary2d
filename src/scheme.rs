@@ -10,6 +10,7 @@ use kepler_two_body::OrbitalElements;
 use crate::physics::{
     Direction,
     CellData,
+    HydroError,
     ItemizedChange,
     Solver,
 };
@@ -298,6 +299,15 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn new(hydro: H) -> Self
     {
         Self{hydro: hydro}
+    }
+
+    fn try_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Result<Array<H::Primitive, Ix2>, HydroError>
+    {
+        let x: Result<Vec<_>, _> = conserved
+            .iter()
+            .map(|&u| self.hydro.try_to_primitive(u))
+            .collect();
+        Ok(Array::from_shape_vec(conserved.dim(), x?).unwrap())
     }
 
     fn compute_block_primitive(&self, conserved: ArcArray<H::Conserved, Ix2>) -> Array<H::Primitive, Ix2>
