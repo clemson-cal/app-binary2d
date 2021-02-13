@@ -1,14 +1,11 @@
 use godunov_core::runge_kutta;
-
 use kepler_two_body::{
     OrbitalElements,
     OrbitalState,
 };
-
 use crate::mesh::{
     Mesh,
 };
-
 use crate::traits::{
     Arithmetic,
     Conserved,
@@ -22,10 +19,45 @@ use crate::traits::{
 
 
 // ============================================================================
-#[derive(thiserror::Error, Debug)]
-pub enum HydroError {
-    #[error("negative density")]
-    NegativeDensity
+#[derive(thiserror::Error, Debug, Clone)]
+pub enum HydroErrorType {
+    #[error("negative surface density {0:.4e}")]
+    NegativeDensity(f64)
+}
+
+impl HydroErrorType {
+    pub fn at_position(self, position: (f64, f64)) -> HydroError {
+        HydroError{source: self, binary: None, position}
+    }
+}
+
+
+
+
+// ============================================================================
+#[derive(thiserror::Error, Debug, Clone)]
+#[error("at position ({:.4} {:.4}), when the binary was at ({:.4} {:.4}) ({:.4} {:.4})",
+    position.0,
+    position.1,
+    binary.map_or(0.0, |s| s.0.position_x()),
+    binary.map_or(0.0, |s| s.0.position_y()),
+    binary.map_or(0.1, |s| s.1.position_x()),
+    binary.map_or(0.1, |s| s.1.position_y())
+)]
+pub struct HydroError {
+    source: HydroErrorType,
+    binary: Option<kepler_two_body::OrbitalState>,
+    position: (f64, f64),
+}
+
+impl HydroError {
+    pub fn with_orbital_state(self, binary: kepler_two_body::OrbitalState) -> Self {
+        Self {
+            source: self.source,
+            binary: Some(binary),
+            position: self.position,
+        }
+    }
 }
 
 
@@ -33,8 +65,7 @@ pub enum HydroError {
 
 // ============================================================================
 #[derive(Copy, Clone)]
-pub struct CellData<'a, P: Primitive>
-{
+pub struct CellData<'a, P: Primitive> {
     pub pc: &'a P,
     pub gx: &'a P,
     pub gy: &'a P,
@@ -56,8 +87,7 @@ pub enum Direction {
 // ============================================================================
 #[derive(Clone, Copy, hdf5::H5Type)]
 #[repr(C)]
-pub struct ItemizedChange<C: ItemizeData>
-{
+pub struct ItemizedChange<C: ItemizeData> {
     pub sink1:   C,
     pub sink2:   C,
     pub grav1:   C,
@@ -72,8 +102,7 @@ pub struct ItemizedChange<C: ItemizeData>
 
 // ============================================================================
 #[derive(Clone)]
-pub struct Solver
-{
+pub struct Solver {
     pub buffer_rate: f64,
     pub buffer_scale: f64,
     pub cfl: f64,
@@ -96,8 +125,7 @@ pub struct Solver
 
 
 // ============================================================================
-pub struct SourceTerms
-{
+pub struct SourceTerms {
     pub fx1: f64,
     pub fy1: f64,
     pub fx2: f64,
@@ -128,10 +156,8 @@ pub struct Euler {
 
 
 // ============================================================================
-impl<'a, P: Primitive> CellData<'_, P>
-{
-    pub fn new(pc: &'a P, gx: &'a P, gy: &'a P) -> CellData<'a, P>
-    {
+impl<'a, P: Primitive> CellData<'_, P> {
+    pub fn new(pc: &'a P, gx: &'a P, gy: &'a P) -> CellData<'a, P> {
         CellData{
             pc: pc,
             gx: gx,
@@ -139,20 +165,17 @@ impl<'a, P: Primitive> CellData<'_, P>
         }
     }
 
-    pub fn stress_field(&self, nu: f64, lambda: f64, dx: f64, dy: f64, row: Direction, col: Direction) -> f64
-    {
+    pub fn stress_field(&self, nu: f64, lambda: f64, dx: f64, dy: f64, row: Direction, col: Direction) -> f64 {
         use Direction::{X, Y};
 
-        let shear_stress = match (row, col)
-        {
+        let shear_stress = match (row, col) {
             (X, X) => 4.0 / 3.0 * self.gx.velocity_x() / dx - 2.0 / 3.0 * self.gy.velocity_y() / dy,
             (X, Y) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
             (Y, X) => 1.0 / 1.0 * self.gx.velocity_y() / dx + 1.0 / 1.0 * self.gy.velocity_x() / dy,
             (Y, Y) =>-2.0 / 3.0 * self.gx.velocity_x() / dx + 4.0 / 3.0 * self.gy.velocity_y() / dy,
         };
 
-        let bulk_stress = match (row, col)
-        {
+        let bulk_stress = match (row, col) {
             (X, X) => self.gx.velocity_x() / dx + self.gy.velocity_y() / dy,
             (X, Y) => 0.0,
             (Y, X) => 0.0,
@@ -162,8 +185,7 @@ impl<'a, P: Primitive> CellData<'_, P>
         self.pc.mass_density() * (nu * shear_stress + lambda * bulk_stress)
     }
 
-    pub fn gradient_field(&self, axis: Direction) -> &P
-    {
+    pub fn gradient_field(&self, axis: Direction) -> &P {
         use Direction::{X, Y};
         match axis
         {
@@ -179,55 +201,49 @@ impl<'a, P: Primitive> CellData<'_, P>
 // ============================================================================
 impl<C: ItemizeData> ItemizedChange<C>
 {
-    pub fn zeros() -> Self
-    {
-        Self{
-            sink1:   C::zeros(),
-            sink2:   C::zeros(),
-            grav1:   C::zeros(),
-            grav2:   C::zeros(),
-            buffer:  C::zeros(),
-            cooling: C::zeros(),
+    pub fn zeros() -> Self {
+        Self {
+            sink1:     C::zeros(),
+            sink2:     C::zeros(),
+            grav1:     C::zeros(),
+            grav2:     C::zeros(),
+            buffer:    C::zeros(),
+            cooling:   C::zeros(),
             fake_mass: C::zeros(),
         }
     }
 
-    pub fn total(&self) -> C
-    {
+    pub fn total(&self) -> C {
         self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling + self.fake_mass
     }
 
-    pub fn add_mut(&mut self, s0: &Self)
-    {
-        self.sink1   =  self.sink1   + s0.sink1;
-        self.sink2   =  self.sink2   + s0.sink2;
-        self.grav1   =  self.grav1   + s0.grav1;
-        self.grav2   =  self.grav2   + s0.grav2;
-        self.buffer  =  self.buffer  + s0.buffer;
-        self.cooling =  self.cooling + s0.cooling;
+    pub fn add_mut(&mut self, s0: &Self) {
+        self.sink1     = self.sink1     + s0.sink1;
+        self.sink2     = self.sink2     + s0.sink2;
+        self.grav1     = self.grav1     + s0.grav1;
+        self.grav2     = self.grav2     + s0.grav2;
+        self.buffer    = self.buffer    + s0.buffer;
+        self.cooling   = self.cooling   + s0.cooling;
         self.fake_mass = self.fake_mass + s0.fake_mass;
     }
 
-    pub fn mul_mut(&mut self, s: f64)
-    {
-        self.sink1   =  self.sink1   * s;
-        self.sink2   =  self.sink2   * s;
-        self.grav1   =  self.grav1   * s;
-        self.grav2   =  self.grav2   * s;
-        self.buffer  =  self.buffer  * s;
-        self.cooling =  self.cooling * s;
+    pub fn mul_mut(&mut self, s: f64) {
+        self.sink1     = self.sink1     * s;
+        self.sink2     = self.sink2     * s;
+        self.grav1     = self.grav1     * s;
+        self.grav2     = self.grav2     * s;
+        self.buffer    = self.buffer    * s;
+        self.cooling   = self.cooling   * s;
         self.fake_mass = self.fake_mass * s;
     }
 
-    pub fn add(&self, s0: &Self) -> Self
-    {
+    pub fn add(&self, s0: &Self) -> Self {
         let mut result = self.clone();
         result.add_mut(s0);
         return result;
     }
 
-    pub fn mul(&self, s: f64) -> Self
-    {
+    pub fn mul(&self, s: f64) -> Self {
         let mut result = self.clone();
         result.mul_mut(s);
         return result;
@@ -240,19 +256,18 @@ impl<C: ItemizeData> ItemizedChange<C>
 // ============================================================================
 impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
 {
-    fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements
-    {
+    fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
         let (dm, dpx, dpy) = delta;
         elements.perturb(time, -dm, 0.0, -dpx, 0.0, -dpy, 0.0).unwrap() - elements
     }
-    fn pert2(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements
-    {
+
+    fn pert2(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
         let (dm, dpx, dpy) = delta;
         elements.perturb(time, 0.0, -dm, 0.0, -dpx, 0.0, -dpy).unwrap() - elements
     }
-    pub fn perturbation(&self, time: f64, elements: OrbitalElements) -> ItemizedChange<OrbitalElements>
-    {
-        ItemizedChange{
+
+    pub fn perturbation(&self, time: f64, elements: OrbitalElements) -> ItemizedChange<OrbitalElements> {
+        ItemizedChange {
             sink1:    Self::pert1(time, self.sink1.mass_and_momentum(), elements),
             sink2:    Self::pert2(time, self.sink2.mass_and_momentum(), elements),
             grav1:    Self::pert1(time, self.grav1.mass_and_momentum(), elements),
@@ -270,29 +285,24 @@ impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
 // ============================================================================
 impl Solver
 {
-    pub fn runge_kutta(&self) -> runge_kutta::RungeKuttaOrder
-    {
+    pub fn runge_kutta(&self) -> runge_kutta::RungeKuttaOrder {
         use std::convert::TryFrom;
         runge_kutta::RungeKuttaOrder::try_from(self.rk_order).expect("illegal RK order")
     }
 
-    pub fn need_flux_communication(&self) -> bool
-    {
+    pub fn need_flux_communication(&self) -> bool {
         self.force_flux_comm
     }
 
-    pub fn effective_resolution(&self, mesh: &Mesh) -> f64
-    {
+    pub fn effective_resolution(&self, mesh: &Mesh) -> f64 {
         f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
     }
 
-    pub fn min_time_step(&self, mesh: &Mesh) -> f64
-    {
+    pub fn min_time_step(&self, mesh: &Mesh) -> f64 {
         self.cfl * self.effective_resolution(mesh) / self.maximum_orbital_velocity()
     }
 
-    pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64
-    {
+    pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64 {
         let r2 = dx * dx + dy * dy;
         let s2 = self.sink_radius * self.sink_radius;
 
@@ -303,18 +313,15 @@ impl Solver
         }
     }
 
-    pub fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64
-    {
+    pub fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64 {
         -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number.powi(2)
     }
 
-    pub fn maximum_orbital_velocity(&self) -> f64
-    {
+    pub fn maximum_orbital_velocity(&self) -> f64 {
         1.0 / self.softening_length.sqrt()
     }
 
-    pub fn source_terms(&self, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms
-    {
+    pub fn source_terms(&self, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms {
         let p1 = two_body_state.0;
         let p2 = two_body_state.1;
 
@@ -363,10 +370,8 @@ impl Solver
 
 
 // ============================================================================
-impl Isothermal
-{
-    pub fn new() -> Self
-    {
+impl Isothermal {
+    pub fn new() -> Self {
         Self{}
     }
 }
@@ -375,7 +380,6 @@ impl Isothermal
 
 
 // ============================================================================
-// TODO: Implement density floor feature here.
 impl Hydrodynamics for Isothermal
 {
     type Conserved = hydro_iso2d::Conserved;
@@ -385,25 +389,22 @@ impl Hydrodynamics for Isothermal
         1.0
     }
 
-    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
-    {
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive {
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
     }
 
-    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
+    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
         if u.density() < 0.0 {
-            return Err(HydroError::NegativeDensity)
+            return Err(HydroErrorType::NegativeDensity(u.density()))
         }
         Ok(u.to_primitive())
     }
 
-    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive
-    {
+    fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive {
         u.to_primitive()
     }
 
-    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
-    {
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved {
         p.to_conserved()
     }
 
@@ -417,14 +418,9 @@ impl Hydrodynamics for Isothermal
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        if conserved.density() < 0.0 { panic!("Density {} is negative!", conserved.density()) }
-
-
-        // Experimental density floor feature. fake_mass is updated based on
-        // how close the density is to this floor value.
-        // let relative_density_floor = 1e-5;
-        // let relative_fake_mass_rate = 1e-3;
-        let omega = 1.0; // BAD! Probably needs function to return actual omega.
+        let omega = 1.0; // Note: in the future, the binary orbital frequency
+                         // may be allowed to vary; we really should not be
+                         // assuming everywhere that it's 1.0.
         let density_floor = background_conserved.density() * solver.relative_density_floor();
         let fake_mass_rate = background_conserved.density() * omega * solver.relative_fake_mass_rate();
 
@@ -435,7 +431,7 @@ impl Hydrodynamics for Isothermal
         };
 
         let st = solver.source_terms(two_body_state, x, y, conserved.density());
-        
+
         ItemizedChange{
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
             grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
@@ -477,10 +473,8 @@ impl Hydrodynamics for Isothermal
 
 
 // ============================================================================
-impl Euler
-{
-    pub fn new() -> Self
-    {
+impl Euler {
+    pub fn new() -> Self {
         Self{gamma_law_index: 5.0 / 3.0}
     }
 }
@@ -489,8 +483,7 @@ impl Euler
 
 
 // ============================================================================
-impl Hydrodynamics for Euler
-{
+impl Hydrodynamics for Euler {
     type Conserved = hydro_euler::euler_2d::Conserved;
     type Primitive = hydro_euler::euler_2d::Primitive;
 
@@ -498,25 +491,22 @@ impl Hydrodynamics for Euler
         self.gamma_law_index
     }
 
-    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive
-    {
+    fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive {
         godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
     }
 
-    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
+    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
         if u.mass_density() < 0.0 {
-            return Err(HydroError::NegativeDensity)
+            return Err(HydroErrorType::NegativeDensity(u.mass_density()))
         }
         Ok(u.to_primitive(self.gamma_law_index))
     }
 
-    fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive
-    {
+    fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {
         conserved.to_primitive(self.gamma_law_index)
     }
 
-    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved
-    {
+    fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved {
         p.to_conserved(self.gamma_law_index)
     }
 
@@ -596,25 +586,20 @@ impl ItemizeData for kepler_two_body::OrbitalElements {}
 
 
 // ============================================================================
-impl Zeros for hydro_iso2d::Conserved
-{
-    fn zeros() -> Self
-    {
+impl Zeros for hydro_iso2d::Conserved {
+    fn zeros() -> Self {
         Self(0.0, 0.0, 0.0)
     }
 }
 
-impl Zeros for hydro_euler::euler_2d::Conserved
-{
-    fn zeros() -> Self
-    {
+impl Zeros for hydro_euler::euler_2d::Conserved {
+    fn zeros() -> Self {
         Self(0.0, 0.0, 0.0, 0.0)
     }
 }
 
 impl Zeros for kepler_two_body::OrbitalElements {
-    fn zeros() -> Self
-    {
+    fn zeros() -> Self {
         Self(0.0, 0.0, 0.0, 0.0)
     }
 }
@@ -639,16 +624,14 @@ impl Conserved for hydro_euler::euler_2d::Conserved {
 
 
 // ============================================================================
-impl Primitive for hydro_iso2d::Primitive
-{
-    fn velocity_x(self) -> f64   { self.velocity_x() }
-    fn velocity_y(self) -> f64   { self.velocity_y() }
+impl Primitive for hydro_iso2d::Primitive {
+    fn velocity_x(self)   -> f64 { self.velocity_x() }
+    fn velocity_y(self)   -> f64 { self.velocity_y() }
     fn mass_density(self) -> f64 { self.density() }
 }
 
-impl Primitive for hydro_euler::euler_2d::Primitive
-{
-    fn velocity_x(self) -> f64 { self.velocity(hydro_euler::geometry::Direction::X) }
-    fn velocity_y(self) -> f64 { self.velocity(hydro_euler::geometry::Direction::Y) }
+impl Primitive for hydro_euler::euler_2d::Primitive {
+    fn velocity_x(self)   -> f64 { self.velocity(hydro_euler::geometry::Direction::X) }
+    fn velocity_y(self)   -> f64 { self.velocity(hydro_euler::geometry::Direction::Y) }
     fn mass_density(self) -> f64 { self.mass_density() }
 }

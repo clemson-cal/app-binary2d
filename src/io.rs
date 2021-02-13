@@ -24,17 +24,14 @@ use crate::scheme::{
 
 
 // ============================================================================
-impl nicer_hdf5::H5Read for Tasks
-{
-    fn read(group: &Group, name: &str) -> hdf5::Result<Self>
-    {
+impl nicer_hdf5::H5Read for Tasks {
+    fn read(group: &Group, name: &str) -> hdf5::Result<Self> {
         nicer_hdf5::read_as_keyed_vec(group, name)
     }    
 }
-impl nicer_hdf5::H5Write for Tasks
-{
-    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()>
-    {
+
+impl nicer_hdf5::H5Write for Tasks {
+    fn write(&self, group: &Group, name: &str) -> hdf5::Result<()> {
         nicer_hdf5::write_as_keyed_vec(self.clone(), group, name)
     }
 }
@@ -43,8 +40,7 @@ impl nicer_hdf5::H5Write for Tasks
 
 
 // ============================================================================
-fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()>
-{
+fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<BlockData<C>>) -> hdf5::Result<()> {
     type E = kepler_two_body::OrbitalElements;
 
     let state_group = group.create_group("state")?;
@@ -62,8 +58,7 @@ fn write_state<C: Conserved>(group: &Group, state: &State<C>, block_data: &Vec<B
     Ok(())
 }
 
-pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(file: &verified::File, _: &H) -> hdf5::Result<State<C>>
-{
+pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(file: &verified::File, _: &H) -> hdf5::Result<State<C>> {
     let file = File::open(file.as_str())?;
     let state_group = file.group("state")?;
     let solution_group = state_group.group("solution")?;
@@ -90,37 +85,31 @@ pub fn read_state<H: Hydrodynamics<Conserved=C>, C: Conserved>(file: &verified::
     Ok(result)
 }
 
-fn write_tasks(group: &Group, tasks: &Tasks) -> hdf5::Result<()>
-{
+fn write_tasks(group: &Group, tasks: &Tasks) -> hdf5::Result<()> {
     tasks.write(group, "tasks")
 }
 
-pub fn read_tasks(file: &verified::File) -> hdf5::Result<Tasks>
-{
+pub fn read_tasks(file: &verified::File) -> hdf5::Result<Tasks> {
     let file = File::open(file.as_str())?;
     Tasks::read(&file, "tasks")
 }
 
-fn write_model(group: &Group, model: &HashMap::<String, kind_config::Value>) -> hdf5::Result<()>
-{
+fn write_model(group: &Group, model: &HashMap::<String, kind_config::Value>) -> hdf5::Result<()> {
     kind_config::io::write_to_hdf5(&group.create_group("model")?, &model)
 }
 
-pub fn read_model(file: &verified::File) -> hdf5::Result<HashMap::<String, kind_config::Value>>
-{
+pub fn read_model(file: &verified::File) -> hdf5::Result<HashMap::<String, kind_config::Value>> {
     kind_config::io::read_from_hdf5(&File::open(file.as_str())?.group("model")?)
 }
 
-pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>, model: &HashMap::<String, kind_config::Value>) -> hdf5::Result<()>
-{
+pub fn write_time_series<T: H5Type>(filename: &str, time_series: &Vec<T>, model: &HashMap::<String, kind_config::Value>) -> hdf5::Result<()> {
     let file = File::create(filename)?;
     time_series.write(&file, "time_series")?;
     kind_config::io::write_to_hdf5(&file.create_group("model")?, &model)?;
     Ok(())
 }
 
-pub fn read_time_series<T: H5Type>(file: &verified::File) -> hdf5::Result<Vec<T>>
-{
+pub fn read_time_series<T: H5Type>(file: &verified::File) -> hdf5::Result<Vec<T>> {
     let file = File::open(file.as_str())?;
     Vec::<T>::read(&file, "time_series")
 }
