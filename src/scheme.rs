@@ -178,15 +178,6 @@ impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C>
 
 
 // ============================================================================
-async fn join_3by3<T: Clone + Future>(a: [[&T; 3]; 3]) -> [[T::Output; 3]; 3]
-{
-    [
-        [a[0][0].clone().await, a[0][1].clone().await, a[0][2].clone().await],
-        [a[1][0].clone().await, a[1][1].clone().await, a[1][2].clone().await],
-        [a[2][0].clone().await, a[2][1].clone().await, a[2][2].clone().await],
-    ]
-}
-
 async fn try_join_3by3<F, T, E>(a: [[&F; 3]; 3]) -> Result<[[T; 3]; 3], E>
 where
     F: Clone + Future<Output = Result<T, E>>
@@ -281,86 +272,6 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
 
 
 
-// ============================================================================
-async fn advance_tokio_rk<H: 'static + Hydrodynamics>(
-    state: State<H::Conserved>,
-    hydro: H,
-    block_data: &Vec<BlockData<H::Conserved>>,
-    mesh: &Mesh,
-    solver: &Solver,
-    dt: f64,
-    runtime: &tokio::runtime::Runtime) -> State<H::Conserved>
-{
-    use futures::future::{FutureExt, join_all};
-    use std::sync::Arc;
-
-    let scheme = UpdateScheme::new(hydro);
-    let time = state.time;
-
-    let pc_map: HashMap<_, _> = state.solution.iter().zip(block_data).map(|(solution, block)|
-    {
-        let uc = solution.conserved.clone();
-        let primitive = async move {
-            scheme.compute_block_primitive(uc).to_shared()
-        };
-        return (block.index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
-
-    }).collect();
-
-    let pc_map = Arc::new(pc_map);
-
-    let flux_map: HashMap<_, _> = block_data.iter().map(|block|
-    {
-        let solver      = solver.clone();
-        let mesh        = mesh.clone();
-        let pc_map      = pc_map.clone();
-        let block       = block.clone();
-        let block_index = block.index;
-
-        let flux = async move {
-            let pn = join_3by3(mesh.neighbor_block_indexes(block_index).map_3by3(|i| &pc_map[i])).await;
-            let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
-            (fx.to_shared(), fy.to_shared())
-        };
-        return (block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
-    }).collect();
-
-    let flux_map = Arc::new(flux_map);
-
-    let s1_vec = state.solution.iter().zip(block_data).map(|(solution, block)|
-    {
-        let solver   = solver.clone();
-        let mesh     = mesh.clone();
-        let flux_map = flux_map.clone();
-        let block    = block.clone();
-        let solution = solution.clone();
-
-        let s1 = async move {
-            let (fx, fy) = if ! solver.need_flux_communication() {
-                flux_map[&block.index].clone().await
-            } else {
-                let flux_n = join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &flux_map[i])).await;
-                let fx_n = flux_n.map_3by3(|f| f.0.clone());
-                let fy_n = flux_n.map_3by3(|f| f.1.clone());
-                let fx_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fx_n, 1, 1, 1, 1);
-                let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
-                (fx_e.to_shared(), fy_e.to_shared())
-            };
-            scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt)
-        };
-        runtime.spawn(s1).map(|f| f.unwrap()).shared()
-    });
-
-    State {
-        time: state.time + dt,
-        iteration: state.iteration + 1,
-        solution: join_all(s1_vec).await
-    }
-}
-
-
-
 
 // ============================================================================
 pub fn advance_tokio<H: 'static + Hydrodynamics>(
@@ -373,18 +284,11 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     fold:       usize,
     runtime:    &tokio::runtime::Runtime) -> State<H::Conserved>
 {
-    // let update = |state| advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
-
-    // for _ in 0..fold {
-    //     state = runtime.block_on(solver.runge_kutta().advance_async(state, update, runtime));
-    // }
-    // return state;
-
-    assert_eq!(solver.rk_order, 1);
+    let try_update = |state| try_advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
+    let rk = solver.runge_kutta();
 
     for _ in 0..fold {
-        state = runtime.block_on(try_advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime)).unwrap()
-        // state = runtime.block_on(advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime))
+        state = runtime.block_on(rk.try_advance_async(state, try_update, runtime)).unwrap();
     }
     state
 }
