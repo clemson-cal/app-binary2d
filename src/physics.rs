@@ -20,14 +20,14 @@ use crate::traits::{
 
 // ============================================================================
 #[derive(thiserror::Error, Debug, Clone)]
-pub enum HydroError {
+pub enum HydroErrorType {
     #[error("negative surface density {0:.4e}")]
     NegativeDensity(f64)
 }
 
-impl HydroError {
-    pub fn at_position(self, position: (f64, f64)) -> HydroErrorAtPosition {
-        HydroErrorAtPosition{source: self, position}
+impl HydroErrorType {
+    pub fn at_position(self, position: (f64, f64)) -> HydroError {
+        HydroError{source: self, binary: None, position}
     }
 }
 
@@ -36,10 +36,28 @@ impl HydroError {
 
 // ============================================================================
 #[derive(thiserror::Error, Debug, Clone)]
-#[error("at position ({:.4}, {:.4})", position.0, position.1)]
-pub struct HydroErrorAtPosition {
-    source: HydroError,
+#[error("at position ({:.4} {:.4}), when the binary was at ({:.4} {:.4}) ({:.4} {:.4})",
+    position.0,
+    position.1,
+    binary.map_or(0.0, |s| s.0.position_x()),
+    binary.map_or(0.0, |s| s.0.position_y()),
+    binary.map_or(0.1, |s| s.1.position_x()),
+    binary.map_or(0.1, |s| s.1.position_y())
+)]
+pub struct HydroError {
+    source: HydroErrorType,
+    binary: Option<kepler_two_body::OrbitalState>,
     position: (f64, f64),
+}
+
+impl HydroError {
+    pub fn with_orbital_state(self, binary: kepler_two_body::OrbitalState) -> Self {
+        Self {
+            source: self.source,
+            binary: Some(binary),
+            position: self.position,
+        }
+    }
 }
 
 
@@ -375,9 +393,9 @@ impl Hydrodynamics for Isothermal
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
     }
 
-    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
+    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
         if u.density() < 0.0 {
-            return Err(HydroError::NegativeDensity(u.density()))
+            return Err(HydroErrorType::NegativeDensity(u.density()))
         }
         Ok(u.to_primitive())
     }
@@ -477,9 +495,9 @@ impl Hydrodynamics for Euler {
         godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
     }
 
-    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroError> {
+    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
         if u.mass_density() < 0.0 {
-            return Err(HydroError::NegativeDensity(u.mass_density()))
+            return Err(HydroErrorType::NegativeDensity(u.mass_density()))
         }
         Ok(u.to_primitive(self.gamma_law_index))
     }

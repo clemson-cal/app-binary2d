@@ -9,7 +9,7 @@ use kepler_two_body::OrbitalElements;
 use crate::physics::{
     Direction,
     CellData,
-    HydroErrorAtPosition,
+    HydroError,
     ItemizedChange,
     Solver,
 };
@@ -184,7 +184,7 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
     mesh: &Mesh,
     solver: &Solver,
     dt: f64,
-    runtime: &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroErrorAtPosition>
+    runtime: &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
 {
     use futures::future::{FutureExt, join_all};
     use std::sync::Arc;
@@ -217,7 +217,7 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
             let pn = try_join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &pc_map[i])).await?;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
             let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
-            Ok::<_, HydroErrorAtPosition>((fx.to_shared(), fy.to_shared()))
+            Ok::<_, HydroError>((fx.to_shared(), fy.to_shared()))
         };
         fg_map.insert(block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
     }
@@ -241,17 +241,17 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            Ok::<_, HydroErrorAtPosition>(scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt))
+            Ok::<_, HydroError>(scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt))
         };
         s1_vec.push(runtime.spawn(s1).map(|f| f.unwrap()))
     }
-
     let solution: Result<Vec<_>, _> = join_all(s1_vec).await.iter().cloned().collect();
+    let solution = solution.map_err(|e| e.with_orbital_state(solver.orbital_elements.orbital_state_from_time(time)))?;
 
     Ok(State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        solution: solution?,
+        solution: solution,
     })
 }
 
@@ -267,7 +267,7 @@ pub fn advance_tokio<H: 'static + Hydrodynamics>(
     solver:     &Solver,
     dt:         f64,
     fold:       usize,
-    runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroErrorAtPosition>
+    runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
 {
     let try_update = |state| try_advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
     let rk = solver.runge_kutta();
@@ -291,7 +291,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn try_block_primitive(
         &self,
         conserved: ArcArray<H::Conserved, Ix2>,
-        block: BlockData<H::Conserved>) -> Result<Array<H::Primitive, Ix2>, HydroErrorAtPosition>
+        block: BlockData<H::Conserved>) -> Result<Array<H::Primitive, Ix2>, HydroError>
     {
         let x: Result<Vec<_>, _> = conserved
             .iter()
