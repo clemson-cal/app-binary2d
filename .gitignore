@@ -3,7 +3,7 @@ data
 *.h5
 *.pbs
 *.txt
-.idea
+/.idea/
 *.ipynb
 *.png
 *.mp4
