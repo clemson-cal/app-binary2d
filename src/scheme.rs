@@ -245,8 +245,12 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
         };
         s1_vec.push(runtime.spawn(s1).map(|f| f.unwrap()))
     }
-    let solution: Result<Vec<_>, _> = join_all(s1_vec).await.iter().cloned().collect();
-    let solution = solution.map_err(|e| e.with_orbital_state(solver.orbital_elements.orbital_state_from_time(time)))?;
+
+    let solution = join_all(s1_vec).await
+        .iter()
+        .cloned()
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.with_orbital_state(solver.orbital_elements.orbital_state_from_time(time)))?;
 
     Ok(State {
         time: state.time + dt,
