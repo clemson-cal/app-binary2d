@@ -320,7 +320,7 @@ impl Hydrodynamics for Isothermal
         p.to_conserved()
     }
 
-    fn from_any(&self, p: &AnyPrimitive) -> Self::Primitive {
+    fn from_any(&self, p: AnyPrimitive) -> Self::Primitive {
         hydro_iso2d::Primitive(
             p.surface_density,
             p.velocity_x,
@@ -352,7 +352,7 @@ impl Hydrodynamics for Isothermal
 
         let st = solver.source_terms(two_body_state, x, y, conserved.density());
 
-        ItemizedChange{
+        ItemizedChange {
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
             grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
             sink1:   conserved * (-st.sink_rate1 * dt),
@@ -435,7 +435,7 @@ impl Hydrodynamics for Euler {
         p.to_conserved(self.gamma_law_index)
     }
 
-    fn from_any(&self, p: &AnyPrimitive) -> Self::Primitive {
+    fn from_any(&self, p: AnyPrimitive) -> Self::Primitive {
         hydro_euler::euler_2d::Primitive(
             p.surface_density,
             p.velocity_x,
@@ -506,7 +506,7 @@ impl Hydrodynamics for Euler {
 // ============================================================================
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
-impl Arithmetic for kepler_two_body::OrbitalElements {}
+// impl Arithmetic for kepler_two_body::OrbitalElements {}
 
 
 

@@ -132,28 +132,45 @@ pub struct App {
 
 
 // ============================================================================
+impl InitialModel for AnyModel {
+
+    fn primitive_at(&self, hydro: &AnyHydro, r: f64) -> AnyPrimitive {
+        match self {
+            Self::FiniteDisk  (model) => model.primitive_at(hydro, r),
+            Self::InfiniteDisk(model) => model.primitive_at(hydro, r),
+        }
+    }
+
+    fn validate(&self, hydro: &AnyHydro) -> std::result::Result<(), anyhow::Error> {
+        match self {
+            Self::FiniteDisk  (model) => model.validate(hydro),
+            Self::InfiniteDisk(model) => model.validate(hydro),
+        }
+    }
+}
+
+
+
+
+// ============================================================================
 impl Configuration {
 
-    // pub fn package<H, M>(hydro: &H, model: &M, mesh: &Mesh, control: &Control) -> Self
-    // where
-    //     H: Hydrodynamics,
-    //     M: InitialModel,
-    //     AnyHydro: From<H>,
-    //     AnyModel: From<M>,
-    // {
-    //     Configuration {
-    //         hydro: hydro.clone().into(),
-    //         model: model.clone().into(),
-    //         mesh: mesh.clone(),
-    //         control: control.clone(),
-    //     }
-    // }
+    pub fn package<H, M>(hydro: &H, model: &M, mesh: &Mesh, control: &Control) -> Self
+    where
+        H: Hydrodynamics,
+        M: InitialModel,
+        AnyHydro: From<H>,
+        AnyModel: From<M>,
+    {
+        Configuration {
+            hydro: hydro.clone().into(),
+            model: model.clone().into(),
+            mesh: mesh.clone(),
+            control: control.clone(),
+        }
+    }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        // self.hydro.validate()?;
-        // self.model.validate()?;
-        // self.mesh.validate(self.control.start_time)?;
-        // self.control.validate()?;
         Ok(())
     }
 }
@@ -169,35 +186,34 @@ impl App {
      * configuration items did not pass validation.
      */
     pub fn validate(self) -> anyhow::Result<Self> {
-        // self.config.validate()?;
         Ok(self)
     }
 
-    // /**
-    //  * Construct a new App instance from a user configuration.
-    //  */
-    // pub fn from_config(mut config: Configuration) -> Result<Self, Error> {
+    /**
+     * Construct a new App instance from a user configuration.
+     */
+    pub fn from_config(mut config: Configuration) -> anyhow::Result<Self> {
 
-    //     for extra_config_str in std::env::args().skip_while(|s| !s.contains('=')) {
-    //         if extra_config_str.ends_with(".yaml") {
-    //             config.patch_from_reader(File::open(extra_config_str)?)?
-    //         } else {
-    //             config.patch_from_key_val(&extra_config_str)?
-    //         }
-    //     }
+        // for extra_config_str in std::env::args().skip_while(|s| !s.contains('=')) {
+        //     if extra_config_str.ends_with(".yaml") {
+        //         config.patch_from_reader(File::open(extra_config_str)?)?
+        //     } else {
+        //         config.patch_from_key_val(&extra_config_str)?
+        //     }
+        // }
 
-    //     let geometry = config.mesh.grid_blocks_geometry(config.control.start_time);
-    //     let state = match &config.hydro {
-    //         AnyHydro::Newtonian(hydro) => {
-    //             AnyState::from(State::from_model(&config.model, hydro, &geometry, config.control.start_time))
-    //         },
-    //         AnyHydro::Relativistic(hydro) => {
-    //             AnyState::from(State::from_model(&config.model, hydro, &geometry, config.control.start_time))
-    //         },
-    //     };
-    //     let tasks = Tasks::new(config.control.start_time);
-    //     Ok(Self{state, tasks, config, version: VERSION_AND_BUILD.to_string()})
-    // }
+        let state: AnyState = match &config.hydro {
+            AnyHydro::Isothermal(hydro) => {
+                State::from_model(&config.model, hydro, &config.mesh).into()
+            },
+            AnyHydro::Euler(hydro) => {
+                State::from_model(&config.model, hydro, &config.mesh).into()
+            },
+        };
+        let tasks = Tasks::new();
+
+        Ok(Self{state, tasks, config, version: VERSION_AND_BUILD.to_string()})
+    }
 
     // /**
     //  * Construct a new App instance from a file: may be a config.yaml or a
@@ -222,23 +238,23 @@ impl App {
     //     }
     // }
 
-    // /**
-    //  * Construct a new App instance from references to the member variables.
-    //  */
-    // pub fn package<H, M, C>(state: &State<C>, tasks: &mut Tasks, hydro: &H, model: &M, mesh: &Mesh, control: &Control) -> Self
-    // where
-    //     H: Hydrodynamics<Conserved = C>,
-    //     M: InitialModel,
-    //     C: Conserved,
-    //     AnyHydro: From<H>,
-    //     AnyModel: From<M>,
-    //     AnyState: From<State<C>>,
-    // {
-    //     Self {
-    //         state: AnyState::from(state.clone()),
-    //         tasks: tasks.clone(),
-    //         config: Configuration::package(hydro, model, mesh, control),
-    //         version: VERSION_AND_BUILD.to_string(),
-    //     }
-    // }
+    /**
+     * Construct a new App instance from references to the member variables.
+     */
+    pub fn package<H, M, C>(state: &State<C>, tasks: &mut Tasks, hydro: &H, model: &M, mesh: &Mesh, control: &Control) -> Self
+    where
+        H: Hydrodynamics<Conserved = C>,
+        M: InitialModel,
+        C: Conserved,
+        AnyHydro: From<H>,
+        AnyModel: From<M>,
+        AnyState: From<State<C>>,
+    {
+        Self {
+            state: AnyState::from(state.clone()),
+            tasks: tasks.clone(),
+            config: Configuration::package(hydro, model, mesh, control),
+            version: VERSION_AND_BUILD.to_string(),
+        }
+    }
 }

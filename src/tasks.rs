@@ -52,10 +52,10 @@ impl RecurringTask {
     /**
      * Create a fresh recurring task which is first due at t = 0.0.
      */
-    pub fn new(start_time: f64) -> Self {
+    pub fn new() -> Self {
         Self {
             count: 0,
-            next_time: start_time,
+            next_time: 0.0,
             last_performed: Instant::now(),
             count_this_run: 0,
         }
@@ -81,11 +81,11 @@ impl RecurringTask {
 
 // ============================================================================
 impl Tasks {
-    pub fn new(start_time: f64) -> Self {
+    pub fn new() -> Self {
         Self {
-            write_checkpoint: RecurringTask::new(start_time),
-            iteration_message: RecurringTask::new(start_time),
-            report_progress: RecurringTask::new(start_time),
+            write_checkpoint: RecurringTask::new(),
+            iteration_message: RecurringTask::new(),
+            report_progress: RecurringTask::new(),
         }
     }
 }

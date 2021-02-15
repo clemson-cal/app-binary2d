@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use crate::app::AnyPrimitive;
+use crate::app::{AnyPrimitive, AnyHydro};
 use crate::traits::{Hydrodynamics, InitialModel};
 
 
@@ -32,11 +32,11 @@ pub struct InfiniteDiskModel {
 // ============================================================================
 impl InitialModel for FiniteDiskModel {
 
-    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, _: f64) -> AnyPrimitive {
+    fn primitive_at(&self, _hydro: &AnyHydro, _: f64) -> AnyPrimitive {
         todo!()
     }
 
-    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
+    fn validate(&self, _hydro: &AnyHydro) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -47,11 +47,11 @@ impl InitialModel for FiniteDiskModel {
 // ============================================================================
 impl InitialModel for InfiniteDiskModel {
 
-    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, _: f64) -> AnyPrimitive {
+    fn primitive_at(&self, _hydro: &AnyHydro, _: f64) -> AnyPrimitive {
         todo!()
     }
 
-    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
+    fn validate(&self, _hydro: &AnyHydro) -> anyhow::Result<()> {
         Ok(())
     }
 }

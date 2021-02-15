@@ -5,6 +5,9 @@ use serde::{Serialize, Deserialize};
 use ndarray::{ArcArray, Ix2};
 use kepler_two_body::OrbitalElements;
 use godunov_core::runge_kutta;
+use crate::app::AnyModel;
+use crate::app::AnyHydro;
+use crate::app::AnyPrimitive;
 use crate::traits::{
     Conserved,
     Hydrodynamics,
@@ -70,13 +73,13 @@ impl<C: Conserved> BlockState<C> {
      * Generate a block state from the given initial model, hydrodynamics
      * instance and grid geometry.
      */
-    pub fn from_model<M, H>(model: &M, hydro: &H, mesh: &Mesh, index: BlockIndex) -> Self
+    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh, index: BlockIndex) -> Self
     where
-        M: InitialModel,
-        H: Hydrodynamics<Conserved = C>
+        H: Hydrodynamics<Conserved = C> + Into<AnyHydro>
     {
+        let any_hydro: AnyHydro = hydro.clone().into();
         let norm = |(x, y)| f64::sqrt(x * x + y * y);
-        let cons = |r| hydro.to_conserved(hydro.from_any(&model.primitive_at(hydro, r)));
+        let cons = |r| hydro.to_conserved(hydro.from_any(model.primitive_at(&any_hydro, r)));
 
         Self {
             conserved: mesh.cell_centers(index).mapv(norm).mapv(cons).to_shared(),
@@ -96,10 +99,9 @@ impl<C: Conserved> State<C> {
      * Generate a state from the given initial model, hydrodynamics instance,
      * and map of grid geometry.
      */
-    pub fn from_model<M, H>(model: &M, hydro: &H, mesh: &Mesh) -> Self
+    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh) -> Self
     where
-        M: InitialModel,
-        H: Hydrodynamics<Conserved = C>
+        H: Hydrodynamics<Conserved = C> + Into<AnyHydro>
     {
         let time = 0.0;
         let iteration = Rational64::new(0, 1);

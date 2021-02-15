@@ -1,6 +1,10 @@
 use std::ops::{Add, Sub, Mul, Div};
 use kepler_two_body::OrbitalState;
-use crate::app::AnyPrimitive;
+use crate::app::{
+    AnyModel,
+    AnyHydro,
+    AnyPrimitive,
+};
 use crate::state::ItemizedChange;
 use crate::physics::{
     CellData,
@@ -47,7 +51,8 @@ pub trait Primitive: Clone + Copy + Send + Sync {
 /**
  * Interface for a hydrodynamics system
  */
-pub trait Hydrodynamics: Copy + Send {
+pub trait Hydrodynamics: Clone + Copy + Send {
+
     type Conserved: Conserved;
     type Primitive: Primitive;
 
@@ -57,7 +62,7 @@ pub trait Hydrodynamics: Copy + Send {
     fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType>;
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
-    fn from_any(&self, p: &AnyPrimitive) -> Self::Primitive;
+    fn from_any(&self, p: AnyPrimitive) -> Self::Primitive;
 
     fn source_terms(
         &self,
@@ -88,15 +93,15 @@ pub trait Hydrodynamics: Copy + Send {
  * Interface for a struct that can act as an initial or background hydrodynamics
  * model
  */
-pub trait InitialModel {
+pub trait InitialModel: Clone {
 
     /**
      * Return the hydrodynamics state at a given cylindrical radius
      */
-    fn primitive_at<H: Hydrodynamics>(&self, hydro: &H, _: f64) -> AnyPrimitive;
+    fn primitive_at(&self, hydro: &AnyHydro, _: f64) -> AnyPrimitive;
 
     /**
      * Validate the model
      */
-    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> anyhow::Result<()>;
+    fn validate(&self, hydro: &AnyHydro) -> anyhow::Result<()>;
 }
