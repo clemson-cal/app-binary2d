@@ -80,11 +80,10 @@ impl<C: Conserved> BlockState<C> {
         H: Hydrodynamics<Conserved = C> + Into<AnyHydro>
     {
         let any_hydro: AnyHydro = hydro.clone().into();
-        let norm = |(x, y)| f64::sqrt(x * x + y * y);
         let cons = |r| hydro.to_conserved(hydro.from_any(model.primitive_at(&any_hydro, r)));
 
         Self {
-            conserved: mesh.cell_centers(index).mapv(norm).mapv(cons).to_shared(),
+            conserved: mesh.cell_centers(index).mapv(cons).to_shared(),
             integrated_source_terms: ItemizedChange::zeros(),
             orbital_elements_change: ItemizedChange::zeros(),
         }

@@ -1,6 +1,8 @@
 #![allow(unused)]
 
 
+
+
 mod app;
 mod io;
 mod mesh;
@@ -10,6 +12,13 @@ mod scheme;
 mod state;
 mod tasks;
 mod traits;
+
+
+
+
+use crate::app::App;
+
+
 
 
 fn main() -> anyhow::Result<()> {
@@ -27,24 +36,15 @@ fn main() -> anyhow::Result<()> {
     println!("\tinput file ........ {}", input);
     println!("\toutput drectory ... {}", outdir);
 
-    // let App{state, tasks, config, ..} = App::from_preset_or_file(&input)?.validate()?;
+    let app = App::from_file(&input)?.validate()?;
+    let App{state, tasks, config, ..} = app.clone();
 
-    // for line in serde_yaml::to_string(&config)?.split("\n").skip(1) {
-    //     println!("\t{}", line);
-    // }
-    // println!();
+    println!();
+    for line in serde_yaml::to_string(&config)?.split("\n").skip(1) {
+        println!("\t{}", line);
+    }
 
-    // let Configuration{hydro, model, mesh, control} = config;
-
-    // match (state, hydro) {
-    //     (AgnosticState::Newtonian(state), AgnosticHydro::Newtonian(hydro)) => {
-    //         run(state, tasks, hydro, model, mesh, control, outdir)
-    //     },
-    //     (AgnosticState::Relativistic(state), AgnosticHydro::Relativistic(hydro)) => {
-    //         run(state, tasks, hydro, model, mesh, control, outdir)
-    //     },
-    //     _ => unreachable!(),
-    // }
+    io::write_cbor(&app, "chkpt.0000.cbor")?;
 
     Ok(())
 }

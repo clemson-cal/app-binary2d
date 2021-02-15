@@ -1,4 +1,10 @@
+use std::{
+    ffi::OsStr,
+    fs::read_to_string,
+    path::Path,
+};
 use serde::{Serialize, Deserialize};
+use crate::io;
 use crate::mesh::Mesh;
 use crate::model::{InfiniteDiskModel, FiniteDiskModel};
 use crate::physics::{Isothermal, Euler};
@@ -134,10 +140,10 @@ pub struct App {
 // ============================================================================
 impl InitialModel for AnyModel {
 
-    fn primitive_at(&self, hydro: &AnyHydro, r: f64) -> AnyPrimitive {
+    fn primitive_at(&self, hydro: &AnyHydro, xy: (f64, f64)) -> AnyPrimitive {
         match self {
-            Self::FiniteDisk  (model) => model.primitive_at(hydro, r),
-            Self::InfiniteDisk(model) => model.primitive_at(hydro, r),
+            Self::FiniteDisk  (model) => model.primitive_at(hydro, xy),
+            Self::InfiniteDisk(model) => model.primitive_at(hydro, xy),
         }
     }
 
@@ -192,7 +198,7 @@ impl App {
     /**
      * Construct a new App instance from a user configuration.
      */
-    pub fn from_config(mut config: Configuration) -> anyhow::Result<Self> {
+    pub fn from_config(config: Configuration) -> anyhow::Result<Self> {
 
         // for extra_config_str in std::env::args().skip_while(|s| !s.contains('=')) {
         //     if extra_config_str.ends_with(".yaml") {
@@ -215,28 +221,17 @@ impl App {
         Ok(Self{state, tasks, config, version: VERSION_AND_BUILD.to_string()})
     }
 
-    // /**
-    //  * Construct a new App instance from a file: may be a config.yaml or a
-    //  * chkpt.0000.cbor.
-    //  */
-    // pub fn from_file(filename: &str) -> Result<Self, Error> {
-    //     match Path::new(&filename).extension().and_then(OsStr::to_str) {
-    //         Some("yaml") => Self::from_config(serde_yaml::from_str(&read_to_string(filename)?)?),
-    //         Some("cbor") => Ok(io::read_cbor(filename)?),
-    //         _ => Err(Error::UnknownInputType(filename.to_string())),
-    //     }
-    // }
-
-    // /**
-    //  * Construct a new App instance from a preset (hard-coded) configuration
-    //  * name, or otherwise an input file if no matching preset is found.
-    //  */
-    // pub fn from_preset_or_file(input: &str) -> Result<Self, Error> {
-    //     match input {
-    //         "jet_in_cloud" => Self::from_config(serde_yaml::from_str(std::include_str!("../setups/jet_in_cloud.yaml"))?),
-    //         _ => Self::from_file(input),
-    //     }
-    // }
+    /**
+     * Construct a new App instance from a file: may be a config.yaml or a
+     * chkpt.0000.cbor.
+     */
+    pub fn from_file(filename: &str) -> anyhow::Result<Self> {
+        match Path::new(&filename).extension().and_then(OsStr::to_str) {
+            Some("yaml") => Self::from_config(serde_yaml::from_str(&read_to_string(filename)?)?),
+            Some("cbor") => Ok(io::read_cbor(filename)?),
+            _ => anyhow::bail!("unknown input file type {}", filename.to_string()),
+        }
+    }
 
     /**
      * Construct a new App instance from references to the member variables.

@@ -98,7 +98,7 @@ pub trait InitialModel: Clone {
     /**
      * Return the hydrodynamics state at a given cylindrical radius
      */
-    fn primitive_at(&self, hydro: &AnyHydro, _: f64) -> AnyPrimitive;
+    fn primitive_at(&self, hydro: &AnyHydro, xy: (f64, f64)) -> AnyPrimitive;
 
     /**
      * Validate the model
