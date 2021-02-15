@@ -1,10 +1,13 @@
 mod app;
+mod disks;
 mod io;
 mod mesh;
-mod scheme;
-mod traits;
+mod model;
 mod physics;
-mod disks;
+mod scheme;
+mod state;
+mod tasks;
+mod traits;
 
 
 
@@ -104,7 +107,7 @@ fn main() -> anyhow::Result<()>
     let hydro: String = model.get("hydro").into();
 
     match hydro.as_str() {
-        "iso"   => run(Driver::new(Isothermal::new()), app, model),
+        "iso"   => run(Driver::new(Isothermal::new(model.get("mach_number").into())), app, model),
         "euler" => run(Driver::new(Euler::new()), app, model),
         _       => Err(anyhow::anyhow!("no such hydrodynamics mode '{}'", hydro))
     }

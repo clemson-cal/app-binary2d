@@ -4,6 +4,9 @@ use kepler_two_body::{
     OrbitalElements,
     OrbitalState,
 };
+use crate::app::{
+    AnyPrimitive,
+};
 use crate::mesh::{
     Mesh,
 };
@@ -142,6 +145,7 @@ pub struct SourceTerms {
 // ============================================================================
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Isothermal {
+    pub mach_number: f64
 }
 
 
@@ -373,8 +377,8 @@ impl Solver {
 
 // ============================================================================
 impl Isothermal {
-    pub fn new() -> Self {
-        Self{}
+    pub fn new(mach_number: f64) -> Self {
+        Self{mach_number}
     }
 }
 
@@ -389,6 +393,10 @@ impl Hydrodynamics for Isothermal
 
     fn gamma_law_index(&self) -> f64 {
         1.0
+    }
+
+    fn global_mach_number(&self) -> Option<f64> {
+        Some(self.mach_number)
     }
 
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive {
@@ -408,6 +416,14 @@ impl Hydrodynamics for Isothermal
 
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved {
         p.to_conserved()
+    }
+
+    fn from_any(&self, p: &AnyPrimitive) -> Self::Primitive {
+        hydro_iso2d::Primitive(
+            p.surface_density,
+            p.velocity_x,
+            p.velocity_y,
+        )
     }
 
     fn source_terms(
@@ -494,6 +510,10 @@ impl Hydrodynamics for Euler {
         self.gamma_law_index
     }
 
+    fn global_mach_number(&self) -> Option<f64> {
+        None
+    }
+
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive {
         godunov_core::piecewise_linear::plm_gradient4(theta, a, b, c)
     }
@@ -513,6 +533,15 @@ impl Hydrodynamics for Euler {
         p.to_conserved(self.gamma_law_index)
     }
 
+    fn from_any(&self, p: &AnyPrimitive) -> Self::Primitive {
+        hydro_euler::euler_2d::Primitive(
+            p.surface_density,
+            p.velocity_x,
+            p.velocity_y,
+            p.surface_pressure,
+        )
+    }
+
     fn source_terms(
         &self,
         solver: &Solver,
@@ -528,7 +557,7 @@ impl Hydrodynamics for Euler {
         let vx        = primitive.velocity_1();
         let vy        = primitive.velocity_2();
 
-        ItemizedChange{
+        ItemizedChange {
             grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
             grav2:   hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
             sink1:   conserved * (-st.sink_rate1 * dt),

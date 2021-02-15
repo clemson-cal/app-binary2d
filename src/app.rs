@@ -1,8 +1,10 @@
 use serde::{Serialize, Deserialize};
-use crate::scheme::State;
-use crate::traits::Hydrodynamics;
-use crate::physics::{Isothermal, Euler};
 use crate::mesh::Mesh;
+use crate::model::{InfiniteDiskModel, FiniteDiskModel};
+use crate::physics::{Isothermal, Euler};
+use crate::scheme::State;
+use crate::tasks::Tasks;
+use crate::traits::Hydrodynamics;
 
 
 
@@ -33,23 +35,35 @@ pub enum AnyState {
 
 
 /**
+ * Any of the simulation initial model types
+ */
+#[derive(Clone, Serialize, Deserialize, derive_more::From)]
+pub enum AnyModel {
+    InfiniteDisk(InfiniteDiskModel),
+    FiniteDisk(FiniteDiskModel),
+}
+
+
+
+
+/**
  * Description of the hydrodynamics state that is compatible with any of the
  * supported hydro systems
  */
 #[derive(Serialize, Deserialize)]
-struct AnyPrimitive {
+pub struct AnyPrimitive {
 
     /// X-component of gas velocity
-    velocity_x: f64,
+    pub velocity_x: f64,
 
     /// Y-component of gas velocity
-    velocity_y: f64,
+    pub velocity_y: f64,
 
     /// Vertically integrated mass density, Sigma
-    surface_density: f64,
+    pub surface_density: f64,
 
     /// Vertically integrated gas pressure, P
-    surface_pressure: f64,
+    pub surface_pressure: f64,
 }
 
 
@@ -86,7 +100,7 @@ pub struct Control {
 #[serde(deny_unknown_fields)]
 pub struct Configuration {
     pub hydro: AnyHydro,
-    // pub model: Model,
+    pub model: AnyModel,
     pub mesh: Mesh,
     pub control: Control,
 }
@@ -100,7 +114,7 @@ pub struct Configuration {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct App {
     pub state: AnyState,
-    // pub tasks: Tasks,
+    pub tasks: Tasks,
     pub config: Configuration,
     pub version: String,
 }
