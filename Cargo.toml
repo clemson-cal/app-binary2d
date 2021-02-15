@@ -31,7 +31,6 @@ hydro-iso2d     = { git = "https://github.com/clemson-cal/hydro-iso2d",     feat
 hydro-euler     = { git = "https://github.com/clemson-cal/hydro-euler",     features = ["serde"] }
 godunov-core    = { git = "https://github.com/clemson-cal/godunov-core" }
 ndarray-ops     = { git = "https://github.com/clemson-cal/ndarray-ops" }
-io-logical      = { path = "io-logical" }
 
 
 [profile.release]
