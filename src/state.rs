@@ -5,18 +5,20 @@ use serde::{Serialize, Deserialize};
 use ndarray::{ArcArray, Ix2};
 use kepler_two_body::OrbitalElements;
 use godunov_core::runge_kutta;
-use crate::app::AnyModel;
-use crate::app::AnyHydro;
-use crate::app::AnyPrimitive;
+use crate::app::{
+    AnyHydro,
+    AnyModel,
+    AnyPrimitive,
+};    
+use crate::mesh::{
+    BlockIndex,
+    Mesh,
+};
 use crate::traits::{
     Conserved,
     Hydrodynamics,
     InitialModel,
     Zeros,
-};
-use crate::mesh::{
-    BlockIndex,
-    Mesh,
 };
 
 
@@ -124,7 +126,19 @@ impl<C: Conserved> State<C> {
 
 
 // ============================================================================
-impl<Data> Zeros for ItemizedChange<Data> where Data: Zeros {
+impl<Data> ItemizedChange<Data>
+where
+    Data: std::ops::Add<Output = Data>
+{
+    pub fn total(self) -> Data {
+        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling + self.fake_mass
+    }
+}
+
+impl<Data> Zeros for ItemizedChange<Data>
+where
+    Data: Zeros
+{
     fn zeros() -> Self {
         Self {
             sink1:     Data::zeros(),
@@ -216,7 +230,6 @@ impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C> {
 
 
 
-
 // ============================================================================
 impl<C> ItemizedChange<C>
 where C: Conserved
@@ -233,12 +246,12 @@ where C: Conserved
 
     pub fn perturbation(&self, time: f64, elements: OrbitalElements) -> ItemizedChange<OrbitalElements> {
         ItemizedChange {
-            sink1:    Self::pert1(time, self.sink1.mass_and_momentum(), elements),
-            sink2:    Self::pert2(time, self.sink2.mass_and_momentum(), elements),
-            grav1:    Self::pert1(time, self.grav1.mass_and_momentum(), elements),
-            grav2:    Self::pert2(time, self.grav2.mass_and_momentum(), elements),
-            buffer:   OrbitalElements::zeros(),
-            cooling:  OrbitalElements::zeros(),
+            sink1:     Self::pert1(time, self.sink1.mass_and_momentum(), elements),
+            sink2:     Self::pert2(time, self.sink2.mass_and_momentum(), elements),
+            grav1:     Self::pert1(time, self.grav1.mass_and_momentum(), elements),
+            grav2:     Self::pert2(time, self.grav2.mass_and_momentum(), elements),
+            buffer:    OrbitalElements::zeros(),
+            cooling:   OrbitalElements::zeros(),
             fake_mass: OrbitalElements::zeros(),
         }
     }

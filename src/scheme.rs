@@ -10,17 +10,21 @@ use crate::physics::{
     Direction,
     CellData,
     HydroError,
-    ItemizedChange,
     Solver,
 };
 use crate::mesh::{
     Mesh,
     BlockIndex,
 };
+use crate::state::{
+    BlockState,
+    ItemizedChange,
+    State,
+};
 use crate::traits::{
-    Hydrodynamics,
     Conserved,
-    ItemizeData,
+    Hydrodynamics,
+    Zeros,
 };
 
 
@@ -40,103 +44,9 @@ pub struct BlockData<C: Conserved> {
 
 
 // ============================================================================
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct BlockSolution<C: Conserved> {
-    pub conserved: ArcArray<C, Ix2>,
-    pub integrated_source_terms: ItemizedChange<C>,
-    pub orbital_elements_change: ItemizedChange<OrbitalElements>,
-}
-
-
-
-
-// ============================================================================
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct BlockState<C: Conserved> {
-    pub time: f64,
-    pub iteration: Rational64,
-    pub solution: BlockSolution<C>,
-}
-
-
-
-
-// ============================================================================
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct State<C: Conserved> {
-    pub time: f64,
-    pub iteration: Rational64,
-    pub solution: Vec<BlockSolution<C>>,
-}
-
-
-
-
-// ============================================================================
 #[derive(Copy, Clone)]
 struct UpdateScheme<H: Hydrodynamics> {
     hydro: H,
-}
-
-
-
-
-// ============================================================================
-impl<C: Conserved> runge_kutta::WeightedAverage for BlockState<C> {
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self {
-        let bf = br.to_f64().unwrap();
-        Self {
-            time:      self.time      * (-bf + 1.) + s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
-            solution:  self.solution.weighted_average(br, &s0.solution),
-        }
-    }
-}
-
-impl<C: Conserved> runge_kutta::WeightedAverage for BlockSolution<C> {
-    fn weighted_average(self, br: Rational64, s0: &Self) -> Self {
-        let s1 = self;
-        let bf = br.to_f64().unwrap();
-        let u0 = s0.conserved.clone();
-        let u1 = s1.conserved.clone();
-        let t0 = &s0.integrated_source_terms;
-        let t1 = &s1.integrated_source_terms;
-        let e0 = &s0.orbital_elements_change;
-        let e1 = &s1.orbital_elements_change;
-        BlockSolution {
-            conserved: u1 * (-bf + 1.) + u0 * bf,
-            integrated_source_terms: t1.weighted_average(br, t0),
-            orbital_elements_change: e1.weighted_average(br, e0),
-        }
-    }
-}
-
-
-
-
-// ============================================================================
-#[async_trait::async_trait]
-impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C> {
-    type Runtime = tokio::runtime::Runtime;
-
-    async fn weighted_average(self, br: Rational64, s0: &Self, runtime: &Self::Runtime) -> Self {
-        use futures::future::join_all;
-        use godunov_core::runge_kutta::WeightedAverage;
-
-        let bf = br.to_f64().unwrap();
-        let s_avg = self.solution
-            .into_iter()
-            .zip(&s0.solution)
-            .map(|(s1, s0)| (s1, s0.clone()))
-            .map(|(s1, s0)| runtime.spawn(async move { s1.weighted_average(br, &s0) }))
-            .map(|f| async { f.await.unwrap() });
-
-        State {
-            time:      self.time      * (-bf + 1.) + s0.time      * bf,
-            iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
-            solution: join_all(s_avg).await,
-        }
-    }
 }
 
 
@@ -158,10 +68,10 @@ where
 
 
 // ============================================================================
-async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
+async fn try_advance_rk<H: 'static + Hydrodynamics>(
     state: State<H::Conserved>,
     hydro: H,
-    block_data: &Vec<BlockData<H::Conserved>>,
+    block_data: &HashMap<BlockIndex, BlockData<H::Conserved>>,
     mesh: &Mesh,
     solver: &Solver,
     dt: f64,
@@ -176,23 +86,23 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
     let mut fg_map = HashMap::new();
     let mut s1_vec = Vec::new();
 
-    for (solution, block) in state.solution.iter().zip(block_data) {
-        let uc = solution.conserved.clone();
-        let block = block.clone();
-        let block_index = block.index;
+
+    for index in mesh.block_indexes() {
+        let uc = state.solution[&index].conserved.clone();
+        let block = block_data[&index].clone();
         let primitive = async move {
             scheme.try_block_primitive(uc, block).map(|p| p.to_shared())
         };
-        pc_map.insert(block_index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
+        pc_map.insert(index, runtime.spawn(primitive).map(|f| f.unwrap()).shared());
     }
     let pc_map = Arc::new(pc_map);
 
-    for block in block_data {
+
+    for index in mesh.block_indexes() {
         let solver      = solver.clone();
         let mesh        = mesh.clone();
         let pc_map      = pc_map.clone();
-        let block       = block.clone();
-        let block_index = block.index;
+        let block       = block_data[&index].clone();
 
         let flux = async move {
             let pn = try_join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &pc_map[i])).await?;
@@ -200,16 +110,17 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
             let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
             Ok::<_, HydroError>((fx.to_shared(), fy.to_shared()))
         };
-        fg_map.insert(block_index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
+        fg_map.insert(index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
     }
     let fg_map = Arc::new(fg_map);
 
-    for (solution, block) in state.solution.iter().zip(block_data) {
+
+    for index in mesh.block_indexes() {
         let solver   = solver.clone();
         let mesh     = mesh.clone();
         let fg_map   = fg_map.clone();
-        let block    = block.clone();
-        let solution = solution.clone();
+        let block    = block_data[&index].clone();
+        let solution = state.solution[&index].clone();
 
         let s1 = async move {
             let (fx, fy) = if ! solver.need_flux_communication() {
@@ -222,45 +133,23 @@ async fn try_advance_tokio_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            Ok::<_, HydroError>(scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt))
+            Ok::<_, HydroError>((index, scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt)))
         };
         s1_vec.push(runtime.spawn(s1).map(|f| f.unwrap()))
     }
 
-    let solution = join_all(s1_vec).await
-        .iter()
-        .cloned()
-        .collect::<Result<_, _>>()
-        .map_err(|e| e.with_orbital_state(solver.orbital_elements.orbital_state_from_time(time)))?;
+
+    let solution: Result<HashMap<_, _>, _> = join_all(s1_vec)
+        .await
+        .into_iter()
+        .collect();
+
 
     Ok(State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        solution: solution,
+        solution: solution?,
     })
-}
-
-
-
-
-// ============================================================================
-pub fn advance_tokio<H: 'static + Hydrodynamics>(
-    mut state:  State<H::Conserved>,
-    hydro:      H,
-    block_data: &Vec<BlockData<H::Conserved>>,
-    mesh:       &Mesh,
-    solver:     &Solver,
-    dt:         f64,
-    fold:       usize,
-    runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
-{
-    let try_update = |state| try_advance_tokio_rk(state, hydro, block_data, mesh, solver, dt, runtime);
-    let rk = solver.runge_kutta();
-
-    for _ in 0..fold {
-        state = runtime.block_on(rk.try_advance_async(state, try_update, runtime))?;
-    }
-    Ok(state)
 }
 
 
@@ -276,7 +165,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn try_block_primitive(
         &self,
         conserved: ArcArray<H::Conserved, Ix2>,
-        block: BlockData<H::Conserved>) -> Result<Array<H::Primitive, Ix2>, HydroError>
+        block: BlockData<H::Conserved>
+        ) -> Result<Array<H::Primitive, Ix2>, HydroError>
     {
         let x: Result<Vec<_>, _> = conserved
             .iter()
@@ -335,14 +225,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
     fn compute_block_updated_solution(
         &self,
-        solution: BlockSolution<H::Conserved>,
+        solution: BlockState<H::Conserved>,
         fx:       ArcArray<H::Conserved, Ix2>,
         fy:       ArcArray<H::Conserved, Ix2>,
         block:    &BlockData<H::Conserved>,
         solver:   &Solver,
         mesh:     &Mesh,
         time:     f64,
-        dt:       f64) -> BlockSolution<H::Conserved>
+        dt:       f64) -> BlockState<H::Conserved>
     {
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
@@ -363,17 +253,40 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             let (x, y)  = block.cell_centers[i];
             let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
 
-            ds.add_mut(&sources);
+            ds = ds + sources;
             uc + du + sources.total()
         });
 
-        let ds = ds.mul(dx * dy);
+        let ds = ds * (dx * dy);
         let de = ds.perturbation(time, solver.orbital_elements);
 
-        BlockSolution {
+        BlockState {
             conserved: u1,
-            integrated_source_terms: solution.integrated_source_terms.add(&ds),
-            orbital_elements_change: solution.orbital_elements_change.add(&de),
+            integrated_source_terms: solution.integrated_source_terms + ds,
+            orbital_elements_change: solution.orbital_elements_change + de,
         }
     }
+}
+
+
+
+
+// ============================================================================
+pub fn advance<H: 'static + Hydrodynamics>(
+    mut state:  State<H::Conserved>,
+    hydro:      H,
+    block_data: &HashMap<BlockIndex, BlockData<H::Conserved>>,
+    mesh:       &Mesh,
+    solver:     &Solver,
+    dt:         f64,
+    fold:       usize,
+    runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
+{
+    let try_update = |state| try_advance_rk(state, hydro, block_data, mesh, solver, dt, runtime);
+    let rk = solver.runge_kutta();
+
+    for _ in 0..fold {
+        state = runtime.block_on(rk.try_advance_async(state, try_update, runtime))?;
+    }
+    Ok(state)
 }

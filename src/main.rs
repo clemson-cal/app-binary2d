@@ -6,6 +6,7 @@ mod io;
 mod mesh;
 mod model;
 mod physics;
+mod scheme;
 mod state;
 mod tasks;
 mod traits;
