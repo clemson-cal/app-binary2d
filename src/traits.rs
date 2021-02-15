@@ -1,11 +1,11 @@
 use std::ops::{Add, Sub, Mul, Div};
 use kepler_two_body::OrbitalState;
 use crate::app::AnyPrimitive;
+use crate::state::ItemizedChange;
 use crate::physics::{
     CellData,
     Direction,
     HydroErrorType,
-    ItemizedChange,
     Solver,
 };
 
@@ -27,14 +27,7 @@ pub trait Zeros {
 
 
 // ============================================================================
-pub trait ItemizeData: Zeros + Arithmetic + Copy + Clone + hdf5::H5Type {
-}
-
-
-
-
-// ============================================================================
-pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + ItemizeData + Zeros {
+pub trait Conserved: Clone + Copy + Send + Sync + Zeros + Arithmetic + 'static {
     fn mass_and_momentum(&self) -> (f64, f64, f64);
 }
 
@@ -42,7 +35,7 @@ pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + ItemizeData + Z
 
 
 // ============================================================================
-pub trait Primitive: Clone + Copy + Send + Sync + hdf5::H5Type {
+pub trait Primitive: Clone + Copy + Send + Sync {
     fn velocity_x(self) -> f64;
     fn velocity_y(self) -> f64;
     fn mass_density(self) -> f64;

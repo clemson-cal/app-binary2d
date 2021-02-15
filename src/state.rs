@@ -210,3 +210,34 @@ impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C> {
         }
     }
 }
+
+
+
+
+
+// ============================================================================
+impl<C> ItemizedChange<C>
+where C: Conserved
+{
+    fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
+        let (dm, dpx, dpy) = delta;
+        elements.perturb(time, -dm, 0.0, -dpx, 0.0, -dpy, 0.0).unwrap() - elements
+    }
+
+    fn pert2(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
+        let (dm, dpx, dpy) = delta;
+        elements.perturb(time, 0.0, -dm, 0.0, -dpx, 0.0, -dpy).unwrap() - elements
+    }
+
+    pub fn perturbation(&self, time: f64, elements: OrbitalElements) -> ItemizedChange<OrbitalElements> {
+        ItemizedChange {
+            sink1:    Self::pert1(time, self.sink1.mass_and_momentum(), elements),
+            sink2:    Self::pert2(time, self.sink2.mass_and_momentum(), elements),
+            grav1:    Self::pert1(time, self.grav1.mass_and_momentum(), elements),
+            grav2:    Self::pert2(time, self.grav2.mass_and_momentum(), elements),
+            buffer:   OrbitalElements::zeros(),
+            cooling:  OrbitalElements::zeros(),
+            fake_mass: OrbitalElements::zeros(),
+        }
+    }
+}

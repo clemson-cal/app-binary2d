@@ -10,11 +10,13 @@ use crate::app::{
 use crate::mesh::{
     Mesh,
 };
+use crate::state::{
+    ItemizedChange,
+};
 use crate::traits::{
     Arithmetic,
     Conserved,
     Hydrodynamics,
-    ItemizeData,
     Primitive,
     Zeros,
 };
@@ -83,22 +85,6 @@ pub struct CellData<'a, P: Primitive> {
 pub enum Direction {
     X,
     Y,
-}
-
-
-
-
-// ============================================================================
-#[derive(Clone, Copy, hdf5::H5Type, serde::Serialize, serde::Deserialize)]
-#[repr(C)]
-pub struct ItemizedChange<C: ItemizeData> {
-    pub sink1:   C,
-    pub sink2:   C,
-    pub grav1:   C,
-    pub grav2:   C,
-    pub buffer:  C,
-    pub cooling: C,
-    pub fake_mass: C,
 }
 
 
@@ -197,90 +183,6 @@ impl<'a, P: Primitive> CellData<'_, P> {
         {
             X => self.gx,
             Y => self.gy,
-        }
-    }
-}
-
-
-
-
-// ============================================================================
-impl<C: ItemizeData> ItemizedChange<C> {
-
-    pub fn zeros() -> Self {
-        Self {
-            sink1:     C::zeros(),
-            sink2:     C::zeros(),
-            grav1:     C::zeros(),
-            grav2:     C::zeros(),
-            buffer:    C::zeros(),
-            cooling:   C::zeros(),
-            fake_mass: C::zeros(),
-        }
-    }
-
-    pub fn total(&self) -> C {
-        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling + self.fake_mass
-    }
-
-    pub fn add_mut(&mut self, s0: &Self) {
-        self.sink1     = self.sink1     + s0.sink1;
-        self.sink2     = self.sink2     + s0.sink2;
-        self.grav1     = self.grav1     + s0.grav1;
-        self.grav2     = self.grav2     + s0.grav2;
-        self.buffer    = self.buffer    + s0.buffer;
-        self.cooling   = self.cooling   + s0.cooling;
-        self.fake_mass = self.fake_mass + s0.fake_mass;
-    }
-
-    pub fn mul_mut(&mut self, s: f64) {
-        self.sink1     = self.sink1     * s;
-        self.sink2     = self.sink2     * s;
-        self.grav1     = self.grav1     * s;
-        self.grav2     = self.grav2     * s;
-        self.buffer    = self.buffer    * s;
-        self.cooling   = self.cooling   * s;
-        self.fake_mass = self.fake_mass * s;
-    }
-
-    pub fn add(&self, s0: &Self) -> Self {
-        let mut result = self.clone();
-        result.add_mut(s0);
-        return result;
-    }
-
-    pub fn mul(&self, s: f64) -> Self {
-        let mut result = self.clone();
-        result.mul_mut(s);
-        return result;
-    }
-}
-
-
-
-
-// ============================================================================
-impl<C: ItemizeData> ItemizedChange<C> where C: Conserved {
-
-    fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
-        let (dm, dpx, dpy) = delta;
-        elements.perturb(time, -dm, 0.0, -dpx, 0.0, -dpy, 0.0).unwrap() - elements
-    }
-
-    fn pert2(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
-        let (dm, dpx, dpy) = delta;
-        elements.perturb(time, 0.0, -dm, 0.0, -dpx, 0.0, -dpy).unwrap() - elements
-    }
-
-    pub fn perturbation(&self, time: f64, elements: OrbitalElements) -> ItemizedChange<OrbitalElements> {
-        ItemizedChange {
-            sink1:    Self::pert1(time, self.sink1.mass_and_momentum(), elements),
-            sink2:    Self::pert2(time, self.sink2.mass_and_momentum(), elements),
-            grav1:    Self::pert1(time, self.grav1.mass_and_momentum(), elements),
-            grav2:    Self::pert2(time, self.grav2.mass_and_momentum(), elements),
-            buffer:   OrbitalElements::zeros(),
-            cooling:  OrbitalElements::zeros(),
-            fake_mass: OrbitalElements::zeros(),
         }
     }
 }
@@ -605,14 +507,6 @@ impl Hydrodynamics for Euler {
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
 impl Arithmetic for kepler_two_body::OrbitalElements {}
-
-
-
-
-// ============================================================================
-impl ItemizeData for hydro_iso2d::Conserved {}
-impl ItemizeData for hydro_euler::euler_2d::Conserved {}
-impl ItemizeData for kepler_two_body::OrbitalElements {}
 
 
 

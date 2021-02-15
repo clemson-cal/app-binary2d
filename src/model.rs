@@ -4,6 +4,7 @@ use crate::traits::{Hydrodynamics, InitialModel};
 
 
 
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FiniteDiskModel {
 
@@ -13,6 +14,7 @@ pub struct FiniteDiskModel {
 
     mach_number: Option<f64>,
 }
+
 
 
 
@@ -26,14 +28,30 @@ pub struct InfiniteDiskModel {
 
 
 
+
+// ============================================================================
 impl InitialModel for FiniteDiskModel {
-    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, _: f64) -> AnyPrimitive { todo!() }
-    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> { Ok(()) }
+
+    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, _: f64) -> AnyPrimitive {
+        todo!()
+    }
+
+    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 
 
+
+// ============================================================================
 impl InitialModel for InfiniteDiskModel {
-    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, _: f64) -> AnyPrimitive { todo!() }
-    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> { Ok(()) }
+
+    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, _: f64) -> AnyPrimitive {
+        todo!()
+    }
+
+    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
