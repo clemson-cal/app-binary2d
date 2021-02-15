@@ -1,3 +1,4 @@
+use serde::{Serialize, Deserialize};
 use godunov_core::runge_kutta;
 use kepler_two_body::{
     OrbitalElements,
@@ -42,7 +43,7 @@ impl HydroErrorType {
     binary.map_or(0.0, |s| s.0.position_x()),
     binary.map_or(0.0, |s| s.0.position_y()),
     binary.map_or(0.1, |s| s.1.position_x()),
-    binary.map_or(0.1, |s| s.1.position_y())
+    binary.map_or(0.1, |s| s.1.position_y()),
 )]
 pub struct HydroError {
     source: HydroErrorType,
@@ -85,7 +86,7 @@ pub enum Direction {
 
 
 // ============================================================================
-#[derive(Clone, Copy, hdf5::H5Type)]
+#[derive(Clone, Copy, hdf5::H5Type, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct ItemizedChange<C: ItemizeData> {
     pub sink1:   C,
@@ -139,7 +140,7 @@ pub struct SourceTerms {
 
 
 // ============================================================================
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Isothermal {
 }
 
@@ -147,7 +148,7 @@ pub struct Isothermal {
 
 
 // ============================================================================
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct Euler {
     pub gamma_law_index: f64,
 }
@@ -157,6 +158,7 @@ pub struct Euler {
 
 // ============================================================================
 impl<'a, P: Primitive> CellData<'_, P> {
+
     pub fn new(pc: &'a P, gx: &'a P, gy: &'a P) -> CellData<'a, P> {
         CellData{
             pc: pc,
@@ -199,8 +201,8 @@ impl<'a, P: Primitive> CellData<'_, P> {
 
 
 // ============================================================================
-impl<C: ItemizeData> ItemizedChange<C>
-{
+impl<C: ItemizeData> ItemizedChange<C> {
+
     pub fn zeros() -> Self {
         Self {
             sink1:     C::zeros(),
@@ -254,8 +256,8 @@ impl<C: ItemizeData> ItemizedChange<C>
 
 
 // ============================================================================
-impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
-{
+impl<C: ItemizeData> ItemizedChange<C> where C: Conserved {
+
     fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
         let (dm, dpx, dpy) = delta;
         elements.perturb(time, -dm, 0.0, -dpx, 0.0, -dpy, 0.0).unwrap() - elements
@@ -283,8 +285,8 @@ impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
 
 
 // ============================================================================
-impl Solver
-{
+impl Solver {
+
     pub fn runge_kutta(&self) -> runge_kutta::RungeKuttaOrder {
         use std::convert::TryFrom;
         runge_kutta::RungeKuttaOrder::try_from(self.rk_order).expect("illegal RK order")
@@ -346,7 +348,7 @@ impl Solver
         let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
         let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
 
-        SourceTerms{
+        SourceTerms {
             fx1: fx1,
             fy1: fy1,
             fx2: fx2,
@@ -484,6 +486,7 @@ impl Euler {
 
 // ============================================================================
 impl Hydrodynamics for Euler {
+
     type Conserved = hydro_euler::euler_2d::Conserved;
     type Primitive = hydro_euler::euler_2d::Primitive;
 

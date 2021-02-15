@@ -40,7 +40,7 @@ pub struct BlockData<C: Conserved> {
 
 
 // ============================================================================
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSolution<C: Conserved> {
     pub conserved: ArcArray<C, Ix2>,
     pub integrated_source_terms: ItemizedChange<C>,
@@ -51,7 +51,7 @@ pub struct BlockSolution<C: Conserved> {
 
 
 // ============================================================================
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct BlockState<C: Conserved> {
     pub time: f64,
     pub iteration: Rational64,
@@ -62,7 +62,7 @@ struct BlockState<C: Conserved> {
 
 
 // ============================================================================
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct State<C: Conserved> {
     pub time: f64,
     pub iteration: Rational64,

@@ -1,24 +1,47 @@
 use ndarray::{Axis, Array, Ix1, Ix2};
+use ndarray_ops::{adjacent_mean, cartesian_product2};
 
 
 
 
-// ============================================================================
+/**
+ * Type alias to identify a block position in the mesh
+ */
 pub type BlockIndex = (usize, usize);
 
 
 
 
-// ============================================================================
-#[derive(Clone)]
+/**
+ * The mesh. It is block-decomposed and presently at a uniform refinement level,
+ * although this may change soon.
+ */
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Mesh {
+
+
+    /// Number of mesh blocks per direction. For example if num_blocks=4 then
+    /// the mesh contains a total of 16 blocks.
     pub num_blocks: usize,
+
+
+    /// Number of grid cells, per block, per direction. For example if
+    /// block_size=32 then there are 1024 zones in each block.
     pub block_size: usize,
+
+
+    /// The distance from the origin (at the center of the domain) to the
+    /// edge. The domain width and height are twice this value from
+    /// edge-to-edge.
     pub domain_radius: f64,
 }
 
-impl Mesh
-{
+
+
+
+// ============================================================================
+impl Mesh {
+
     pub fn block_length(&self) -> f64 {
         2.0 * self.domain_radius / (self.num_blocks as f64)
     }
@@ -38,7 +61,6 @@ impl Mesh
     }
 
     pub fn cell_centers(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2> {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
         let (xv, yv) = self.block_vertices(block_index);
         let xc = adjacent_mean(&xv, Axis(0));
         let yc = adjacent_mean(&yv, Axis(0));
@@ -46,14 +68,12 @@ impl Mesh
     }
 
     pub fn face_centers_x(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2> {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
         let (xv, yv) = self.block_vertices(block_index);
         let yc = adjacent_mean(&yv, Axis(0));
         return cartesian_product2(xv, yc);
     }
 
     pub fn face_centers_y(&self, block_index: BlockIndex) -> Array<(f64, f64), Ix2> {
-        use ndarray_ops::{adjacent_mean, cartesian_product2};
         let (xv, yv) = self.block_vertices(block_index);
         let xc = adjacent_mean(&xv, Axis(0));
         return cartesian_product2(xc, yv);

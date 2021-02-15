@@ -1,3 +1,4 @@
+mod app;
 mod io;
 mod mesh;
 mod scheme;
@@ -525,12 +526,12 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
 // ============================================================================
 impl Solver {
     fn new(model: &Form, app: &App) -> Self {
-        let one_body: bool = model.get("one_body").into();
 
+        let one_body: bool = model.get("one_body").into();
         let a = if one_body {1e-9} else {1.0};
         let m = 1.0;
-        let q:f64 = model.get("mass_ratio").into();
-        let e:f64 = model.get("eccentricity").into();
+        let q: f64 = model.get("mass_ratio").into();
+        let e: f64 = model.get("eccentricity").into();
 
         Self {
             buffer_rate:      model.get("buffer_rate").into(),
