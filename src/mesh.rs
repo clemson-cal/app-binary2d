@@ -91,12 +91,11 @@ impl Mesh {
         self.num_blocks * self.num_blocks * self.block_size * self.block_size
     }
 
-    pub fn block_indexes(&self) -> Vec<BlockIndex> {
+    pub fn block_indexes<'a>(&'a self) -> impl Iterator<Item = BlockIndex> + 'a {
         (0..self.num_blocks)
-        .map(|i| (0..self.num_blocks)
+        .map(move |i| (0..self.num_blocks)
         .map(move |j| (i, j)))
         .flatten()
-        .collect()
     }
 
     pub fn neighbor_block_indexes(&self, block_index: BlockIndex) -> [[BlockIndex; 3]; 3] {

@@ -34,7 +34,7 @@ pub trait ItemizeData: Zeros + Arithmetic + Copy + Clone + hdf5::H5Type {
 
 
 // ============================================================================
-pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + ItemizeData {
+pub trait Conserved: Clone + Copy + Send + Sync + hdf5::H5Type + ItemizeData + Zeros {
     fn mass_and_momentum(&self) -> (f64, f64, f64);
 }
 

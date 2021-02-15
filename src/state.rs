@@ -9,7 +9,7 @@ use crate::traits::{
     Conserved,
     Hydrodynamics,
     InitialModel,
-    ItemizeData,
+    Zeros,
 };
 use crate::mesh::{
     BlockIndex,
@@ -24,7 +24,7 @@ use crate::mesh::{
  * different types of simulation source terms
  */
 #[derive(Clone, Copy, Serialize, Deserialize, derive_more::Add, derive_more::Mul)]
-pub struct ItemizedChange<Data: ItemizeData> {
+pub struct ItemizedChange<Data> {
     pub sink1:     Data,
     pub sink2:     Data,
     pub grav1:     Data,
@@ -70,21 +70,19 @@ impl<C: Conserved> BlockState<C> {
      * Generate a block state from the given initial model, hydrodynamics
      * instance and grid geometry.
      */
-    pub fn from_model<M, H>(_model: &M, _hydro: &H, _mesh: &Mesh, _time: f64) -> Self
+    pub fn from_model<M, H>(model: &M, hydro: &H, mesh: &Mesh, index: BlockIndex) -> Self
     where
         M: InitialModel,
         H: Hydrodynamics<Conserved = C>
     {
-        // let scalar      = geometry.cell_centers.mapv(|c| model.scalar_at(c, time));
-        // let primitive   = geometry.cell_centers.mapv(|c| hydro.interpret(&model.primitive_at(c, time)));
-        // let conserved   = primitive.mapv(|p| hydro.to_conserved(p)) * &geometry.cell_volumes;
-        // let scalar_mass = conserved.mapv(|u| u.lab_frame_mass()) * scalar;
+        let norm = |(x, y)| f64::sqrt(x * x + y * y);
+        let cons = |r| hydro.to_conserved(hydro.from_any(&model.primitive_at(hydro, r)));
 
-        // Self {
-        //     conserved: conserved.to_shared(),
-        //     scalar_mass: scalar_mass.to_shared()
-        // }
-        panic!("")
+        Self {
+            conserved: mesh.cell_centers(index).mapv(norm).mapv(cons).to_shared(),
+            integrated_source_terms: ItemizedChange::zeros(),
+            orbital_elements_change: ItemizedChange::zeros(),
+        }
     }
 }
 
@@ -92,55 +90,51 @@ impl<C: Conserved> BlockState<C> {
 
 
 // ============================================================================
-// impl<C: Conserved> State<C> {
+impl<C: Conserved> State<C> {
 
-//     /**
-//      * Generate a state from the given initial model, hydrodynamics instance,
-//      * and map of grid geometry.
-//      */
-//     pub fn from_model<M, H>(model: &M, hydro: &H, geometry: &HashMap<BlockIndex, GridGeometry>, time: f64) -> Self
-//     where
-//         M: InitialModel,
-//         H: Hydrodynamics<Conserved = C> {
+    /**
+     * Generate a state from the given initial model, hydrodynamics instance,
+     * and map of grid geometry.
+     */
+    pub fn from_model<M, H>(model: &M, hydro: &H, mesh: &Mesh) -> Self
+    where
+        M: InitialModel,
+        H: Hydrodynamics<Conserved = C>
+    {
+        let time = 0.0;
+        let iteration = Rational64::new(0, 1);
+        let solution = mesh
+            .block_indexes()
+            .map(|index| (index, BlockState::from_model(model, hydro, mesh, index)))
+            .collect::<HashMap<_, _>>();
+        Self{time, iteration, solution}
+    }
 
-//         let iteration = Rational64::new(0, 1);
-//         let solution = geometry.iter().map(|(&i, g)| (i, BlockState::from_model(model, hydro, g, time))).collect();
+    /**
+     * Return the total number of grid zones in this state.
+     */
+    pub fn total_zones(&self) -> usize {
+        self.solution.values().map(|solution| solution.conserved.len()).sum()
+    }
+}
 
-//         Self{time, iteration, solution}
-//     }
 
-//     /**
-//      * Return the total number of grid zones in this state.
-//      */
-//     pub fn total_zones(&self) -> usize {
-//         self.solution.values().map(|solution| solution.conserved.len()).sum()
-//     }
 
-//     /**
-//      * Return the indexes of "ghost blocks" just inside and outside the mesh
-//      * radial extent.
-//      */
-//     pub fn inner_outer_boundary_indexes(&self) -> (BlockIndex, BlockIndex) {
-//         self.min_max_block_indexes_offset_by(1)
-//     }
 
-//     /**
-//      * Return the indexes of the innermost and outermost block indexes.
-//      */
-//     pub fn inner_outer_block_indexes(&self) -> (BlockIndex, BlockIndex) {
-//         self.min_max_block_indexes_offset_by(0)
-//     }
-
-//     fn min_max_block_indexes_offset_by(&self, delta: i32) -> (BlockIndex, BlockIndex) {
-//         let mut min = (i32::MAX, 0);
-//         let mut max = (i32::MIN, 0);
-//         for i in self.solution.keys() {
-//             min = (min.0.min(i.0 - delta), min.1);
-//             max = (max.0.max(i.0 + delta), max.1);
-//         }
-//         (min, max)
-//     }
-// }
+// ============================================================================
+impl<Data> Zeros for ItemizedChange<Data> where Data: Zeros {
+    fn zeros() -> Self {
+        Self {
+            sink1:     Data::zeros(),
+            sink2:     Data::zeros(),
+            grav1:     Data::zeros(),
+            grav2:     Data::zeros(),
+            buffer:    Data::zeros(),
+            cooling:   Data::zeros(),
+            fake_mass: Data::zeros(),
+        }
+    }
+}
 
 
 

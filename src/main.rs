@@ -495,8 +495,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
     fn initial_state(&self, mesh: &Mesh, model: &Form) -> anyhow::Result<State<System::Conserved>> {
         let solution: anyhow::Result<_> = mesh
             .block_indexes()
-            .iter()
-            .map(|&i| self.initial_solution(i, mesh, model))
+            .map(|i| self.initial_solution(i, mesh, model))
             .collect();
 
         Ok(State{
@@ -511,7 +510,7 @@ impl<System: Hydrodynamics + InitialModel> Driver<System> where System::Conserve
     }
 
     fn block_data(&self, mesh: &Mesh, model: &Form) -> anyhow::Result<Vec<BlockData<System::Conserved>>> {
-        mesh.block_indexes().iter().map(|&block_index| {
+        mesh.block_indexes().map(|block_index| {
             Ok(BlockData{
                 cell_centers:      mesh.cell_centers(block_index).to_shared(),
                 face_centers_x:    mesh.face_centers_x(block_index).to_shared(),

@@ -50,7 +50,7 @@ pub enum AnyModel {
  * Description of the hydrodynamics state that is compatible with any of the
  * supported hydro systems
  */
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AnyPrimitive {
 
     /// X-component of gas velocity
