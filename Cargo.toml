@@ -1,9 +1,9 @@
 [package]
 name        = "binary2d"
-version     = "0.1.8"
+version     = "0.1.9"
 edition     = "2018"
 description = "Clemson CAL Circumbinary Disk Code (CDC)"
-authors     = ["J. Zrake", "C. Tiede", "J.R. Westernacher-Schneider", "Jack Hu"]
+authors     = ["Jonathan Zrake", "Christopher Tiede", "John Ryan Westernacher-Schneider", "Jack Hu"]
 readme      = "README.md"
 repository  = "https://github.com/clemson-cal/app-binary2d"
 
