@@ -1,5 +1,4 @@
-use binary2d::*;
-use app::App;
+use crate::app::App;
 
 fn main() -> anyhow::Result<()> {
 

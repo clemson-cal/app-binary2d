@@ -1,9 +1,10 @@
 use std::{
     ffi::OsStr,
-    fs::read_to_string,
+    fs::{File, read_to_string},
     path::Path,
 };
 use serde::{Serialize, Deserialize};
+use yaml_patch::Patch;
 use crate::io;
 use crate::mesh::Mesh;
 use crate::model::{InfiniteDiskModel, FiniteDiskModel};
@@ -179,6 +180,21 @@ impl Configuration {
     pub fn validate(&self) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /**
+     * Patch this config struct with inputs from the command line. The inputs
+     * can be names of YAML files or key=value pairs.
+     */
+    pub fn patch_from_command_line(&mut self) -> anyhow::Result<()> {
+        for extra_config_str in std::env::args().skip_while(|s| ! s.contains('=') && ! s.ends_with(".yaml")) {
+            if extra_config_str.ends_with(".yaml") {
+                self.patch_from_reader(File::open(extra_config_str)?)?
+            } else {
+                self.patch_from_key_val(&extra_config_str)?
+            }
+        }
+        Ok(())
+    }
 }
 
 
@@ -196,19 +212,21 @@ impl App {
     }
 
     /**
+     * Patch the config struct with inputs from the command line.
+     */
+    pub fn with_patched_config(mut self) -> anyhow::Result<Self> {
+        self.config.patch_from_command_line()?;
+        Ok(self)
+    }
+
+    /**
      * Construct a new App instance from a user configuration.
      */
-    pub fn from_config(config: Configuration) -> anyhow::Result<Self> {
+    pub fn from_config(mut config: Configuration) -> anyhow::Result<Self> {
 
-        // for extra_config_str in std::env::args().skip_while(|s| !s.contains('=')) {
-        //     if extra_config_str.ends_with(".yaml") {
-        //         config.patch_from_reader(File::open(extra_config_str)?)?
-        //     } else {
-        //         config.patch_from_key_val(&extra_config_str)?
-        //     }
-        // }
+        config.patch_from_command_line()?;
 
-        let state: AnyState = match &config.hydro {
+        let state = match &config.hydro {
             AnyHydro::Isothermal(hydro) => {
                 State::from_model(&config.model, hydro, &config.mesh).into()
             },
@@ -228,7 +246,7 @@ impl App {
     pub fn from_file(filename: &str) -> anyhow::Result<Self> {
         match Path::new(&filename).extension().and_then(OsStr::to_str) {
             Some("yaml") => Self::from_config(serde_yaml::from_str(&read_to_string(filename)?)?),
-            Some("cbor") => Ok(io::read_cbor(filename)?),
+            Some("cbor") => Ok(io::read_cbor::<Self>(filename)?.with_patched_config()?),
             _ => anyhow::bail!("unknown input file type {}", filename.to_string()),
         }
     }
