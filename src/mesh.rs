@@ -53,6 +53,10 @@ impl Mesh {
         )
     }
 
+    pub fn contains(&self, block_index: BlockIndex) -> bool {
+        block_index.0 < self.num_blocks && block_index.1 < self.num_blocks
+    }
+
     pub fn block_vertices(&self, block_index: BlockIndex) -> (Array<f64, Ix1>, Array<f64, Ix1>) {
         let start = self.block_start(block_index);
         let xv = Array::linspace(start.0, start.0 + self.block_length(), self.block_size + 1);
