@@ -91,7 +91,7 @@ pub enum Direction {
 
 
 // ============================================================================
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Solver {
     pub buffer_rate: f64,
     pub buffer_scale: f64,
@@ -110,6 +110,8 @@ pub struct Solver {
     pub relative_density_floor: f64,
     pub relative_fake_mass_rate: f64,
 }
+
+pub type Physics = Solver;
 
 
 

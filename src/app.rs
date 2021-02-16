@@ -8,7 +8,7 @@ use yaml_patch::Patch;
 use crate::io;
 use crate::mesh::Mesh;
 use crate::model::{InfiniteDiskModel, FiniteDiskModel};
-use crate::physics::{Isothermal, Euler};
+use crate::physics::{Euler, Isothermal, Physics};
 use crate::state::State;
 use crate::tasks::Tasks;
 use crate::traits::{Conserved, Hydrodynamics, InitialModel};
@@ -118,6 +118,7 @@ pub struct Configuration {
     pub hydro: AnyHydro,
     pub model: AnyModel,
     pub mesh: Mesh,
+    pub physics: Physics,
     pub control: Control,
 }
 
@@ -162,7 +163,7 @@ impl InitialModel for AnyModel {
 // ============================================================================
 impl Configuration {
 
-    pub fn package<H, M>(hydro: &H, model: &M, mesh: &Mesh, control: &Control) -> Self
+    pub fn package<H, M>(hydro: &H, model: &M, mesh: &Mesh, physics: &Physics, control: &Control) -> Self
     where
         H: Hydrodynamics,
         M: InitialModel,
@@ -173,6 +174,7 @@ impl Configuration {
             hydro: hydro.clone().into(),
             model: model.clone().into(),
             mesh: mesh.clone(),
+            physics: physics.clone(),
             control: control.clone(),
         }
     }
@@ -254,7 +256,7 @@ impl App {
     /**
      * Construct a new App instance from references to the member variables.
      */
-    pub fn package<H, M, C>(state: &State<C>, tasks: &mut Tasks, hydro: &H, model: &M, mesh: &Mesh, control: &Control) -> Self
+    pub fn package<H, M, C>(state: &State<C>, tasks: &mut Tasks, hydro: &H, model: &M, mesh: &Mesh, physics: &Physics, control: &Control) -> Self
     where
         H: Hydrodynamics<Conserved = C>,
         M: InitialModel,
@@ -266,7 +268,7 @@ impl App {
         Self {
             state: AnyState::from(state.clone()),
             tasks: tasks.clone(),
-            config: Configuration::package(hydro, model, mesh, control),
+            config: Configuration::package(hydro, model, mesh, physics, control),
             version: VERSION_AND_BUILD.to_string(),
         }
     }

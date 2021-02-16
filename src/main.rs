@@ -10,19 +10,20 @@ use binary2d::app::{
     Configuration,
     Control,
 };
+use binary2d::io;
+use binary2d::physics::Physics;
+use binary2d::scheme;
 use binary2d::traits::{
     Conserved,
     Hydrodynamics,
 };
-use binary2d::io;
-use binary2d::scheme;
 
 
 
 
 // ============================================================================
 #[allow(unused)]
-fn run<C, H>(mut state: State<C>, mut tasks: Tasks, hydro: H, model: AnyModel, mesh: Mesh, control: Control, outdir: String)
+fn run<C, H>(mut state: State<C>, mut tasks: Tasks, hydro: H, model: AnyModel, mesh: Mesh, control: Control, physics: Physics, outdir: String)
     -> anyhow::Result<()>
 where
     H: Hydrodynamics<Conserved = C> + Into<AnyHydro> + 'static,
@@ -36,28 +37,8 @@ where
     // BOGUS
     let dt = 0.001;
 
-    // BOGUS
-    let solver = binary2d::physics::Solver {
-        buffer_rate: 0.0,
-        buffer_scale: 0.0,
-        cfl: 0.0,
-        domain_radius: 0.0,
-        mach_number: 0.0,
-        nu: 0.0,
-        lambda: 0.0,
-        plm: 0.0,
-        rk_order: 0,
-        sink_radius: 0.0,
-        sink_rate: 0.0,
-        softening_length: 0.0,
-        force_flux_comm: false,
-        orbital_elements: kepler_two_body::OrbitalElements(0.0, 0.0, 0.0, 0.0),
-        relative_density_floor: 0.0,
-        relative_fake_mass_rate: 0.0,
-    };
-
     while state.time < control.num_orbits * 2.0 * std::f64::consts::PI {
-        state = scheme::advance(state, hydro, &model, &mesh, &solver, dt, control.fold, &runtime)?;
+        state = scheme::advance(state, hydro, &model, &mesh, &physics, dt, control.fold, &runtime)?;
     }
 
     Ok(())
@@ -90,14 +71,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     let App{state, tasks, config, ..} = app;
-    let Configuration{hydro, model, mesh, control} = config;
+    let Configuration{hydro, model, mesh, control, physics} = config;
 
     match (state, hydro) {
         (AnyState::Isothermal(state), AnyHydro::Isothermal(hydro)) => {
-            run(state, tasks, hydro, model, mesh, control, outdir)
+            run(state, tasks, hydro, model, mesh, control, physics, outdir)
         }
         (AnyState::Euler(state), AnyHydro::Euler(hydro)) => {
-            run(state, tasks, hydro, model, mesh, control, outdir)
+            run(state, tasks, hydro, model, mesh, control, physics, outdir)
         }
         _ => unreachable!()
     }
