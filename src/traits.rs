@@ -1,7 +1,6 @@
 use std::ops::{Add, Sub, Mul, Div};
 use kepler_two_body::OrbitalState;
 use crate::app::{
-    AnyModel,
     AnyHydro,
     AnyPrimitive,
 };

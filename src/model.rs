@@ -32,7 +32,7 @@ pub struct InfiniteDiskModel {
 // ============================================================================
 impl InitialModel for FiniteDiskModel {
 
-    fn primitive_at(&self, _hydro: &AnyHydro, xy: (f64, f64)) -> AnyPrimitive {
+    fn primitive_at(&self, _hydro: &AnyHydro, _xy: (f64, f64)) -> AnyPrimitive {
         todo!()
     }
 

@@ -8,7 +8,6 @@ use godunov_core::runge_kutta;
 use crate::app::{
     AnyHydro,
     AnyModel,
-    AnyPrimitive,
 };    
 use crate::mesh::{
     BlockIndex,

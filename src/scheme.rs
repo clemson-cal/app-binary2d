@@ -1,11 +1,7 @@
 use std::future::Future;
 use std::collections::HashMap;
-use num::rational::Rational64;
-use num::ToPrimitive;
 use ndarray::{Axis, Array, ArcArray, Ix2};
 use ndarray_ops::MapArray3by3;
-use godunov_core::runge_kutta;
-use kepler_two_body::OrbitalElements;
 use crate::physics::{
     Direction,
     CellData,
