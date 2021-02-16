@@ -16,7 +16,13 @@ use crate::physics::{
 
 
 // ============================================================================
-pub trait Arithmetic: Add<Output=Self> + Sub<Output=Self> + Mul<f64, Output=Self> + Div<f64, Output=Self> + Sized {}
+pub trait Arithmetic:
+    Add<Output=Self> +
+    Sub<Output=Self> +
+    Mul<f64, Output=Self> +
+    Div<f64, Output=Self> + Sized
+{
+}
 
 
 
@@ -30,7 +36,7 @@ pub trait Zeros {
 
 
 // ============================================================================
-pub trait Conserved: Clone + Copy + Send + Sync + Zeros + Arithmetic + 'static {
+pub trait Conserved: Clone + Copy + Send + Sync + Zeros + Arithmetic {
     fn mass_and_momentum(&self) -> (f64, f64, f64);
 }
 

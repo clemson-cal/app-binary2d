@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::PyMappingProtocol;
@@ -7,6 +8,8 @@ use numpy::ToPyArray;
 use pythonize::pythonize;
 use binary2d::app;
 use binary2d::mesh;
+use binary2d::state;
+use binary2d::traits;
 
 
 
@@ -20,6 +23,7 @@ struct App {
 #[pyclass]
 struct State {
     state: Arc<app::AnyState>,
+    hydro: app::AnyHydro,
 }
 
 #[pyclass]
@@ -62,7 +66,7 @@ impl App {
     /// The simulation state
     #[getter]
     fn state(&self) -> State {
-        State{state: Arc::new(self.app.state.clone())}
+        State{state: Arc::new(self.app.state.clone()), hydro: self.app.config.hydro.clone()}
     }
 
     /// The simulation mesh
@@ -97,16 +101,58 @@ impl State {
         }
     }
 
-    /// The solution blocks
+    /// X component of gas velocity
     #[getter]
-    fn solution(&self) -> std::collections::HashMap<String, i32> {
-        let mut x = std::collections::HashMap::new();
+    fn velocity_x(&self, py: Python) -> HashMap<(usize, usize), PyObject> {
+        match self.state.as_ref() {
+            app::AnyState::Euler(state)      => self.map_conserved(state, |u| u.1, py),
+            app::AnyState::Isothermal(state) => self.map_conserved(state, |u| u.1, py),
+        }
+    }
 
-        x.insert("a".into(), 1);
-        x.insert("b".into(), 2);
-        x.insert("c".into(), 3);
+    /// Y component of gas velocity
+    #[getter]
+    fn velocity_y(&self, py: Python) -> HashMap<(usize, usize), PyObject> {
+        match self.state.as_ref() {
+            app::AnyState::Euler(state)      => self.map_conserved(state, |u| u.2, py),
+            app::AnyState::Isothermal(state) => self.map_conserved(state, |u| u.2, py),
+        }
+    }
 
-        x
+    /// Surface density
+    #[getter]
+    fn sigma(&self, py: Python) -> HashMap<(usize, usize), PyObject> {
+        match self.state.as_ref() {
+            app::AnyState::Euler(state)      => self.map_conserved(state, |u| u.0, py),
+            app::AnyState::Isothermal(state) => self.map_conserved(state, |u| u.0, py),
+        }
+    }
+
+    /// Vertically integrated gas pressure
+    #[getter]
+    fn pressure(&self, py: Python) -> PyResult<HashMap<(usize, usize), PyObject>> {
+        use traits::Hydrodynamics;
+
+        match (&self.hydro, self.state.as_ref()) {
+            (app::AnyHydro::Euler(hydro), app::AnyState::Euler(state)) => {
+                Ok(self.map_conserved(state, |u| hydro.to_primitive(u).gas_pressure(), py))
+            }
+            (_, _) => {
+                Err(PyErr::from_instance(PyValueError::new_err("not defined for isothermal hydro").instance(py)))
+            }
+        }
+    }
+}
+
+impl State {
+    fn map_conserved<C, F>(&self, state: &state::State<C>, f: F, py: Python) -> HashMap<(usize, usize), PyObject>
+    where
+        C: traits::Conserved,
+        F: Fn(C) -> f64
+    {
+        state.solution.iter().map(|(&index, block)| {
+            (index, block.conserved.mapv(&f).to_pyarray(py).to_object(py))
+        }).collect()
     }
 }
 

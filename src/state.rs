@@ -197,7 +197,7 @@ impl<C: Conserved> runge_kutta::WeightedAverage for State<C> {
 
 // ============================================================================
 #[async_trait::async_trait]
-impl<C: Conserved> runge_kutta::WeightedAverageAsync for State<C> {
+impl<C: Conserved + 'static> runge_kutta::WeightedAverageAsync for State<C> {
 
     type Runtime = tokio::runtime::Runtime;
 
