@@ -200,8 +200,8 @@ impl MeshBlock {
 
     #[getter]
     fn vertices(&self, py: Python) -> (PyObject, PyObject) {
-        let (xv, yv) = self.mesh.block_vertices(self.index);
-        (xv.to_pyarray(py).to_object(py), yv.to_pyarray(py).to_object(py))
+        let (x, y) = self.mesh.block_vertices(self.index);
+        (x.to_pyarray(py).to_object(py), y.to_pyarray(py).to_object(py))
     }
 }
 
