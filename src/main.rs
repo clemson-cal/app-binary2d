@@ -1,4 +1,9 @@
-use crate::app::App;
+use binary2d::app::{self, App};
+use binary2d::io;
+use binary2d::scheme;
+
+
+
 
 fn main() -> anyhow::Result<()> {
 

@@ -2,6 +2,10 @@ use std::future::Future;
 use std::collections::HashMap;
 use ndarray::{Axis, Array, ArcArray, Ix2};
 use ndarray_ops::MapArray3by3;
+use crate::app::{
+    AnyModel,
+    AnyHydro
+};
 use crate::physics::{
     Direction,
     CellData,
@@ -34,6 +38,21 @@ pub struct BlockData<C: Conserved> {
     pub face_centers_x:    ArcArray<(f64, f64), Ix2>,
     pub face_centers_y:    ArcArray<(f64, f64), Ix2>,
     pub index:             BlockIndex,
+}
+
+impl<C: Conserved> BlockData<C> {
+    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh, index: BlockIndex) -> Self
+    where
+        H: Hydrodynamics<Conserved = C> + Into<AnyHydro>
+    {
+        Self {
+            initial_conserved: BlockState::from_model(model, hydro, mesh, index).conserved,
+            cell_centers: mesh.cell_centers(index).to_shared(),
+            face_centers_x: mesh.face_centers_x(index).to_shared(),
+            face_centers_y: mesh.face_centers_y(index).to_shared(),
+            index,
+        }
+    }
 }
 
 
@@ -269,17 +288,27 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
 
 // ============================================================================
-pub fn advance<H: 'static + Hydrodynamics>(
+pub fn advance<H>(
     mut state:  State<H::Conserved>,
     hydro:      H,
-    block_data: &HashMap<BlockIndex, BlockData<H::Conserved>>,
+    model:      &AnyModel,
     mesh:       &Mesh,
     solver:     &Solver,
     dt:         f64,
     fold:       usize,
     runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
+where
+    H: Hydrodynamics + Into<AnyHydro> + 'static
 {
-    let try_update = |state| try_advance_rk(state, hydro, block_data, mesh, solver, dt, runtime);
+    // Note: the block data is regenerated at each of these coarse iterations,
+    // which could hurt the efficiency of very small fold values.
+
+    let block_data = mesh
+        .block_indexes()
+        .map(|index| (index, BlockData::from_model(&model, &hydro, &mesh, index)))
+        .collect();
+
+    let try_update = |state| try_advance_rk(state, hydro, &block_data, mesh, solver, dt, runtime);
     let rk = solver.runge_kutta();
 
     for _ in 0..fold {
