@@ -1,7 +1,10 @@
 target
 data
+lib
 *.h5
 *.ipynb
 *.pbs
 *.png
 *.txt
+*.cbor
+*.so
