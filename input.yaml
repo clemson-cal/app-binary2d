@@ -7,20 +7,19 @@ hydro:
     mach_number: 10.0
 
 mesh:
-  block_size: 512
-  num_blocks: 1
-  domain_radius: 4.0
+  block_size: 96
+  num_blocks: 3
+  domain_radius: 10.0
 
 physics:
   buffer_rate: 1000.0
   buffer_scale: 1.0
   cfl: 0.3
-  domain_radius: 4.0
   mach_number: 10.0
   nu: 0.001
   lambda: 0.0
   plm: 1.5
-  rk_order: 2
+  rk_order: RK2
   sink_radius: 0.05
   sink_rate: 1.0
   softening_length: 0.05
@@ -30,8 +29,8 @@ physics:
   relative_fake_mass_rate: 0.0
 
 control:
-  num_orbits: 0.1
-  checkpoint_interval: 0.02
-  fold: 1
-  num_threads: 1
+  num_orbits: 100
+  checkpoint_interval: 1.0
+  fold: 10
+  num_threads: 4
   output_directory: data

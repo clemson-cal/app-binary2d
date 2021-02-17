@@ -1,9 +1,6 @@
 use serde::{Serialize, Deserialize};
 use godunov_core::runge_kutta;
-use kepler_two_body::{
-    OrbitalElements,
-    OrbitalState,
-};
+use kepler_two_body::OrbitalElements;
 use crate::app::{
     AnyPrimitive,
 };
@@ -96,12 +93,10 @@ pub struct Solver {
     pub buffer_rate: f64,
     pub buffer_scale: f64,
     pub cfl: f64,
-    pub domain_radius: f64,
-    pub mach_number: f64,
     pub nu: f64,
     pub lambda: f64,
     pub plm: f64,
-    pub rk_order: i64,
+    pub rk_order: runge_kutta::RungeKuttaOrder,
     pub sink_radius: f64,
     pub sink_rate: f64,
     pub softening_length: f64,
@@ -195,11 +190,6 @@ impl<'a, P: Primitive> CellData<'_, P> {
 // ============================================================================
 impl Solver {
 
-    pub fn runge_kutta(&self) -> runge_kutta::RungeKuttaOrder {
-        use std::convert::TryFrom;
-        runge_kutta::RungeKuttaOrder::try_from(self.rk_order).expect("illegal RK order")
-    }
-
     pub fn need_flux_communication(&self) -> bool {
         self.force_flux_comm
     }
@@ -223,15 +213,11 @@ impl Solver {
         }
     }
 
-    pub fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64 {
-        -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number.powi(2)
-    }
-
     pub fn maximum_orbital_velocity(&self) -> f64 {
         1.0 / self.softening_length.sqrt()
     }
 
-    pub fn source_terms(&self, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms {
+    pub fn source_terms(&self, mesh: &Mesh, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms {
         let p1 = two_body_state.0;
         let p2 = two_body_state.1;
 
@@ -252,8 +238,8 @@ impl Solver {
         let sink_rate2 = self.sink_kernel(x - x2, y - y2);
 
         let r = (x * x + y * y).sqrt();
-        let y = (r - self.domain_radius) / self.buffer_scale;
-        let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
+        let y = (r - mesh.domain_radius) / self.buffer_scale;
+        let omega_outer = (two_body_state.total_mass() / mesh.domain_radius.powi(3)).sqrt();
         let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
 
         SourceTerms {
@@ -290,8 +276,8 @@ impl Isothermal {
 
 
 // ============================================================================
-impl Hydrodynamics for Isothermal
-{
+impl Hydrodynamics for Isothermal {
+
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
 
@@ -333,6 +319,7 @@ impl Hydrodynamics for Isothermal
     fn source_terms(
         &self,
         solver: &Solver,
+        mesh: &Mesh,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
         x: f64,
@@ -352,7 +339,7 @@ impl Hydrodynamics for Isothermal
             fake_mass_rate
         };
 
-        let st = solver.source_terms(two_body_state, x, y, conserved.density());
+        let st = solver.source_terms(mesh, two_body_state, x, y, conserved.density());
 
         ItemizedChange {
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
@@ -370,13 +357,12 @@ impl Hydrodynamics for Isothermal
         solver: &Solver,
         l: &CellData<'a, hydro_iso2d::Primitive>,
         r: &CellData<'a, hydro_iso2d::Primitive>,
-        f: &(f64, f64),
         dx: f64,
         dy: f64,
-        two_body_state: &kepler_two_body::OrbitalState,
+        gravitational_potential: f64,
         axis: Direction) -> hydro_iso2d::Conserved
     {
-        let cs2 = solver.sound_speed_squared(f, &two_body_state);
+        let cs2 = -gravitational_potential / self.mach_number.powi(2);
         let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
         let nu  = solver.nu;
@@ -449,6 +435,7 @@ impl Hydrodynamics for Euler {
     fn source_terms(
         &self,
         solver: &Solver,
+        mesh: &Mesh,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
         x: f64,
@@ -456,7 +443,7 @@ impl Hydrodynamics for Euler {
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        let st        = solver.source_terms(two_body_state, x, y, conserved.mass_density());
+        let st        = solver.source_terms(mesh, two_body_state, x, y, conserved.mass_density());
         let primitive = conserved.to_primitive(self.gamma_law_index);
         let vx        = primitive.velocity_1();
         let vy        = primitive.velocity_2();
@@ -477,10 +464,9 @@ impl Hydrodynamics for Euler {
         solver: &Solver,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
-        _: &(f64, f64),
         dx: f64,
         dy: f64,
-        _: &kepler_two_body::OrbitalState,
+        _gravitational_potential: f64,
         axis: Direction) -> Self::Conserved
     {
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;

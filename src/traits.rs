@@ -4,6 +4,7 @@ use crate::app::{
     AnyHydro,
     AnyPrimitive,
 };
+use crate::mesh::Mesh;
 use crate::state::ItemizedChange;
 use crate::physics::{
     CellData,
@@ -72,6 +73,7 @@ pub trait Hydrodynamics: Clone + Copy + Send {
     fn source_terms(
         &self,
         solver: &Solver,
+        mesh: &Mesh,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
         x: f64,
@@ -84,10 +86,9 @@ pub trait Hydrodynamics: Clone + Copy + Send {
         solver: &Solver,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
-        f: &(f64, f64),
         x: f64,
         y: f64,
-        two_body_state: &kepler_two_body::OrbitalState,
+        gravitational_potiential: f64,
         axis: Direction) -> Self::Conserved;
 }
 

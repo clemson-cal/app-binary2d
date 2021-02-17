@@ -7,10 +7,10 @@ use crate::app::{
     AnyHydro
 };
 use crate::physics::{
-    Direction,
     CellData,
+    Direction,
     HydroError,
-    Solver,
+    Physics,
 };
 use crate::mesh::{
     Mesh,
@@ -88,7 +88,7 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
     hydro: H,
     block_data: &HashMap<BlockIndex, BlockData<H::Conserved>>,
     mesh: &Mesh,
-    solver: &Solver,
+    physics: &Physics,
     dt: f64,
     runtime: &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
 {
@@ -115,7 +115,7 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
 
 
     for index in mesh.block_indexes() {
-        let solver      = solver.clone();
+        let physics     = physics.clone();
         let mesh        = mesh.clone();
         let pc_map      = pc_map.clone();
         let block       = block_data[&index].clone();
@@ -123,7 +123,7 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
         let flux = async move {
             let pn = try_join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &pc_map[i])).await?;
             let pe = ndarray_ops::extend_from_neighbor_arrays_2d(&pn, 2, 2, 2, 2);
-            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &solver, &mesh, time);
+            let (fx, fy) = scheme.compute_block_fluxes(&pe, &block, &physics, &mesh, time);
             Ok::<_, HydroError>((fx.to_shared(), fy.to_shared()))
         };
         fg_map.insert(index, runtime.spawn(flux).map(|f| f.unwrap()).shared());
@@ -132,14 +132,14 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
 
 
     for index in mesh.block_indexes() {
-        let solver   = solver.clone();
+        let physics  = physics.clone();
         let mesh     = mesh.clone();
         let fg_map   = fg_map.clone();
         let block    = block_data[&index].clone();
         let solution = state.solution[&index].clone();
 
         let s1 = async move {
-            let (fx, fy) = if ! solver.need_flux_communication() {
+            let (fx, fy) = if ! physics.need_flux_communication() {
                 fg_map[&block.index].clone().await?
             } else {
                 let flux_n = try_join_3by3(mesh.neighbor_block_indexes(block.index).map_3by3(|i| &fg_map[i])).await?;
@@ -149,7 +149,7 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            Ok::<_, HydroError>((index, scheme.compute_block_updated_solution(solution, fx, fy, &block, &solver, &mesh, time, dt)))
+            Ok::<_, HydroError>((index, scheme.compute_block_updated_solution(solution, fx, fy, &block, &physics, &mesh, time, dt)))
         };
         s1_vec.push(runtime.spawn(s1).map(|f| f.unwrap()))
     }
@@ -197,19 +197,20 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
     fn compute_block_fluxes(
         &self,
-        pe:     &Array<H::Primitive, Ix2>,
-        block:  &BlockData<H::Conserved>,
-        solver: &Solver,
-        mesh:   &Mesh,
-        time:   f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
+        pe:      &Array<H::Primitive, Ix2>,
+        block:   &BlockData<H::Conserved>,
+        physics: &Physics,
+        mesh:    &Mesh,
+        time:    f64) -> (Array<H::Conserved, Ix2>, Array<H::Conserved, Ix2>)
     {
         use ndarray::{s, azip};
         use ndarray_ops::{map_stencil3};
 
         // ========================================================================
-        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
-        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
-        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(solver.plm, a, b, c));
+        let two_body_state = physics.orbital_elements.orbital_state_from_time(time);
+        let phi = |&(x, y)| -two_body_state.gravitational_potential(x, y, physics.softening_length);
+        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
+        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
         let xf = &block.face_centers_x;
@@ -227,14 +228,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             cell_data.slice(s![..-1,1..-1]),
             cell_data.slice(s![ 1..,1..-1]),
             xf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, dx, dy, &two_body_state, Direction::X));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&physics, l, r, dx, dy, phi(f), Direction::X));
 
         // ============================================================================
         let fy = azip![
             cell_data.slice(s![1..-1,..-1]),
             cell_data.slice(s![1..-1, 1..]),
             yf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&solver, l, r, f, dx, dy, &two_body_state, Direction::Y));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&physics, l, r, dx, dy, phi(f), Direction::Y));
 
         (fx, fy)
     }
@@ -245,19 +246,19 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         fx:       ArcArray<H::Conserved, Ix2>,
         fy:       ArcArray<H::Conserved, Ix2>,
         block:    &BlockData<H::Conserved>,
-        solver:   &Solver,
+        physics:  &Physics,
         mesh:     &Mesh,
         time:     f64,
         dt:       f64) -> BlockState<H::Conserved>
     {
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
-        let two_body_state = solver.orbital_elements.orbital_state_from_time(time);
+        let two_body_state = physics.orbital_elements.orbital_state_from_time(time);
 
         let mut ds = ItemizedChange::zeros();
 
         let u1 = ArcArray::from_shape_fn(solution.conserved.dim(), |i| {
-            let m = if solver.need_flux_communication() {
+            let m = if physics.need_flux_communication() {
                 (i.0 + 1, i.1 + 1)
             } else {
                 i
@@ -267,14 +268,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             let uc = solution.conserved[i];
             let u0 = block.initial_conserved[i];
             let (x, y)  = block.cell_centers[i];
-            let sources = self.hydro.source_terms(&solver, uc, u0, x, y, dt, &two_body_state);
+            let sources = self.hydro.source_terms(physics, mesh, uc, u0, x, y, dt, &two_body_state);
 
             ds = ds + sources;
             uc + du + sources.total()
         });
 
         let ds = ds * (dx * dy);
-        let de = ds.perturbation(time, solver.orbital_elements);
+        let de = ds.perturbation(time, physics.orbital_elements);
 
         BlockState {
             conserved: u1,
@@ -293,7 +294,7 @@ pub fn advance<H>(
     hydro:      H,
     model:      &AnyModel,
     mesh:       &Mesh,
-    solver:     &Solver,
+    physics:     &Physics,
     dt:         f64,
     fold:       usize,
     runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
@@ -308,8 +309,8 @@ where
         .map(|index| (index, BlockData::from_model(&model, &hydro, &mesh, index)))
         .collect();
 
-    let try_update = |state| try_advance_rk(state, hydro, &block_data, mesh, solver, dt, runtime);
-    let rk = solver.runge_kutta();
+    let try_update = |state| try_advance_rk(state, hydro, &block_data, mesh, physics, dt, runtime);
+    let rk = physics.rk_order;
 
     for _ in 0..fold {
         state = runtime.block_on(rk.try_advance_async(state, try_update, runtime))?;

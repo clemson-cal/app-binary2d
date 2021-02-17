@@ -58,7 +58,6 @@ where
 
 
 // ============================================================================
-#[allow(unused)]
 fn run<C, H>(
     mut state: State<C>,
     mut tasks: Tasks,
@@ -66,8 +65,7 @@ fn run<C, H>(
     model: AnyModel,
     mesh: Mesh,
     control: Control,
-    physics: Physics,
-    outdir: String) -> anyhow::Result<()>
+    physics: Physics) -> anyhow::Result<()>
 where
     H: Hydrodynamics<Conserved = C> + Into<AnyHydro> + 'static,
     C: Conserved,
@@ -77,8 +75,7 @@ where
         .worker_threads(control.num_threads)
         .build()?;
 
-    // BOGUS
-    let dt = 0.001;
+    let dt = physics.min_time_step(&mesh);
 
     while state.time < control.num_orbits * 2.0 * std::f64::consts::PI {
         side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
@@ -99,14 +96,11 @@ fn main() -> anyhow::Result<()> {
         None => anyhow::bail!("no input file given"),
         Some(input) => input,
     };
-    let outdir = io::parent_directory(&input);
 
     println!();
     println!("\t{}", app::DESCRIPTION);
     println!("\t{}", app::VERSION_AND_BUILD);
     println!();
-    println!("\tinput file ........ {}", input);
-    println!("\toutput drectory ... {}", outdir);
 
     let app = App::from_file(&input)?.validate()?;
 
@@ -120,10 +114,10 @@ fn main() -> anyhow::Result<()> {
 
     match (state, hydro) {
         (AnyState::Isothermal(state), AnyHydro::Isothermal(hydro)) => {
-            run(state, tasks, hydro, model, mesh, control, physics, outdir)
+            run(state, tasks, hydro, model, mesh, control, physics)
         }
         (AnyState::Euler(state), AnyHydro::Euler(hydro)) => {
-            run(state, tasks, hydro, model, mesh, control, physics, outdir)
+            run(state, tasks, hydro, model, mesh, control, physics)
         }
         _ => unreachable!()
     }

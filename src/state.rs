@@ -184,7 +184,7 @@ impl<C: Conserved> runge_kutta::WeightedAverage for State<C> {
             .into_iter()
             .map(|(index, s1)| (index, s1.weighted_average(br, &s0.solution[&index])));
 
-        Self{
+        Self {
             time:      self.time      * (-bf + 1.) + s0.time      * bf,
             iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
             solution: s_avg.into_iter().collect(),
@@ -217,7 +217,7 @@ impl<C: Conserved + 'static> runge_kutta::WeightedAverageAsync for State<C> {
             }
         });
 
-        Self{
+        Self {
             time:      self.time      * (-bf + 1.) + s0.time      * bf,
             iteration: self.iteration * (-br + 1 ) + s0.iteration * br,
             solution: join_all(s_avg).await.into_iter().collect(),
@@ -230,8 +230,8 @@ impl<C: Conserved + 'static> runge_kutta::WeightedAverageAsync for State<C> {
 
 // ============================================================================
 impl<C> ItemizedChange<C>
-where C: Conserved
-{
+where C: Conserved {
+
     fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
         let (dm, dpx, dpy) = delta;
         elements.perturb(time, -dm, 0.0, -dpx, 0.0, -dpy, 0.0).unwrap() - elements

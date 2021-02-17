@@ -14,9 +14,9 @@ def pcolormesh_data(app, field, transform=lambda x: x):
     return result
 
 
-def plot_field(ax, filename, field):
+def plot_field(ax, filename, field, transform=lambda x: x):
     app = cdc_loader.app(filename)
-    pcm_data = pcolormesh_data(app, field)
+    pcm_data = pcolormesh_data(app, field, transform=transform)
 
     vmin = min(p[2].min() for p in pcm_data)
     vmax = max(p[2].max() for p in pcm_data)
@@ -39,6 +39,6 @@ if __name__ == "__main__":
     for filename in args.filenames:
         fig = plt.figure()
         ax1 = fig.add_subplot(1, 1, 1)
-        cm = plot_field(ax1, filename, 'velocity_x')
+        cm = plot_field(ax1, filename, 'sigma', transform=np.log10)
         fig.colorbar(cm)
     plt.show()
