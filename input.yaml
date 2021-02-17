@@ -1,0 +1,37 @@
+model:
+  infinite_disk:
+    accretion_rate: 1.0
+
+hydro:
+  isothermal:
+    mach_number: 10.0
+
+mesh:
+  block_size: 512
+  num_blocks: 1
+  domain_radius: 4.0
+
+physics:
+  buffer_rate: 1000.0
+  buffer_scale: 1.0
+  cfl: 0.3
+  domain_radius: 4.0
+  mach_number: 10.0
+  nu: 0.001
+  lambda: 0.0
+  plm: 1.5
+  rk_order: 2
+  sink_radius: 0.05
+  sink_rate: 1.0
+  softening_length: 0.05
+  force_flux_comm: false
+  orbital_elements: [1.0, 1.0, 1.0, 0.0]
+  relative_density_floor: 0.0
+  relative_fake_mass_rate: 0.0
+
+control:
+  num_orbits: 0.1
+  checkpoint_interval: 0.02
+  fold: 1
+  num_threads: 1
+  output_directory: data

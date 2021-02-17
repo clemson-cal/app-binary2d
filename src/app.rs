@@ -104,6 +104,9 @@ pub struct Control {
 
     /// Number of worker threads on the Tokio runtime
     pub num_threads: usize,
+
+    /// Output directory
+    pub output_directory: String,
 }
 
 
