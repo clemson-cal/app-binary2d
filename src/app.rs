@@ -163,12 +163,9 @@ impl InitialModel for AnyModel {
 // ============================================================================
 impl Configuration {
 
-    pub fn package<H, M>(hydro: &H, model: &M, mesh: &Mesh, physics: &Physics, control: &Control) -> Self
+    pub fn package<H>(hydro: &H, model: &AnyModel, mesh: &Mesh, physics: &Physics, control: &Control) -> Self
     where
-        H: Hydrodynamics,
-        M: InitialModel,
-        AnyHydro: From<H>,
-        AnyModel: From<M>,
+        H: Hydrodynamics + Into<AnyHydro>,
     {
         Configuration {
             hydro: hydro.clone().into(),
@@ -256,13 +253,10 @@ impl App {
     /**
      * Construct a new App instance from references to the member variables.
      */
-    pub fn package<H, M, C>(state: &State<C>, tasks: &mut Tasks, hydro: &H, model: &M, mesh: &Mesh, physics: &Physics, control: &Control) -> Self
+    pub fn package<H, C>(state: &State<C>, tasks: &Tasks, hydro: &H, model: &AnyModel, mesh: &Mesh, physics: &Physics, control: &Control) -> Self
     where
-        H: Hydrodynamics<Conserved = C>,
-        M: InitialModel,
+        H: Hydrodynamics<Conserved = C> + Into<AnyHydro>,
         C: Conserved,
-        AnyHydro: From<H>,
-        AnyModel: From<M>,
         AnyState: From<State<C>>,
     {
         Self {
