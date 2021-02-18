@@ -187,14 +187,14 @@ impl Configuration {
      * Patch this config struct with inputs from the command line. The inputs
      * can be names of YAML files or key=value pairs.
      */
-    pub fn patch_from_command_line(&mut self) -> anyhow::Result<()> {
-        // for extra_config_str in std::env::args().skip_while(|s| ! s.contains('=') && ! s.ends_with(".yaml")) {
-        //     if extra_config_str.ends_with(".yaml") {
-        //         self.patch_from_reader(File::open(extra_config_str)?)?
-        //     } else {
-        //         self.patch_from_key_val(&extra_config_str)?
-        //     }
-        // }
+    pub fn patch_from(&mut self, overrides: Vec<String>) -> anyhow::Result<()> {
+        for extra_config_str in overrides {
+            if extra_config_str.ends_with(".yaml") {
+                self.patch_from_reader(File::open(extra_config_str)?)?
+            } else {
+                self.patch_from_key_val(&extra_config_str)?
+            }
+        }
         Ok(())
     }
 }
@@ -216,17 +216,17 @@ impl App {
     /**
      * Patch the config struct with inputs from the command line.
      */
-    pub fn with_patched_config(mut self) -> anyhow::Result<Self> {
-        self.config.patch_from_command_line()?;
+    pub fn with_patched_config(mut self, overrides: Vec<String>) -> anyhow::Result<Self> {
+        self.config.patch_from(overrides)?;
         Ok(self)
     }
 
     /**
      * Construct a new App instance from a user configuration.
      */
-    pub fn from_config(mut config: Configuration) -> anyhow::Result<Self> {
+    pub fn from_config(mut config: Configuration, overrides: Vec<String>) -> anyhow::Result<Self> {
 
-        config.patch_from_command_line()?;
+        config.patch_from(overrides)?;
 
         let state = match &config.hydro {
             AnyHydro::Isothermal(hydro) => {
@@ -245,10 +245,10 @@ impl App {
      * Construct a new App instance from a file: may be a config.yaml or a
      * chkpt.0000.cbor.
      */
-    pub fn from_file(filename: &str) -> anyhow::Result<Self> {
+    pub fn from_file(filename: &str, overrides: Vec<String>) -> anyhow::Result<Self> {
         match Path::new(&filename).extension().and_then(OsStr::to_str) {
-            Some("yaml") => Self::from_config(serde_yaml::from_str(&read_to_string(filename)?)?),
-            Some("cbor") => Ok(io::read_cbor::<Self>(filename)?.with_patched_config()?),
+            Some("yaml") => Self::from_config(serde_yaml::from_str(&read_to_string(filename)?)?, overrides),
+            Some("cbor") => Ok(io::read_cbor::<Self>(filename)?.with_patched_config(overrides)?),
             _ => anyhow::bail!("unknown input file type {}", filename.to_string()),
         }
     }

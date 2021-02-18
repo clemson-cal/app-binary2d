@@ -101,8 +101,8 @@ fn main() -> anyhow::Result<()> {
         None => anyhow::bail!("no input file given"),
         Some(input) => input,
     };
-
-    let app = App::from_file(&input)?.validate()?;
+    let overrides = std::env::args().skip(2).collect();
+    let app = App::from_file(&input, overrides)?.validate()?;
 
     for line in serde_yaml::to_string(&app.config)?.split("\n").skip(1) {
         println!("\t{}", line);
