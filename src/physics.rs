@@ -23,8 +23,12 @@ use crate::traits::{
 // ============================================================================
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum HydroErrorType {
+
     #[error("negative surface density {0:.4e}")]
-    NegativeDensity(f64)
+    NegativeDensity(f64),
+
+    #[error("negative gas pressure {0:.4e}")]
+    NegativePressure(f64),
 }
 
 impl HydroErrorType {
@@ -434,7 +438,12 @@ impl Hydrodynamics for Euler {
         if u.mass_density() < 0.0 {
             return Err(HydroErrorType::NegativeDensity(u.mass_density()))
         }
-        Ok(u.to_primitive(self.gamma_law_index))
+        let p = u.to_primitive(self.gamma_law_index);
+
+        if p.gas_pressure() < 0.0 {
+            return Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+        }
+        Ok(p)
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {

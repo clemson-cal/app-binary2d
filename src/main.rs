@@ -77,7 +77,7 @@ where
 
     let dt = physics.min_time_step(&mesh);
 
-    while state.time < control.num_orbits * 2.0 * std::f64::consts::PI {
+    while state.time < control.num_orbits * ORBITAL_PERIOD {
         side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
         state = scheme::advance(state, hydro, &model, &mesh, &physics, dt, control.fold, &runtime)?;
     }
