@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 use godunov_core::runge_kutta;
-use kepler_two_body::OrbitalElements;
 use crate::app::{
     AnyPrimitive,
 };
@@ -44,8 +43,8 @@ impl HydroErrorType {
     position.1,
     binary.map_or(0.0, |s| s.0.position_x()),
     binary.map_or(0.0, |s| s.0.position_y()),
-    binary.map_or(0.1, |s| s.1.position_x()),
-    binary.map_or(0.1, |s| s.1.position_y()),
+    binary.map_or(0.0, |s| s.1.position_x()),
+    binary.map_or(0.0, |s| s.1.position_y()),
 )]
 pub struct HydroError {
     source: HydroErrorType,
@@ -89,21 +88,37 @@ pub enum Direction {
 
 // ============================================================================
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Solver {
+
     pub buffer_rate: f64,
+
     pub buffer_scale: f64,
-    pub cfl: f64,
-    pub nu: f64,
+
+    pub binary_eccentricity: f64,
+
+    pub binary_mass_ratio: f64,
+
+    #[serde(default)]
     pub lambda: f64,
+
+    pub nu: f64,
+
+    pub cfl: f64,
+
     pub plm: f64,
-    pub rk_order: runge_kutta::RungeKuttaOrder,
-    pub sink_radius: f64,
-    pub sink_rate: f64,
-    pub softening_length: f64,
-    pub force_flux_comm: bool,
-    pub orbital_elements: OrbitalElements,
+
+    #[serde(default)]
     pub relative_density_floor: f64,
+
+    #[serde(default)]
     pub relative_fake_mass_rate: f64,
+
+    pub rk_order: runge_kutta::RungeKuttaOrder,
+
+    pub sink_radius: f64,
+
+    pub sink_rate: f64,
 }
 
 pub type Physics = Solver;
@@ -191,7 +206,7 @@ impl<'a, P: Primitive> CellData<'_, P> {
 impl Solver {
 
     pub fn need_flux_communication(&self) -> bool {
-        self.force_flux_comm
+        false
     }
 
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64 {
@@ -213,16 +228,28 @@ impl Solver {
         }
     }
 
+    pub fn softening_length(&self) -> f64 {
+        self.sink_radius
+    }
+
     pub fn maximum_orbital_velocity(&self) -> f64 {
-        1.0 / self.softening_length.sqrt()
+        1.0 / self.softening_length().sqrt()
+    }
+
+    pub fn orbital_elements(&self) -> kepler_two_body::OrbitalElements {
+        kepler_two_body::OrbitalElements(1.0, 1.0, self.binary_mass_ratio, self.binary_eccentricity)
+    }
+
+    pub fn orbital_state_from_time(&self, time: f64) -> kepler_two_body::OrbitalState {
+        self.orbital_elements().orbital_state_from_time(time)
     }
 
     pub fn source_terms(&self, mesh: &Mesh, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms {
         let p1 = two_body_state.0;
         let p2 = two_body_state.1;
 
-        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length);
-        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length);
+        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length());
+        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length());
 
         let fx1 = surface_density * ax1;
         let fy1 = surface_density * ay1;

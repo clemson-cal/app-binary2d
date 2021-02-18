@@ -207,8 +207,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         use ndarray_ops::{map_stencil3};
 
         // ========================================================================
-        let two_body_state = physics.orbital_elements.orbital_state_from_time(time);
-        let phi = |&(x, y)| two_body_state.gravitational_potential(x, y, physics.softening_length);
+        let two_body_state = physics.orbital_state_from_time(time);
+        let phi = |&(x, y)| two_body_state.gravitational_potential(x, y, physics.softening_length());
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
         let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
         let dx = mesh.cell_spacing_x();
@@ -253,7 +253,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     {
         let dx = mesh.cell_spacing_x();
         let dy = mesh.cell_spacing_y();
-        let two_body_state = physics.orbital_elements.orbital_state_from_time(time);
+        let two_body_state = physics.orbital_state_from_time(time);
 
         let mut ds = ItemizedChange::zeros();
 
@@ -275,7 +275,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         });
 
         let ds = ds * (dx * dy);
-        let de = ds.perturbation(time, physics.orbital_elements);
+        let de = ds.perturbation(time, physics.orbital_elements());
 
         BlockState {
             conserved: u1,
