@@ -266,16 +266,6 @@ impl Solver {
 
 
 // ============================================================================
-impl Isothermal {
-    pub fn new(mach_number: f64) -> Self {
-        Self{mach_number}
-    }
-}
-
-
-
-
-// ============================================================================
 impl Hydrodynamics for Isothermal {
 
     type Conserved = hydro_iso2d::Conserved;
@@ -374,16 +364,6 @@ impl Hydrodynamics for Isothermal {
             Direction::Y => hydro_iso2d::Direction::Y,
         };
         hydro_iso2d::riemann_hlle(pl, pr, iso2d_axis, cs2) + hydro_iso2d::Conserved(0.0, -tau_x, -tau_y)
-    }
-}
-
-
-
-
-// ============================================================================
-impl Euler {
-    pub fn new() -> Self {
-        Self{gamma_law_index: 5.0 / 3.0}
     }
 }
 
