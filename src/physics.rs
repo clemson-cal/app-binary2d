@@ -89,7 +89,7 @@ pub enum Direction {
 // ============================================================================
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Solver {
+pub struct Physics {
 
     pub buffer_rate: f64,
 
@@ -137,8 +137,6 @@ pub struct Solver {
     /// The amplitude of sink profile function.
     pub sink_rate: f64,
 }
-
-pub type Physics = Solver;
 
 
 
@@ -220,7 +218,7 @@ impl<'a, P: Primitive> CellData<'_, P> {
 
 
 // ============================================================================
-impl Solver {
+impl Physics {
 
     pub fn need_flux_communication(&self) -> bool {
         false
@@ -352,7 +350,7 @@ impl Hydrodynamics for Isothermal {
 
     fn source_terms(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         mesh: &Mesh,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
@@ -364,8 +362,8 @@ impl Hydrodynamics for Isothermal {
         let omega = 1.0; // Note: in the future, the binary orbital frequency
                          // may be allowed to vary; we really should not be
                          // assuming everywhere that it's 1.0.
-        let density_floor = background_conserved.density() * solver.fake_mass_threshold();
-        let fake_mass_rate = background_conserved.density() * omega * solver.fake_mass_rate();
+        let density_floor = background_conserved.density() * physics.fake_mass_threshold();
+        let fake_mass_rate = background_conserved.density() * omega * physics.fake_mass_rate();
 
         let fake_mdot = if conserved.density() < density_floor {
             0.0
@@ -373,7 +371,7 @@ impl Hydrodynamics for Isothermal {
             fake_mass_rate
         };
 
-        let st = solver.source_terms(mesh, two_body_state, x, y, conserved.density());
+        let st = physics.source_terms(mesh, two_body_state, x, y, conserved.density());
 
         ItemizedChange {
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
@@ -388,7 +386,7 @@ impl Hydrodynamics for Isothermal {
 
     fn intercell_flux<'a>(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         l: &CellData<'a, hydro_iso2d::Primitive>,
         r: &CellData<'a, hydro_iso2d::Primitive>,
         dx: f64,
@@ -399,8 +397,8 @@ impl Hydrodynamics for Isothermal {
         let cs2 = -gravitational_potential / self.mach_number.powi(2);
         let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
-        let nu  = solver.nu;
-        let lam = solver.lambda;
+        let nu  = physics.nu;
+        let lam = physics.lambda;
         let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
         let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
         let iso2d_axis = match axis {
@@ -458,7 +456,7 @@ impl Hydrodynamics for Euler {
 
     fn source_terms(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         mesh: &Mesh,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
@@ -467,7 +465,7 @@ impl Hydrodynamics for Euler {
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        let st        = solver.source_terms(mesh, two_body_state, x, y, conserved.mass_density());
+        let st        = physics.source_terms(mesh, two_body_state, x, y, conserved.mass_density());
         let primitive = conserved.to_primitive(self.gamma_law_index);
         let vx        = primitive.velocity_1();
         let vy        = primitive.velocity_2();
@@ -485,7 +483,7 @@ impl Hydrodynamics for Euler {
 
     fn intercell_flux<'a>(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
         dx: f64,
@@ -496,8 +494,8 @@ impl Hydrodynamics for Euler {
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
 
-        let nu    = solver.nu;
-        let lam   = solver.lambda;
+        let nu    = physics.nu;
+        let lam   = physics.lambda;
         let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
         let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
         let vx = 0.5 * (l.pc.velocity_x() + r.pc.velocity_x());

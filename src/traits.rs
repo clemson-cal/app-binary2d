@@ -10,7 +10,7 @@ use crate::physics::{
     CellData,
     Direction,
     HydroErrorType,
-    Solver,
+    Physics,
 };
 
 
@@ -72,7 +72,7 @@ pub trait Hydrodynamics: Clone + Copy + Send {
 
     fn source_terms(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         mesh: &Mesh,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
@@ -83,7 +83,7 @@ pub trait Hydrodynamics: Clone + Copy + Send {
 
     fn intercell_flux<'a>(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
         x: f64,
