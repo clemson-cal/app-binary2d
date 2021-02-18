@@ -188,13 +188,13 @@ impl Configuration {
      * can be names of YAML files or key=value pairs.
      */
     pub fn patch_from_command_line(&mut self) -> anyhow::Result<()> {
-        for extra_config_str in std::env::args().skip_while(|s| ! s.contains('=') && ! s.ends_with(".yaml")) {
-            if extra_config_str.ends_with(".yaml") {
-                self.patch_from_reader(File::open(extra_config_str)?)?
-            } else {
-                self.patch_from_key_val(&extra_config_str)?
-            }
-        }
+        // for extra_config_str in std::env::args().skip_while(|s| ! s.contains('=') && ! s.ends_with(".yaml")) {
+        //     if extra_config_str.ends_with(".yaml") {
+        //         self.patch_from_reader(File::open(extra_config_str)?)?
+        //     } else {
+        //         self.patch_from_key_val(&extra_config_str)?
+        //     }
+        // }
         Ok(())
     }
 }

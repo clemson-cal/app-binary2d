@@ -92,19 +92,18 @@ where
 // ============================================================================
 fn main() -> anyhow::Result<()> {
 
-    let input = match std::env::args().nth(1) {
-        None => anyhow::bail!("no input file given"),
-        Some(input) => input,
-    };
-
     println!();
     println!("\t{}", app::DESCRIPTION);
     println!("\t{}", app::VERSION_AND_BUILD);
     println!();
 
+    let input = match std::env::args().nth(1) {
+        None => anyhow::bail!("no input file given"),
+        Some(input) => input,
+    };
+
     let app = App::from_file(&input)?.validate()?;
 
-    println!();
     for line in serde_yaml::to_string(&app.config)?.split("\n").skip(1) {
         println!("\t{}", line);
     }
