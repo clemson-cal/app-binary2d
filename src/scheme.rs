@@ -98,9 +98,9 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
 
     let scheme = UpdateScheme::new(hydro);
     let time = state.time;
-    let mut pc_map = HashMap::new();
-    let mut fg_map = HashMap::new();
-    let mut s1_vec = Vec::new();
+    let mut pc_map = HashMap::with_capacity(state.solution.len());
+    let mut fg_map = HashMap::with_capacity(state.solution.len());
+    let mut s1_vec = Vec::with_capacity(state.solution.len());
 
 
     for index in mesh.block_indexes() {
@@ -182,8 +182,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     fn try_block_primitive(
         &self,
         conserved: ArcArray<H::Conserved, Ix2>,
-        block: BlockData<H::Conserved>
-        ) -> Result<Array<H::Primitive, Ix2>, HydroError>
+        block: BlockData<H::Conserved>) -> Result<Array<H::Primitive, Ix2>, HydroError>
     {
         let x: Result<Vec<_>, _> = conserved
             .iter()
