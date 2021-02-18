@@ -208,7 +208,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 
         // ========================================================================
         let two_body_state = physics.orbital_elements.orbital_state_from_time(time);
-        let phi = |&(x, y)| -two_body_state.gravitational_potential(x, y, physics.softening_length);
+        let phi = |&(x, y)| two_body_state.gravitational_potential(x, y, physics.softening_length);
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
         let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
         let dx = mesh.cell_spacing_x();
