@@ -155,16 +155,17 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
     }
 
 
-    let solution: Result<HashMap<_, _>, _> = join_all(s1_vec)
+    let solution = join_all(s1_vec)
         .await
         .into_iter()
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.with_orbital_state(physics.orbital_state_from_time(time)))?;
 
 
     Ok(State {
         time: state.time + dt,
         iteration: state.iteration + 1,
-        solution: solution?,
+        solution: solution,
     })
 }
 
