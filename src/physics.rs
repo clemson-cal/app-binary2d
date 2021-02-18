@@ -108,16 +108,33 @@ pub struct Solver {
 
     pub plm: f64,
 
+    /// Used to impose a "preemptive" density floor: fake mass is injected at
+    /// the `fake_mass_rate` where the surface density is smaller than this
+    /// dimensionless number, times the surface density at this position in
+    /// the initial condition. When set to zero, the preemptive floor is never
+    /// invoked. For brevity, this parameter may be omitted from the parameter
+    /// file, and has a default value of zero.
     #[serde(default)]
-    pub relative_density_floor: f64,
+    pub fake_mass_threshold: f64,
 
+    /// The rate of injection of fake mass when the density is below the
+    /// `fake_mass_threshold`. `Sigma_dot = fake_mass_rate * Omega *
+    /// Sigma_background`, where `Sigma_background` is the surface density at
+    /// this position in the initial condition. For brevity, this parameter
+    /// may be omitted from the parameter file, and has a default value of
+    /// zero.
     #[serde(default)]
-    pub relative_fake_mass_rate: f64,
+    pub fake_mass_rate: f64,
 
+    /// The Runge-Kutta order used for method-of-lines time integration.
     pub rk_order: runge_kutta::RungeKuttaOrder,
 
+    /// The radius of a circular region around each component within which
+    /// mass is subtracted. This is the length scale in the sink profile
+    /// function, which is some type of super-Gaussian.
     pub sink_radius: f64,
 
+    /// The amplitude of sink profile function.
     pub sink_rate: f64,
 }
 
@@ -280,12 +297,12 @@ impl Solver {
         }
     }
 
-    pub fn relative_density_floor(&self) -> f64 {
-        self.relative_density_floor
+    pub fn fake_mass_threshold(&self) -> f64 {
+        self.fake_mass_threshold
     }
 
-    pub fn relative_fake_mass_rate(&self) -> f64 {
-        self.relative_fake_mass_rate
+    pub fn fake_mass_rate(&self) -> f64 {
+        self.fake_mass_rate
     }
 }
 
@@ -347,8 +364,8 @@ impl Hydrodynamics for Isothermal {
         let omega = 1.0; // Note: in the future, the binary orbital frequency
                          // may be allowed to vary; we really should not be
                          // assuming everywhere that it's 1.0.
-        let density_floor = background_conserved.density() * solver.relative_density_floor();
-        let fake_mass_rate = background_conserved.density() * omega * solver.relative_fake_mass_rate();
+        let density_floor = background_conserved.density() * solver.fake_mass_threshold();
+        let fake_mass_rate = background_conserved.density() * omega * solver.fake_mass_rate();
 
         let fake_mdot = if conserved.density() < density_floor {
             0.0
