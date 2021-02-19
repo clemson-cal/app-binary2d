@@ -210,8 +210,7 @@ impl<'a, P: Primitive> CellData<'_, P> {
 
     pub fn gradient_field(&self, axis: Direction) -> &P {
         use Direction::{X, Y};
-        match axis
-        {
+        match axis {
             X => self.gx,
             Y => self.gy,
         }
@@ -366,7 +365,7 @@ impl Hydrodynamics for Isothermal {
         let omega = 1.0; // Note: in the future, the binary orbital frequency
                          // may be allowed to vary; we really should not be
                          // assuming everywhere that it's 1.0.
-        let density_floor = background_conserved.density() * physics.fake_mass_threshold();
+        let density_floor  = background_conserved.density() * physics.fake_mass_threshold();
         let fake_mass_rate = background_conserved.density() * omega * physics.fake_mass_rate();
 
         let fake_mdot = if conserved.density() < density_floor {
@@ -485,7 +484,7 @@ impl Hydrodynamics for Euler {
             sink1:   conserved * (-st.sink_rate1 * dt),
             sink2:   conserved * (-st.sink_rate2 * dt),
             buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
-            cooling: Self::Conserved::zeros(),
+            cooling:   Self::Conserved::zeros(),
             fake_mass: Self::Conserved::zeros(),
         }
     }

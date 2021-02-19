@@ -75,11 +75,16 @@ where
         .worker_threads(control.num_threads)
         .build()?;
 
+    let block_data = mesh
+        .block_indexes()
+        .map(|index| Ok((index, scheme::BlockData::from_model(&model, &hydro, &mesh, index)?)))
+        .collect::<Result<_, anyhow::Error>>()?;
+
     let dt = physics.min_time_step(&mesh);
 
     while state.time < control.num_orbits * ORBITAL_PERIOD {
         side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
-        state = scheme::advance(state, hydro, &model, &mesh, &physics, dt, control.fold, &runtime)?;
+        state = scheme::advance(state, hydro, &mesh, &physics, dt, control.fold, &block_data, &runtime)?;
     }
     side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
 

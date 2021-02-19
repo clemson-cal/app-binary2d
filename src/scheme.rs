@@ -41,17 +41,17 @@ pub struct BlockData<C: Conserved> {
 }
 
 impl<C: Conserved> BlockData<C> {
-    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh, index: BlockIndex) -> Self
+    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh, index: BlockIndex) -> anyhow::Result<Self>
     where
         H: Hydrodynamics<Conserved = C> + Into<AnyHydro>
     {
-        Self {
-            initial_conserved: BlockState::from_model(model, hydro, mesh, index).conserved,
+        Ok(Self {
+            initial_conserved: BlockState::from_model(model, hydro, mesh, index)?.conserved,
             cell_centers: mesh.cell_centers(index).to_shared(),
             face_centers_x: mesh.face_centers_x(index).to_shared(),
             face_centers_y: mesh.face_centers_y(index).to_shared(),
             index,
-        }
+        })
     }
 }
 
@@ -292,23 +292,15 @@ impl<H: Hydrodynamics> UpdateScheme<H>
 pub fn advance<H>(
     mut state:  State<H::Conserved>,
     hydro:      H,
-    model:      &AnyModel,
     mesh:       &Mesh,
     physics:     &Physics,
     dt:         f64,
     fold:       usize,
+    block_data: &HashMap<BlockIndex, BlockData<H::Conserved>>,
     runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
 where
     H: Hydrodynamics + Into<AnyHydro> + 'static
 {
-    // Note: the block data is regenerated at each of these coarse iterations,
-    // which could hurt the efficiency of very small fold values.
-
-    let block_data = mesh
-        .block_indexes()
-        .map(|index| (index, BlockData::from_model(&model, &hydro, &mesh, index)))
-        .collect();
-
     let try_update = |state| try_advance_rk(state, hydro, &block_data, mesh, physics, dt, runtime);
     let rk = physics.rk_order;
 

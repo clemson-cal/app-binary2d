@@ -71,17 +71,18 @@ impl<C: Conserved> BlockState<C> {
      * Generate a block state from the given initial model, hydrodynamics
      * instance and grid geometry.
      */
-    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh, index: BlockIndex) -> Self
+    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh, index: BlockIndex) -> anyhow::Result<Self>
     where
         H: Hydrodynamics<Conserved = C>
     {
+        model.validate(hydro)?;
         let cons = |r| hydro.to_conserved(hydro.from_any(model.primitive_at(hydro, r)));
 
-        Self {
+        Ok(Self {
             conserved: mesh.cell_centers(index).mapv(cons).to_shared(),
             integrated_source_terms: ItemizedChange::zeros(),
             orbital_elements_change: ItemizedChange::zeros(),
-        }
+        })
     }
 }
 
@@ -95,7 +96,7 @@ impl<C: Conserved> State<C> {
      * Generate a state from the given initial model, hydrodynamics instance,
      * and map of grid geometry.
      */
-    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh) -> Self
+    pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh) -> anyhow::Result<Self>
     where
         H: Hydrodynamics<Conserved = C>
     {
@@ -103,9 +104,9 @@ impl<C: Conserved> State<C> {
         let iteration = Rational64::new(0, 1);
         let solution = mesh
             .block_indexes()
-            .map(|index| (index, BlockState::from_model(model, hydro, mesh, index)))
-            .collect::<HashMap<_, _>>();
-        Self{time, iteration, solution}
+            .map(|index| Ok((index, BlockState::from_model(model, hydro, mesh, index)?)))
+            .collect::<Result<HashMap<_, _>, anyhow::Error>>()?;
+        Ok(Self{time, iteration, solution})
     }
 
     /**

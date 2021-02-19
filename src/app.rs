@@ -230,10 +230,10 @@ impl App {
 
         let state = match &config.hydro {
             AnyHydro::Isothermal(hydro) => {
-                State::from_model(&config.model, hydro, &config.mesh).into()
+                State::from_model(&config.model, hydro, &config.mesh)?.into()
             },
             AnyHydro::Euler(hydro) => {
-                State::from_model(&config.model, hydro, &config.mesh).into()
+                State::from_model(&config.model, hydro, &config.mesh)?.into()
             },
         };
         let tasks = Tasks::new();
