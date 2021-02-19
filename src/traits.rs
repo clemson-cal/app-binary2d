@@ -1,9 +1,6 @@
 use std::ops::{Add, Sub, Mul, Div};
 use kepler_two_body::OrbitalState;
-use crate::app::{
-    AnyHydro,
-    AnyPrimitive,
-};
+use crate::app::AnyPrimitive;
 use crate::mesh::Mesh;
 use crate::state::ItemizedChange;
 use crate::physics::{
@@ -104,10 +101,10 @@ pub trait InitialModel: Clone {
     /**
      * Return the hydrodynamics state at a given cylindrical radius
      */
-    fn primitive_at(&self, hydro: &AnyHydro, xy: (f64, f64)) -> AnyPrimitive;
+    fn primitive_at<H: Hydrodynamics>(&self, hydro: &H, xy: (f64, f64)) -> AnyPrimitive;
 
     /**
      * Validate the model
      */
-    fn validate(&self, hydro: &AnyHydro) -> anyhow::Result<()>;
+    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> anyhow::Result<()>;
 }

@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
-use crate::app::{AnyPrimitive, AnyHydro};
-use crate::traits::InitialModel;
+use crate::app::AnyPrimitive;
+use crate::traits::{Hydrodynamics, InitialModel};
 
 
 
@@ -32,11 +32,11 @@ pub struct InfiniteDiskModel {
 // ============================================================================
 impl InitialModel for FiniteDiskModel {
 
-    fn primitive_at(&self, _hydro: &AnyHydro, _xy: (f64, f64)) -> AnyPrimitive {
+    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, _xy: (f64, f64)) -> AnyPrimitive {
         todo!()
     }
 
-    fn validate(&self, _hydro: &AnyHydro) -> anyhow::Result<()> {
+    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -47,14 +47,15 @@ impl InitialModel for FiniteDiskModel {
 // ============================================================================
 impl InitialModel for InfiniteDiskModel {
 
-    fn primitive_at(&self, _hydro: &AnyHydro, xy: (f64, f64)) -> AnyPrimitive {
+    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, xy: (f64, f64)) -> AnyPrimitive {
         let (x, y) = xy;
         let r = (x * x + y * y).sqrt();
         let sd = 1.0;
         let vp = r.powf(-0.5);
         let vx = vp * (-y / r);
         let vy = vp * ( x / r);
-        AnyPrimitive{
+
+        AnyPrimitive {
             velocity_x: vx,
             velocity_y: vy,
             surface_density: sd,
@@ -62,7 +63,7 @@ impl InitialModel for InfiniteDiskModel {
         }
     }
 
-    fn validate(&self, _hydro: &AnyHydro) -> anyhow::Result<()> {
+    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
         Ok(())
     }
 }

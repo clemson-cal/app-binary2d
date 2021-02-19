@@ -5,10 +5,7 @@ use serde::{Serialize, Deserialize};
 use ndarray::{ArcArray, Ix2};
 use kepler_two_body::OrbitalElements;
 use godunov_core::runge_kutta;
-use crate::app::{
-    AnyHydro,
-    AnyModel,
-};    
+use crate::app::AnyModel; 
 use crate::mesh::{
     BlockIndex,
     Mesh,
@@ -76,10 +73,9 @@ impl<C: Conserved> BlockState<C> {
      */
     pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh, index: BlockIndex) -> Self
     where
-        H: Hydrodynamics<Conserved = C> + Into<AnyHydro>
+        H: Hydrodynamics<Conserved = C>
     {
-        let any_hydro: AnyHydro = hydro.clone().into();
-        let cons = |r| hydro.to_conserved(hydro.from_any(model.primitive_at(&any_hydro, r)));
+        let cons = |r| hydro.to_conserved(hydro.from_any(model.primitive_at(hydro, r)));
 
         Self {
             conserved: mesh.cell_centers(index).mapv(cons).to_shared(),
@@ -101,7 +97,7 @@ impl<C: Conserved> State<C> {
      */
     pub fn from_model<H>(model: &AnyModel, hydro: &H, mesh: &Mesh) -> Self
     where
-        H: Hydrodynamics<Conserved = C> + Into<AnyHydro>
+        H: Hydrodynamics<Conserved = C>
     {
         let time = 0.0;
         let iteration = Rational64::new(0, 1);

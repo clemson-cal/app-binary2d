@@ -145,14 +145,14 @@ pub struct App {
 // ============================================================================
 impl InitialModel for AnyModel {
 
-    fn primitive_at(&self, hydro: &AnyHydro, xy: (f64, f64)) -> AnyPrimitive {
+    fn primitive_at<H: Hydrodynamics>(&self, hydro: &H, xy: (f64, f64)) -> AnyPrimitive {
         match self {
             Self::FiniteDisk  (model) => model.primitive_at(hydro, xy),
             Self::InfiniteDisk(model) => model.primitive_at(hydro, xy),
         }
     }
 
-    fn validate(&self, hydro: &AnyHydro) -> std::result::Result<(), anyhow::Error> {
+    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> std::result::Result<(), anyhow::Error> {
         match self {
             Self::FiniteDisk  (model) => model.validate(hydro),
             Self::InfiniteDisk(model) => model.validate(hydro),
