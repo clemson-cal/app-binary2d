@@ -362,28 +362,23 @@ impl Hydrodynamics for Isothermal {
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        let omega = 1.0; // Note: in the future, the binary orbital frequency
-                         // may be allowed to vary; we really should not be
-                         // assuming everywhere that it's 1.0.
-        let density_floor  = background_conserved.density() * physics.fake_mass_threshold();
-        let fake_mass_rate = background_conserved.density() * omega * physics.fake_mass_rate();
+        let (u, u0) = (conserved, background_conserved);
 
-        let fake_mdot = if conserved.density() < density_floor {
-            0.0
+        let fake_du = if u.density() < u0.density() * physics.fake_mass_threshold() {
+            Self::Conserved::zeros()
         } else {
-            fake_mass_rate
+            u0 * physics.fake_mass_rate() * dt
         };
-
-        let st = physics.source_terms(mesh, two_body_state, x, y, conserved.density());
+        let st = physics.source_terms(mesh, two_body_state, x, y, u.density());
 
         ItemizedChange {
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
             grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
-            sink1:   conserved * (-st.sink_rate1 * dt),
-            sink2:   conserved * (-st.sink_rate2 * dt),
-            buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
+            sink1:   u * (-st.sink_rate1 * dt),
+            sink2:   u * (-st.sink_rate2 * dt),
+            buffer: (u - u0) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
-            fake_mass: hydro_iso2d::Conserved(fake_mdot * dt, 0.0, 0.0),
+            fake_mass: fake_du,
         }
     }
 
