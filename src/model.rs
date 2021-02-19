@@ -47,7 +47,7 @@ impl InitialModel for FiniteDiskModel {
 // ============================================================================
 impl InitialModel for InfiniteDiskModel {
 
-    fn primitive_at<H: Hydrodynamics>(&self, _hydro: &H, xy: (f64, f64)) -> AnyPrimitive {
+    fn primitive_at<H: Hydrodynamics>(&self, hydro: &H, xy: (f64, f64)) -> AnyPrimitive {
         let (x, y) = xy;
         let r = (x * x + y * y).sqrt();
         let sd = 1.0;
@@ -55,15 +55,25 @@ impl InitialModel for InfiniteDiskModel {
         let vx = vp * (-y / r);
         let vy = vp * ( x / r);
 
+        let mach_number = hydro.global_mach_number().or(self.mach_number).unwrap();
+        let cs = vp / mach_number;
+        let gm = hydro.gamma_law_index();
+        let pg = cs * cs * sd / gm;
+
         AnyPrimitive {
             velocity_x: vx,
             velocity_y: vy,
             surface_density: sd,
-            surface_pressure: sd * 0.01,
+            surface_pressure: pg,
         }
     }
 
-    fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
-        Ok(())
+    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> anyhow::Result<()> {
+        match (self.mach_number, hydro.global_mach_number()) {
+            (Some(_), Some(_)) | (None, None) => anyhow::bail!{
+                "A Mach number must be specified in exactly one of [hydro, model]"
+            },
+            _ => Ok(())
+        }
     }
 }
