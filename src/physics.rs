@@ -179,8 +179,10 @@ pub struct Isothermal {
 #[serde(deny_unknown_fields)]
 pub struct Euler {
 
+    /// The adiabatic index, probably 5/3
     pub gamma_law_index: f64,
 
+    /// Strength of the T^4 cooling
     pub cooling_coefficient: f64,
 }
 
@@ -475,27 +477,42 @@ impl Hydrodynamics for Euler {
         &self,
         physics: &Physics,
         mesh: &Mesh,
-        conserved: Self::Conserved,
+        u0: Self::Conserved,
         background_conserved: Self::Conserved,
         x: f64,
         y: f64,
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        let st = physics.source_terms(mesh, two_body_state, x, y, conserved.mass_density());
-        let p  = conserved.to_primitive(self.gamma_law_index);
-        let vx = p.velocity_1();
-        let vy = p.velocity_2();
-        let e  = p.gas_pressure() / p.mass_density() / (self.gamma_law_index - 1.0);
-        let cooling_rate = self.cooling_coefficient * f64::powf(e, 4.0) / p.mass_density();
+        let st = physics.source_terms(mesh, two_body_state, x, y, u0.mass_density());
+        let p0 = u0.to_primitive(self.gamma_law_index);
+        let vx = p0.velocity_1();
+        let vy = p0.velocity_2();
+        let e0 = p0.gas_pressure() / p0.mass_density() / (self.gamma_law_index - 1.0);
+
+        // The prescription below for the removal of thermal energy is
+        // equivalent to Ryan & MacFadyen (2017). It gives accurate T^4
+        // cooling, even when the cooling time is longer than the time step
+        // dt, by integrating in time along the cooling curve. This cooling
+        // prescription assumes the photosphere temperature is lower than the
+        // midplane temperature (given by the primitive hydro variables) by a
+        // factor of the optical depth to the 1/4 power, as described in
+        // Frank, King, and Raine Chapter 5. The term `a` below is the
+        // coefficient in `L = 2 sigma T_phot^4 = a e_mid^4` (note the factor
+        // of two) since the disk has two surfaces.
+
+        let a = self.cooling_coefficient / p0.mass_density();
+        let ec = e0 * (1.0 + 3.0 * a * e0.powi(3) * dt).powf(-1.0 / 3.0);
+        let pc = hydro_euler::euler_2d::Primitive(p0.0, p0.1, p0.2, p0.0 * ec * (self.gamma_law_index - 1.0));
+        let uc = pc.to_conserved(self.gamma_law_index);
 
         ItemizedChange {
             grav1:     hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
             grav2:     hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
-            sink1:     conserved * (-st.sink_rate1 * dt),
-            sink2:     conserved * (-st.sink_rate2 * dt),
-            buffer:   (conserved - background_conserved) * (-dt * st.buffer_rate),
-            cooling:   hydro_euler::euler_2d::Conserved(0.0, 0.0, 0.0, -cooling_rate),
+            sink1:     u0 * (-st.sink_rate1 * dt),
+            sink2:     u0 * (-st.sink_rate2 * dt),
+            buffer:   (u0 - background_conserved) * (-dt * st.buffer_rate),
+            cooling:   uc - u0,
             fake_mass: Self::Conserved::zeros(),
         }
     }
@@ -586,7 +603,7 @@ impl Primitive for hydro_iso2d::Primitive {
 }
 
 impl Primitive for hydro_euler::euler_2d::Primitive {
-    fn velocity_x(self)   -> f64 { self.velocity(hydro_euler::geometry::Direction::X) }
-    fn velocity_y(self)   -> f64 { self.velocity(hydro_euler::geometry::Direction::Y) }
+    fn velocity_x(self)   -> f64 { self.velocity_1() }
+    fn velocity_y(self)   -> f64 { self.velocity_2() }
     fn mass_density(self) -> f64 { self.mass_density() }
 }

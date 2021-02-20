@@ -41,7 +41,7 @@ where
         let time = tasks.iteration_message.advance(0.0);
         let mzps = 1e-6 * state.total_zones() as f64 / time * control.fold as f64;
         if tasks.iteration_message.count_this_run > 1 {
-            println!("[{:05}] orbit={:.5} Mzps={:.2})", state.iteration, state.time / ORBITAL_PERIOD, mzps);
+            println!("[{:05}] orbit={:.5} Mzps={:.2}", state.iteration, state.time / ORBITAL_PERIOD, mzps);
         }
     }
     if tasks.write_checkpoint.next_time <= state.time {
