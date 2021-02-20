@@ -63,6 +63,7 @@ name = "cdc_loader"
 version = "0.1.0"
 dependencies = [
  "binary2d",
+ "hydro-euler",
  "ndarray",
  "numpy",
  "pyo3",

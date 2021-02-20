@@ -17,3 +17,5 @@ ndarray = "0.14"
 pythonize = "0.13"
 numpy = "0.13"
 binary2d = {path = ".."}
+hydro-euler = { git = "https://github.com/clemson-cal/hydro-euler" }
+

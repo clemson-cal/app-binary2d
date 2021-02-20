@@ -6,6 +6,9 @@ import cdc_loader
 import matplotlib.pyplot as plt
 
 
+fields = ['sigma', 'velocity_x', 'velocity_y', 'pressure', 'specific_internal_energy']
+
+
 def pcolormesh_data(app, field, transform=lambda x: x):
     result = []
     for key, data in getattr(app.state, field).items():
@@ -31,7 +34,9 @@ def plot_field(ax, filename, field, vmin=None, vmax=None, transform=lambda x: x)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("filenames", nargs='+')
+    parser.add_argument('--field', '-f', default='sigma', choices=fields, help='the hydrodynamic field to plot')
     parser.add_argument('--range', default='None,None', help='vmin and vmax parameters for the relief plot')
+    parser.add_argument('--log', '-l', action='store_true', help='use log10 scaling')
     args = parser.parse_args()
 
     vmin, vmax = eval(args.range)
@@ -39,6 +44,6 @@ if __name__ == "__main__":
     for filename in args.filenames:
         fig = plt.figure()
         ax1 = fig.add_subplot(1, 1, 1)
-        cm = plot_field(ax1, filename, 'sigma', vmin=vmin, vmax=vmax, transform=np.log10)
+        cm = plot_field(ax1, filename, args.field, vmin=vmin, vmax=vmax, transform=np.log10 if args.log else lambda x: x)
         fig.colorbar(cm)
     plt.show()

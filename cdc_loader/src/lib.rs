@@ -8,8 +8,9 @@ use numpy::ToPyArray;
 use pythonize::pythonize;
 use binary2d::app;
 use binary2d::mesh;
+use binary2d::physics;
 use binary2d::state;
-use binary2d::traits;
+use binary2d::traits::{Conserved, Hydrodynamics};
 
 
 
@@ -131,28 +132,44 @@ impl State {
     /// Vertically integrated gas pressure
     #[getter]
     fn pressure(&self, py: Python) -> PyResult<HashMap<(usize, usize), PyObject>> {
-        use traits::Hydrodynamics;
+        self.map_conserved_euler_only(|hydro, u| hydro.to_primitive(u).gas_pressure(), "pressure", py)
+    }
 
-        match (&self.hydro, self.state.as_ref()) {
-            (app::AnyHydro::Euler(hydro), app::AnyState::Euler(state)) => {
-                Ok(self.map_conserved(state, |u| hydro.to_primitive(u).gas_pressure(), py))
-            }
-            (_, _) => {
-                Err(PyErr::from_instance(PyValueError::new_err("not defined for isothermal hydro").instance(py)))
-            }
-        }
+    /// Gas thermal energy per unit mass
+    #[getter]
+    fn specific_internal_energy(&self, py: Python) -> PyResult<HashMap<(usize, usize), PyObject>> {
+        let f = |hydro: &physics::Euler, u| {
+            let p = hydro.to_primitive(u).gas_pressure();
+            let d = hydro.to_primitive(u).mass_density();
+            p / d / (hydro.gamma_law_index - 1.0)
+        };
+        self.map_conserved_euler_only(f, "specific_internal_energy", py)
     }
 }
 
 impl State {
     fn map_conserved<C, F>(&self, state: &state::State<C>, f: F, py: Python) -> HashMap<(usize, usize), PyObject>
     where
-        C: traits::Conserved,
+        C: Conserved,
         F: Fn(C) -> f64
     {
         state.solution.iter().map(|(&index, block)| {
             (index, block.conserved.mapv(&f).to_pyarray(py).to_object(py))
         }).collect()
+    }
+
+    fn map_conserved_euler_only<F>(&self, f: F, field_name: &str, py: Python) -> PyResult<HashMap<(usize, usize), PyObject>>
+    where
+        F: Fn(&physics::Euler, hydro_euler::euler_2d::Conserved) -> f64
+    {
+        match (&self.hydro, self.state.as_ref()) {
+            (app::AnyHydro::Euler(hydro), app::AnyState::Euler(state)) => {
+                Ok(self.map_conserved(state, |u| f(hydro, u), py))
+            }
+            (_, _) => {
+                Err(PyErr::from_instance(PyValueError::new_err(format!("{} not defined for isothermal hydro", field_name)).instance(py)))
+            }
+        }
     }
 }
 
