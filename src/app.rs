@@ -28,8 +28,8 @@ pub static VERSION_AND_BUILD: &str = git_version::git_version!(prefix=concat!("v
 #[derive(Clone, Serialize, Deserialize, derive_more::From)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub enum AnyHydro {
-    Isothermal (Isothermal),
-    Euler      (Euler),
+    Isothermal(Isothermal),
+    Euler(Euler),
 }
 
 

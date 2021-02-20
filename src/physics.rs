@@ -130,6 +130,11 @@ pub struct Physics {
     #[serde(default)]
     pub fake_mass_rate: f64,
 
+    /// Whether to use a single point mass insead of a binary setup, intended
+    /// mainly for testing.
+    #[serde(default)]
+    pub one_body: bool,
+
     /// The Runge-Kutta order used for method-of-lines time integration.
     pub rk_order: runge_kutta::RungeKuttaOrder,
 
@@ -161,6 +166,7 @@ pub struct SourceTerms {
 
 // ============================================================================
 #[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Isothermal {
     pub mach_number: f64
 }
@@ -170,8 +176,12 @@ pub struct Isothermal {
 
 // ============================================================================
 #[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Euler {
+
     pub gamma_law_index: f64,
+
+    pub cooling_coefficient: f64,
 }
 
 
@@ -255,7 +265,11 @@ impl Physics {
     }
 
     pub fn orbital_elements(&self) -> kepler_two_body::OrbitalElements {
-        kepler_two_body::OrbitalElements(1.0, 1.0, self.binary_mass_ratio, self.binary_eccentricity)
+        if self.one_body {
+            kepler_two_body::OrbitalElements(1e-12, 1.0, 1.0, 0.0)            
+        } else {
+            kepler_two_body::OrbitalElements(1.0, 1.0, self.binary_mass_ratio, self.binary_eccentricity)
+        }
     }
 
     pub fn orbital_state_from_time(&self, time: f64) -> kepler_two_body::OrbitalState {
@@ -468,18 +482,20 @@ impl Hydrodynamics for Euler {
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        let st        = physics.source_terms(mesh, two_body_state, x, y, conserved.mass_density());
-        let primitive = conserved.to_primitive(self.gamma_law_index);
-        let vx        = primitive.velocity_1();
-        let vy        = primitive.velocity_2();
+        let st = physics.source_terms(mesh, two_body_state, x, y, conserved.mass_density());
+        let p  = conserved.to_primitive(self.gamma_law_index);
+        let vx = p.velocity_1();
+        let vy = p.velocity_2();
+        let e  = p.gas_pressure() / p.mass_density() / (self.gamma_law_index - 1.0);
+        let cooling_rate = self.cooling_coefficient * f64::powf(e, 4.0) / p.mass_density();
 
         ItemizedChange {
-            grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
-            grav2:   hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
-            sink1:   conserved * (-st.sink_rate1 * dt),
-            sink2:   conserved * (-st.sink_rate2 * dt),
-            buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
-            cooling:   Self::Conserved::zeros(),
+            grav1:     hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
+            grav2:     hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
+            sink1:     conserved * (-st.sink_rate1 * dt),
+            sink2:     conserved * (-st.sink_rate2 * dt),
+            buffer:   (conserved - background_conserved) * (-dt * st.buffer_rate),
+            cooling:   hydro_euler::euler_2d::Conserved(0.0, 0.0, 0.0, -cooling_rate),
             fake_mass: Self::Conserved::zeros(),
         }
     }

@@ -70,8 +70,11 @@ impl InitialModel for InfiniteDiskModel {
 
     fn validate<H: Hydrodynamics>(&self, hydro: &H) -> anyhow::Result<()> {
         match (self.mach_number, hydro.global_mach_number()) {
-            (Some(_), Some(_)) | (None, None) => anyhow::bail!{
+            (Some(_), Some(_)) => anyhow::bail!{
                 "A Mach number must be specified either in hydro or model (not both)"
+            },
+            (None, None) => anyhow::bail!{
+                "A Mach number must be specified either in hydro or model"
             },
             _ => Ok(())
         }
