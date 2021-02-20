@@ -1,7 +1,7 @@
 pub mod app;
+pub mod disks;
 pub mod io;
 pub mod mesh;
-pub mod model;
 pub mod physics;
 pub mod scheme;
 pub mod state;

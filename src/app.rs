@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use yaml_patch::Patch;
 use crate::io;
 use crate::mesh::Mesh;
-use crate::model::{InfiniteDiskModel, FiniteDiskModel};
+use crate::disks::{InfiniteDiskModel, FiniteDiskModel};
 use crate::physics::{Euler, Isothermal, Physics};
 use crate::state::State;
 use crate::tasks::Tasks;
