@@ -6,7 +6,7 @@ import cdc_loader
 import matplotlib.pyplot as plt
 
 
-fields = ['sigma', 'velocity_x', 'velocity_y', 'pressure', 'specific_internal_energy']
+fields = ['sigma', 'velocity_x', 'velocity_y', 'pressure', 'specific_internal_energy', 'mach_number']
 
 
 def pcolormesh_data(app, field, transform=lambda x: x):
