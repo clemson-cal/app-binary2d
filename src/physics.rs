@@ -136,6 +136,10 @@ pub struct Physics {
     #[serde(default)]
     pub one_body: bool,
 
+    /// An optional maximum Mach number, which the cooling prescription should
+    /// avoid going above.
+    pub mach_ceiling: Option<f64>,
+
     /// The Runge-Kutta order used for method-of-lines time integration.
     pub rk_order: runge_kutta::RungeKuttaOrder,
 
@@ -496,17 +500,28 @@ impl Hydrodynamics for Euler {
         // The prescription below for the removal of thermal energy is
         // equivalent to Ryan & MacFadyen (2017). It gives accurate T^4
         // cooling, even when the cooling time is longer than the time step
-        // dt, by integrating in time along the cooling curve. This cooling
-        // prescription assumes the photosphere temperature is lower than the
-        // midplane temperature (given by the primitive hydro variables) by a
-        // factor of the optical depth to the 1/4 power, as described in
-        // Frank, King, and Raine Chapter 5. The term `a` below is the
-        // coefficient in `L = 2 sigma T_phot^4 = a e_mid^4` (note the factor
-        // of two) since the disk has two surfaces.
+        // dt, by integrating in time along the cooling curve. The cooling
+        // prescription has two modes: one that assumes the photosphere
+        // temperature is lower than the midplane temperature (given by the
+        // primitive hydro variables) by a factor of the optical depth to the
+        // 1/4 power, as described in Frank, King, and Raine Chapter 5, and
+        // another that assumes the disk is vertically isothermal. With the
+        // former prescription, the term `a` below is the coefficient in `L =
+        // 2 sigma T_phot^4 = a e_mid^4` (note the factor of two) since the
+        // disk has two surfaces.
 
         let f = f64::exp(-ORBITAL_PERIOD / (t + dt)); // slow-start term
-        let a = self.cooling_coefficient / p0.mass_density() * f;
+        let a = self.cooling_coefficient * f;// / p0.mass_density() * f;
         let ec = e0 * (1.0 + 3.0 * a * e0.powi(3) * dt).powf(-1.0 / 3.0);
+
+        let ec = if let Some(mach_ceiling) = physics.mach_ceiling {
+            let ek = p0.specific_kinetic_energy();
+            let gm = self.gamma_law_index;
+            ec.max(2.0 * ek / gm / (gm - 1.0) / mach_ceiling.powi(2))
+        } else {
+            ec
+        };
+
         let pc = hydro_euler::euler_2d::Primitive(p0.0, p0.1, p0.2, p0.0 * ec * (self.gamma_law_index - 1.0));
         let uc = pc.to_conserved(self.gamma_law_index);
 

@@ -138,25 +138,14 @@ impl State {
     /// Gas thermal energy per unit mass
     #[getter]
     fn specific_internal_energy(&self, py: Python) -> PyResult<HashMap<(usize, usize), PyObject>> {
-        let f = |hydro: &physics::Euler, u| {
-            let prim = hydro.to_primitive(u);
-            let p = prim.gas_pressure();
-            let d = prim.mass_density();
-            p / d / (hydro.gamma_law_index - 1.0)
-        };
+        let f = |hydro: &physics::Euler, u| hydro.to_primitive(u).specific_internal_energy(hydro.gamma_law_index);
         self.map_conserved_euler_only(f, "specific internal energy", py)
     }
 
     /// Gas Mach number
     #[getter]
     fn mach_number(&self, py: Python) -> PyResult<HashMap<(usize, usize), PyObject>> {
-        let f = |hydro: &physics::Euler, u| {
-            let prim = hydro.to_primitive(u);
-            let vx = prim.velocity_1();
-            let vy = prim.velocity_2();
-            let cs = prim.sound_speed_squared(hydro.gamma_law_index).sqrt();
-            (vx * vx + vy * vy).sqrt() / cs
-        };
+        let f = |hydro: &physics::Euler, u| hydro.to_primitive(u).mach_number(hydro.gamma_law_index);
         self.map_conserved_euler_only(f, "Mach number", py)
     }
 }
