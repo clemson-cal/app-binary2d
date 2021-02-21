@@ -18,6 +18,7 @@ use crate::traits::{
 };
 
 
+pub const ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
 // ============================================================================
@@ -375,6 +376,7 @@ impl Hydrodynamics for Isothermal {
         background_conserved: Self::Conserved,
         x: f64,
         y: f64,
+        _t: f64,
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
@@ -481,6 +483,7 @@ impl Hydrodynamics for Euler {
         background_conserved: Self::Conserved,
         x: f64,
         y: f64,
+        t: f64,
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
@@ -501,7 +504,8 @@ impl Hydrodynamics for Euler {
         // coefficient in `L = 2 sigma T_phot^4 = a e_mid^4` (note the factor
         // of two) since the disk has two surfaces.
 
-        let a = self.cooling_coefficient / p0.mass_density();
+        let f = f64::exp(-ORBITAL_PERIOD / (t + dt)); // slow-start term
+        let a = self.cooling_coefficient / p0.mass_density() * f;
         let ec = e0 * (1.0 + 3.0 * a * e0.powi(3) * dt).powf(-1.0 / 3.0);
         let pc = hydro_euler::euler_2d::Primitive(p0.0, p0.1, p0.2, p0.0 * ec * (self.gamma_law_index - 1.0));
         let uc = pc.to_conserved(self.gamma_law_index);

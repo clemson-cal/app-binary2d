@@ -268,7 +268,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             let uc = solution.conserved[i];
             let u0 = block.initial_conserved[i];
             let (x, y)  = block.cell_centers[i];
-            let sources = self.hydro.source_terms(physics, mesh, uc, u0, x, y, dt, &two_body_state);
+            let sources = self.hydro.source_terms(physics, mesh, uc, u0, x, y, time, dt, &two_body_state);
 
             ds = ds + sources;
             uc + du + sources.total()

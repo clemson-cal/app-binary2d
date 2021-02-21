@@ -75,6 +75,7 @@ pub trait Hydrodynamics: Clone + Copy + Send {
         background_conserved: Self::Conserved,
         x: f64,
         y: f64,
+        t: f64,
         dt: f64,
         two_body_state: &OrbitalState) -> ItemizedChange<Self::Conserved>;
 
