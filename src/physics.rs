@@ -495,7 +495,7 @@ impl Hydrodynamics for Euler {
         let p0 = u0.to_primitive(self.gamma_law_index);
         let vx = p0.velocity_1();
         let vy = p0.velocity_2();
-        let e0 = p0.gas_pressure() / p0.mass_density() / (self.gamma_law_index - 1.0);
+        let e0 = p0.specific_internal_energy(self.gamma_law_index);
 
         // The prescription below for the removal of thermal energy is
         // equivalent to Ryan & MacFadyen (2017). It gives accurate T^4
@@ -510,8 +510,13 @@ impl Hydrodynamics for Euler {
         // 2 sigma T_phot^4 = a e_mid^4` (note the factor of two) since the
         // disk has two surfaces.
 
+        let density_index = 1; // Set to 2 to have the photosphere
+                               // temperature smaller than the midplaned
+                               // temperature by a factor of the optical
+                               // depth.
+
         let f = f64::exp(-ORBITAL_PERIOD / (t + dt)); // slow-start term
-        let a = self.cooling_coefficient * f;// / p0.mass_density() * f;
+        let a = self.cooling_coefficient / p0.mass_density().powi(density_index) * f;
         let ec = e0 * (1.0 + 3.0 * a * e0.powi(3) * dt).powf(-1.0 / 3.0);
 
         let ec = if let Some(mach_ceiling) = physics.mach_ceiling {
