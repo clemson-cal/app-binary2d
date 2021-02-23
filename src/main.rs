@@ -29,7 +29,8 @@ fn side_effects<C, H>(
     model: &AnyModel,
     mesh: &Mesh,
     physics: &Physics,
-    control: &Control) -> anyhow::Result<()>
+    control: &Control,
+    dt: f64) -> anyhow::Result<()>
 where
     H: Hydrodynamics<Conserved = C> + Into<AnyHydro>,
     C: Conserved,
@@ -39,7 +40,7 @@ where
         let time = tasks.iteration_message.advance(0.0);
         let mzps = 1e-6 * state.total_zones() as f64 / time * control.fold as f64;
         if tasks.iteration_message.count_this_run > 1 {
-            println!("[{:05}] orbit={:.5} Mzps={:.2}", state.iteration, state.time / ORBITAL_PERIOD, mzps);
+            println!("[{:05}] orbit={:.5} dt={:.2e} Mzps={:.2}", state.iteration, state.time / ORBITAL_PERIOD, dt, mzps);
         }
     }
     if tasks.write_checkpoint.next_time <= state.time {
@@ -80,16 +81,19 @@ where
 
     // let dt_max = physics.min_time_step(&mesh);
     // let dt_min = dt_max * 0.1;
-    let mut dt = 0.0;
+
+    side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control, 0.0)?;
 
     while state.time < control.num_orbits * ORBITAL_PERIOD {
 
         // let f = state.time / ORBITAL_PERIOD;
         // let dt = dt_max * f.min(1.0) + dt_min * (1.0 - f).max(0.0);
-        side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
-        state = scheme::advance(state, hydro, &mesh, &physics, &mut dt, control.fold, &block_data, &runtime)?;
+
+        let (s, dt) = scheme::advance(state, hydro, &mesh, &physics, control.fold, &block_data, &runtime)?;
+        state = s;
+
+        side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control, dt)?;
     }
-    side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
 
     Ok(())
 }
