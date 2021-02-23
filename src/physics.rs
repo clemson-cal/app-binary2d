@@ -245,7 +245,7 @@ impl Physics {
     }
 
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64 {
-        f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
+        mesh.cell_spacing()
     }
 
     pub fn min_time_step(&self, mesh: &Mesh) -> f64 {
@@ -372,6 +372,13 @@ impl Hydrodynamics for Isothermal {
         )
     }
 
+    fn max_signal_speed(&self, u: Self::Conserved) -> f64 {
+        let p = u.to_primitive();
+        let vx = p.velocity_x().abs();
+        let vy = p.velocity_y().abs();
+        f64::max(vx, vy)
+    }
+
     fn source_terms(
         &self,
         physics: &Physics,
@@ -477,6 +484,10 @@ impl Hydrodynamics for Euler {
             p.velocity_y,
             p.surface_pressure,
         )
+    }
+
+    fn max_signal_speed(&self, u: Self::Conserved) -> f64 {
+        u.to_primitive(self.gamma_law_index).max_signal_speed(self.gamma_law_index)
     }
 
     fn source_terms(

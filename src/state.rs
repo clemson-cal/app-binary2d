@@ -117,6 +117,22 @@ impl<C: Conserved> State<C> {
     }
 }
 
+impl<C: Conserved> State<C> {
+    pub fn max_signal_speed<H>(&self, hydro: &H) -> f64
+    where
+        H: Hydrodynamics<Conserved = C>
+    {
+        let mut a = 0.0;
+
+        for (_, block) in &self.solution {
+            for u in block.conserved.iter() {
+                a = hydro.max_signal_speed(*u).max(a);
+            }
+        }
+        a
+    }
+}
+
 
 
 

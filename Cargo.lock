@@ -230,7 +230,7 @@ dependencies = [
 [[package]]
 name = "hydro-euler"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/hydro-euler#67b0be277b37fd2db2fb3dd3f87f4b8e9c668571"
+source = "git+https://github.com/clemson-cal/hydro-euler#f40f27303f0530e9e6ceafcb0836eb65bfb47c43"
 dependencies = [
  "serde",
 ]

@@ -66,6 +66,7 @@ pub trait Hydrodynamics: Clone + Copy + Send {
     fn to_primitive(&self, u: Self::Conserved) -> Self::Primitive;
     fn to_conserved(&self, p: Self::Primitive) -> Self::Conserved;
     fn from_any(&self, p: AnyPrimitive) -> Self::Primitive;
+    fn max_signal_speed(&self, u: Self::Conserved) -> f64;
 
     fn source_terms(
         &self,
@@ -88,6 +89,7 @@ pub trait Hydrodynamics: Clone + Copy + Send {
         y: f64,
         gravitational_potiential: f64,
         axis: Direction) -> Self::Conserved;
+
 }
 
 

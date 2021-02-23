@@ -78,16 +78,16 @@ where
         .map(|index| Ok((index, scheme::BlockData::from_model(&model, &hydro, &mesh, index)?)))
         .collect::<Result<_, anyhow::Error>>()?;
 
-    let dt_max = physics.min_time_step(&mesh);
-    let dt_min = dt_max * 0.1;
+    // let dt_max = physics.min_time_step(&mesh);
+    // let dt_min = dt_max * 0.1;
+    let mut dt = 0.0;
 
     while state.time < control.num_orbits * ORBITAL_PERIOD {
 
-        let f = state.time / ORBITAL_PERIOD;
-        let dt = dt_max * f.min(1.0) + dt_min * (1.0 - f).max(0.0);
-
+        // let f = state.time / ORBITAL_PERIOD;
+        // let dt = dt_max * f.min(1.0) + dt_min * (1.0 - f).max(0.0);
         side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
-        state = scheme::advance(state, hydro, &mesh, &physics, dt, control.fold, &block_data, &runtime)?;
+        state = scheme::advance(state, hydro, &mesh, &physics, &mut dt, control.fold, &block_data, &runtime)?;
     }
     side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control)?;
 

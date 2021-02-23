@@ -83,11 +83,7 @@ impl Mesh {
         return cartesian_product2(xc, yv);
     }
 
-    pub fn cell_spacing_x(&self) -> f64 {
-        self.block_length() / (self.block_size as f64)
-    }
-
-    pub fn cell_spacing_y(&self) -> f64 {
+    pub fn cell_spacing(&self) -> f64 {
         self.block_length() / (self.block_size as f64)
     }
 

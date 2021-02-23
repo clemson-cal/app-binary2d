@@ -211,8 +211,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let phi = |&(x, y)| two_body_state.gravitational_potential(x, y, physics.softening_length());
         let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
         let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
-        let dx = mesh.cell_spacing_x();
-        let dy = mesh.cell_spacing_y();
+        let dx = mesh.cell_spacing();
+        let dy = mesh.cell_spacing();
         let xf = &block.face_centers_x;
         let yf = &block.face_centers_y;
 
@@ -251,8 +251,8 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         time:     f64,
         dt:       f64) -> BlockState<H::Conserved>
     {
-        let dx = mesh.cell_spacing_x();
-        let dy = mesh.cell_spacing_y();
+        let dx = mesh.cell_spacing();
+        let dy = mesh.cell_spacing();
         let two_body_state = physics.orbital_state_from_time(time);
 
         let mut ds = ItemizedChange::zeros();
@@ -293,18 +293,21 @@ pub fn advance<H>(
     mut state:  State<H::Conserved>,
     hydro:      H,
     mesh:       &Mesh,
-    physics:     &Physics,
-    dt:         f64,
+    physics:    &Physics,
+    dt:         &mut f64,
     fold:       usize,
     block_data: &HashMap<BlockIndex, BlockData<H::Conserved>>,
     runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
 where
     H: Hydrodynamics + Into<AnyHydro> + 'static
 {
-    let try_update = |state| try_advance_rk(state, hydro, &block_data, mesh, physics, dt, runtime);
     let rk = physics.rk_order;
 
     for _ in 0..fold {
+        *dt = mesh.cell_spacing() / state.max_signal_speed(&hydro);
+
+        let try_update = |state| try_advance_rk(state, hydro, &block_data, mesh, physics, *dt, runtime);
+
         state = runtime.block_on(rk.try_advance_async(state, try_update, runtime))?;
     }
     Ok(state)
