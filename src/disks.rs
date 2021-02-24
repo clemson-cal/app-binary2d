@@ -7,11 +7,8 @@ use crate::traits::{Hydrodynamics, InitialModel};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FiniteDiskModel {
-
     width: f64,
-
     radius: f64,
-
     mach_number: Option<f64>,
 }
 
@@ -20,9 +17,6 @@ pub struct FiniteDiskModel {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InfiniteDiskModel {
-
-    accretion_rate: f64,
-
     mach_number: Option<f64>,
 }
 
@@ -37,7 +31,7 @@ impl InitialModel for FiniteDiskModel {
     }
 
     fn validate<H: Hydrodynamics>(&self, _hydro: &H) -> anyhow::Result<()> {
-        Ok(())
+        anyhow::bail!("the finite disk model still needs to be implemented")
     }
 }
 

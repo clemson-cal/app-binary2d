@@ -1,10 +1,11 @@
 model:
   infinite_disk:
-    accretion_rate: 1.0
+    mach_number: 10.0
 
 hydro:
-  isothermal:
-    mach_number: 10.0
+  euler:
+    gamma_law_index: 1.666
+    cooling_coefficient: 1e3
 
 mesh:
   block_size: 64
@@ -26,6 +27,7 @@ physics:
 control:
   num_orbits: 100
   checkpoint_interval: 1.0
-  fold: 100
-  num_threads: 56
+  time_series_interval: 0.01
+  fold: 10
+  num_threads: ~
   output_directory: data
