@@ -99,18 +99,28 @@ pub struct Control {
     pub checkpoint_interval: f64,
 
     /// How frequently to add a TimeSeriesSample to the time series. If
-    /// omitted, no time series samples are taken.
+    /// omitted or nil, no time series samples are taken.
     pub time_series_interval: Option<f64>,
 
     /// Number of iterations between performing side effects. Larger values
     /// yield less terminal output and more accurate performance estimates.
     pub fold: usize,
 
-    /// Number of worker threads on the Tokio runtime
-    pub num_threads: usize,
+    /// Number of worker threads on the Tokio runtime. If omitted or nil,
+    /// defaults to 2x the number of physical cores.
+    pub num_threads: Option<usize>,
 
     /// Output directory
     pub output_directory: String,
+}
+
+impl Control {
+    pub fn num_threads(&self) -> usize {
+        match self.num_threads {
+            Some(n) => n,
+            None => num_cpus::get() * 2,
+        }
+    }
 }
 
 

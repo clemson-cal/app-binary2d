@@ -83,7 +83,7 @@ where
     AnyTimeSeries: From<TimeSeries<C>>,
 {
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(control.num_threads)
+        .worker_threads(control.num_threads())
         .build()?;
 
     let block_data = mesh
@@ -134,6 +134,11 @@ fn main() -> anyhow::Result<()> {
 
     let App{state, tasks, time_series, config, ..} = app;
     let Configuration{hydro, model, mesh, control, physics} = config;
+
+    println!("worker threads ...... {}", control.num_threads());
+    println!("compute cores ....... {}", num_cpus::get());
+    println!("grid spacing ........ {:.3}a", mesh.cell_spacing());
+    println!();
 
     match (state, time_series, hydro) {
         (AnyState::Isothermal(state), AnyTimeSeries::Isothermal(time_series), AnyHydro::Isothermal(hydro)) => {

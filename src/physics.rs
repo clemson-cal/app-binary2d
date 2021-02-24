@@ -518,8 +518,8 @@ impl Hydrodynamics for Euler {
         // 1/4 power, as described in Frank, King, and Raine Chapter 5, and
         // another that assumes the disk is vertically isothermal. With the
         // former prescription, the term `a` below is the coefficient in `L =
-        // 2 sigma T_phot^4 = a e_mid^4` (note the factor of two) since the
-        // disk has two surfaces.
+        // 2 sigma_SB T_phot^4 = Sigma de/dt = a e_mid^4` (note the factor of
+        // two) since the disk has two surfaces.
 
         let density_index = 1; // Set to 2 to have the photosphere
                                // temperature smaller than the midplaned
@@ -587,7 +587,6 @@ impl Hydrodynamics for Euler {
 // ============================================================================
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
-// impl Arithmetic for kepler_two_body::OrbitalElements {}
 
 
 
