@@ -75,6 +75,11 @@ impl App {
     fn mesh(&self) -> Mesh {
         Mesh{mesh: self.app.config.mesh.clone()}
     }
+
+    #[getter]
+    fn time_series(&self, py: Python) -> PyResult<PyObject> {
+        Ok(pythonize(py, &self.app.time_series)?)
+    }
 }
 
 
