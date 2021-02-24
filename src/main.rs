@@ -135,32 +135,36 @@ fn main() -> anyhow::Result<()> {
     println!("\t{}", app::VERSION_AND_BUILD);
     println!();
 
-    let input = match std::env::args().nth(1) {
-        None => anyhow::bail!("no input file given"),
-        Some(input) => input,
-    };
-    let overrides = std::env::args().skip(2).collect();
-    let app = App::from_file(&input, overrides)?.validate()?;
-
-    for line in serde_yaml::to_string(&app.config)?.split("\n").skip(1) {
-        println!("\t{}", line);
-    }
-
-    let App{state, tasks, time_series, config, ..} = app;
-    let Configuration{hydro, model, mesh, control, physics} = config;
-
-    println!("worker threads ...... {}", control.num_threads());
-    println!("compute cores ....... {}", num_cpus::get());
-    println!("grid spacing ........ {:.3}a", mesh.cell_spacing());
-    println!();
-
-    match (state, time_series, hydro) {
-        (AnyState::Isothermal(state), AnyTimeSeries::Isothermal(time_series), AnyHydro::Isothermal(hydro)) => {
-            run(state, tasks, time_series, hydro, model, mesh, control, physics)
+    match std::env::args().nth(1) {
+        None => {
+            println!("usage: binary2d <input.yaml|chkpt.cbor> [opts.yaml|group.key=value] [...]");
+            Ok(())
         }
-        (AnyState::Euler(state), AnyTimeSeries::Euler(time_series), AnyHydro::Euler(hydro)) => {
-            run(state, tasks, time_series, hydro, model, mesh, control, physics)
+        Some(input) => {
+            let overrides = std::env::args().skip(2).collect();
+            let app = App::from_file(&input, overrides)?.validate()?;
+
+            for line in serde_yaml::to_string(&app.config)?.split("\n").skip(1) {
+                println!("\t{}", line);
+            }
+
+            let App{state, tasks, time_series, config, ..} = app;
+            let Configuration{hydro, model, mesh, control, physics} = config;
+
+            println!("worker threads ...... {}", control.num_threads());
+            println!("compute cores ....... {}", num_cpus::get());
+            println!("grid spacing ........ {:.3}a", mesh.cell_spacing());
+            println!();
+
+            match (state, time_series, hydro) {
+                (AnyState::Isothermal(state), AnyTimeSeries::Isothermal(time_series), AnyHydro::Isothermal(hydro)) => {
+                    run(state, tasks, time_series, hydro, model, mesh, control, physics)
+                }
+                (AnyState::Euler(state), AnyTimeSeries::Euler(time_series), AnyHydro::Euler(hydro)) => {
+                    run(state, tasks, time_series, hydro, model, mesh, control, physics)
+                }
+                _ => unreachable!()
+            }
         }
-        _ => unreachable!()
     }
 }
