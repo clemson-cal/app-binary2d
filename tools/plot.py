@@ -20,7 +20,8 @@ def reconstitute(app, field):
 
 def plot_field(ax, filename, field, vmin=None, vmax=None, transform=lambda x: x):
     app = cdc_loader.app(filename)
-    return ax.imshow(transform(reconstitute(app, 'sigma')), vmin=vmin, vmax=vmax)
+    rd = app.config['mesh']['domain_radius']
+    return ax.imshow(transform(reconstitute(app, field)).T, vmin=vmin, vmax=vmax, extent=[-rd, rd, -rd, rd])
 
 
 if __name__ == "__main__":
