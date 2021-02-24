@@ -260,7 +260,7 @@ impl App {
                 (State::from_model(&config.model, hydro, &config.mesh)?.into(), time_series.into())
             },
             AnyHydro::Euler(hydro) => {
-                let time_series: Vec<TimeSeriesSample<<Isothermal as Hydrodynamics>::Conserved>> = Vec::new();
+                let time_series: Vec<TimeSeriesSample<<Euler as Hydrodynamics>::Conserved>> = Vec::new();
                 (State::from_model(&config.model, hydro, &config.mesh)?.into(), time_series.into())
             },
         };
