@@ -78,7 +78,10 @@ impl App {
 
     #[getter]
     fn time_series(&self, py: Python) -> PyResult<PyObject> {
-        Ok(pythonize(py, &self.app.time_series)?)
+        match &self.app.time_series {
+            app::AnyTimeSeries::Euler     (time_series) => Ok(pythonize(py, time_series)?),
+            app::AnyTimeSeries::Isothermal(time_series) => Ok(pythonize(py, time_series)?),
+        }
     }
 }
 
@@ -93,7 +96,7 @@ impl State {
     #[getter]
     fn time(&self) -> f64 {
         match self.state.as_ref() {
-            app::AnyState::Euler(state) => state.time,
+            app::AnyState::Euler     (state) => state.time,
             app::AnyState::Isothermal(state) => state.time,
         }
     }
@@ -102,7 +105,7 @@ impl State {
     #[getter]
     fn iteration(&self) -> i64 {
         match self.state.as_ref() {
-            app::AnyState::Euler(state) => *state.iteration.numer(),
+            app::AnyState::Euler     (state) => *state.iteration.numer(),
             app::AnyState::Isothermal(state) => *state.iteration.numer(),
         }
     }
