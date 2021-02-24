@@ -117,7 +117,8 @@ pub struct Control {
 
 
 /**
- * A sample of globally derived reductions to go in the time series
+ * A sample of globally derived data reductions to be accumulated as a time
+ * series, parameterized around the type of the conserved quantities.
  */
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TimeSeriesSample<C> {
@@ -128,7 +129,14 @@ pub struct TimeSeriesSample<C> {
 
 pub type TimeSeries<C> = Vec<TimeSeriesSample<C>>;
 
+
+
+
+/**
+ * Enum for any type of time series
+ */
 #[derive(Clone, Serialize, Deserialize, derive_more::From)]
+#[serde(rename_all = "snake_case")]
 pub enum AnyTimeSeries {
     Isothermal (TimeSeries<<Isothermal as Hydrodynamics>::Conserved>),
     Euler      (TimeSeries<<Euler      as Hydrodynamics>::Conserved>),
