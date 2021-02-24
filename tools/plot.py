@@ -9,26 +9,18 @@ import matplotlib.pyplot as plt
 fields = ['sigma', 'velocity_x', 'velocity_y', 'pressure', 'specific_internal_energy', 'mach_number']
 
 
-def pcolormesh_data(app, field, transform=lambda x: x):
-    result = []
-    for key, data in getattr(app.state, field).items():
-        x, y = app.mesh[key].vertices
-        result.append((x, y, transform(data.T)))
+def reconstitute(app, field):
+    nb = app.config['mesh']['num_blocks']
+    bs = app.config['mesh']['block_size']
+    result = np.zeros([bs * nb, bs * nb])
+    for (i, j), data in getattr(app.state, field).items():
+        result[i*bs:i*bs+bs, j*bs:j*bs+bs] = data
     return result
 
 
 def plot_field(ax, filename, field, vmin=None, vmax=None, transform=lambda x: x):
     app = cdc_loader.app(filename)
-    pcm_data = pcolormesh_data(app, field, transform=transform)
-
-    vmin = min(p[2].min() for p in pcm_data) if vmin is None else vmin
-    vmax = max(p[2].max() for p in pcm_data) if vmax is None else vmax
-
-    for (x, y, z) in pcm_data:
-        cm = ax.pcolormesh(x, y, z, vmin=vmin, vmax=vmax)
-
-    ax.set_aspect('equal')
-    return cm
+    return ax.imshow(transform(reconstitute(app, 'sigma')), vmin=vmin, vmax=vmax)
 
 
 if __name__ == "__main__":
