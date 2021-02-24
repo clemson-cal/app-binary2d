@@ -8,6 +8,7 @@ pickle for faster loading.
 
 import argparse
 import pickle
+import numpy as np
 import cdc_loader
 
 
@@ -55,7 +56,7 @@ if __name__ == "__main__":
 
     result = dict()
     for path in paths:
-        series = [getpath(sample, path) for sample in time_series]
+        series = np.array([getpath(sample, path) for sample in time_series])
         setpath(result, path, series)
     if args.output is None:
         fname = args.filename.replace('chkpt', 'time_series').replace('.cbor', '.pk')

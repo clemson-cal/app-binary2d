@@ -39,14 +39,7 @@ cd app-binary2d
 cargo install --path .
 ```
 
-This will install an executable at `.cargo/bin/binary2d`, which should be in your system path. You should now be able to run the code from anywhere on your machine:
-
-```bash
-cd
-binary2d
-```
-
-You should see a usage message like this:
+This will install an executable at `.cargo/bin/binary2d`, which should be in your system path. Running `binary2d` from a command prompt anywhere on your machine, you should see a usage message like this:
 
 ```bash
 
@@ -56,14 +49,17 @@ You should see a usage message like this:
 usage: binary2d <input.yaml|chkpt.cbor> [opts.yaml|group.key=value] [...]
 ```
 
-Another option is to compile and run the code in the project directory. From the _app-binary2d_ root, you would do this:
+If you are hacking on the code, you will want to compile and run the code in the project directory. From the _app-binary2d_ root, you would do this:
 
 ```bash
-cd app-binary2d
 cargo build --release
 cargo run
 ```
 
+
+## Running a setup
+
+The code comes with sample input files in the _setups_ directory.
 
 
 # Old
