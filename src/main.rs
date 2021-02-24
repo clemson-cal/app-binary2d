@@ -50,7 +50,6 @@ where
                 ORBITAL_PERIOD / dt,
                 mzps,
                 mzps * physics.rk_substeps() as f64 / num_cpus::get().min(control.num_threads()) as f64)
-
         }
     }
     if tasks.record_time_series.next_time <= state.time {
@@ -58,6 +57,15 @@ where
             tasks.record_time_series.advance(interval * ORBITAL_PERIOD);
             time_series.push(state.time_series_sample());
         }
+    }
+    if tasks.report_progress.next_time <= state.time {
+        if tasks.report_progress.count_this_run > 0 {
+            println!("");
+            println!("\torbits / hour ........ {:0.2}", 1.0 / tasks.report_progress.elapsed_hours());
+            println!("\truntime so far ....... {:0.3} hours", tasks.simulation_startup.elapsed_hours());
+            println!("");
+        }
+        tasks.report_progress.advance(ORBITAL_PERIOD);
     }
     if tasks.write_checkpoint.next_time <= state.time {
         std::fs::create_dir_all(&control.output_directory)?;

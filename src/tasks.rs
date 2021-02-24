@@ -44,6 +44,9 @@ pub struct Tasks {
 
     /// Summarize the simulation performance
     pub report_progress: RecurringTask,
+
+    /// Only to keep track of the simulation runtime
+    pub simulation_startup: RecurringTask,
 }
 
 
@@ -77,6 +80,14 @@ impl RecurringTask {
         self.last_performed = Instant::now();
         seconds
     }
+
+    pub fn elapsed_seconds(&self) -> f64 {
+        self.last_performed.elapsed().as_secs_f64()
+    }
+
+    pub fn elapsed_hours(&self) -> f64 {
+        self.last_performed.elapsed().as_secs_f64() / 3600.0
+    }
 }
 
 
@@ -90,6 +101,7 @@ impl Tasks {
             iteration_message: RecurringTask::new(),
             record_time_series: RecurringTask::new(),
             report_progress: RecurringTask::new(),
+            simulation_startup: RecurringTask::new(),
         }
     }
 }

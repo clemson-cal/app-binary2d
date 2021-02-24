@@ -35,30 +35,28 @@ if __name__ == "__main__":
 
     parser.add_argument('filename')
     parser.add_argument('--output', metavar='time_series.pk', default=None, type=str, help='output filename')
-
     args = parser.parse_args()
 
     print(f'load {args.filename}')
-
     app = cdc_loader.app(args.filename)
     time_series = app.time_series    
 
     if not time_series:
         print('warning: time series data was empty')
-    else:
-        paths = []
-        for key in time_series[0]:
-            try:
-                for subkey in time_series[0][key]:
-                    paths.append((key, subkey))
-            except TypeError:
-                paths.append((key,))
+        exit()
+
+    paths = []
+    for key in time_series[0]:
+        try:
+            for subkey in time_series[0][key]:
+                paths.append((key, subkey))
+        except TypeError:
+            paths.append((key,))
 
     result = dict()
     for path in paths:
         series = [getpath(sample, path) for sample in time_series]
         setpath(result, path, series)
-
     if args.output is None:
         fname = args.filename.replace('chkpt', 'time_series').replace('.cbor', '.pk')
     else:
