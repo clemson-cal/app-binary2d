@@ -295,17 +295,20 @@ pub fn advance<H>(
     mesh:       &Mesh,
     physics:    &Physics,
     fold:       usize,
+    timestep:   &mut f64,
     block_data: &HashMap<BlockIndex, BlockData<H::Conserved>>,
-    runtime:    &tokio::runtime::Runtime) -> Result<(State<H::Conserved>, f64), HydroError>
+    runtime:    &tokio::runtime::Runtime) -> Result<State<H::Conserved>, HydroError>
 where
     H: Hydrodynamics + Into<AnyHydro> + 'static
 {
     let rk = physics.rk_order;
     let dt = physics.cfl * mesh.cell_spacing() / state.max_signal_speed(&hydro);
 
+    *timestep = dt;
+
     for _ in 0..fold {
         let try_update = |state| try_advance_rk(state, hydro, &block_data, mesh, physics, dt, runtime);
         state = runtime.block_on(rk.try_advance_async(state, try_update, runtime))?;
     }
-    Ok((state, dt))
+    Ok(state)
 }

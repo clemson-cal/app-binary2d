@@ -82,15 +82,15 @@ where
     // let dt_max = physics.min_time_step(&mesh);
     // let dt_min = dt_max * 0.1;
 
-    side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control, 0.0)?;
+    let mut dt = 0.0;
+    side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control, dt)?;
 
     while state.time < control.num_orbits * ORBITAL_PERIOD {
 
         // let f = state.time / ORBITAL_PERIOD;
         // let dt = dt_max * f.min(1.0) + dt_min * (1.0 - f).max(0.0);
 
-        let (s, dt) = scheme::advance(state, hydro, &mesh, &physics, control.fold, &block_data, &runtime)?;
-        state = s;
+        state = scheme::advance(state, hydro, &mesh, &physics, control.fold, &mut dt, &block_data, &runtime)?;
 
         side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control, dt)?;
     }
