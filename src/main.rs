@@ -4,6 +4,7 @@ use binary2d::app::{
     AnyHydro,
     AnyModel,
     AnyState,
+    AnyTimeSeries,
     Configuration,
     Control,
 };
@@ -25,6 +26,7 @@ use binary2d::traits::{
 fn side_effects<C, H>(
     state: &State<C>,
     tasks: &mut Tasks,
+    time_series: &mut AnyTimeSeries,
     hydro: &H,
     model: &AnyModel,
     mesh: &Mesh,
@@ -47,7 +49,7 @@ where
         std::fs::create_dir_all(&control.output_directory)?;
         tasks.write_checkpoint.advance(control.checkpoint_interval * ORBITAL_PERIOD);
         let filename = format!("{}/chkpt.{:04}.cbor", control.output_directory, tasks.write_checkpoint.count - 1);
-        let app = App::package(state, tasks, hydro, model, mesh, physics, control);
+        let app = App::package(state, tasks, time_series, hydro, model, mesh, physics, control);
         io::write_cbor(&app, &filename)?;
     }
     Ok(())
@@ -60,6 +62,7 @@ where
 fn run<C, H>(
     mut state: State<C>,
     mut tasks: Tasks,
+    mut time_series: AnyTimeSeries,
     hydro: H,
     model: AnyModel,
     mesh: Mesh,
@@ -83,7 +86,7 @@ where
     // let dt_min = dt_max * 0.1;
 
     let mut dt = 0.0;
-    side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control, dt)?;
+    side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
 
     while state.time < control.num_orbits * ORBITAL_PERIOD {
 
@@ -92,7 +95,7 @@ where
 
         state = scheme::advance(state, hydro, &mesh, &physics, control.fold, &mut dt, &block_data, &runtime)?;
 
-        side_effects(&state, &mut tasks, &hydro, &model, &mesh, &physics, &control, dt)?;
+        side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
     }
 
     Ok(())
@@ -120,15 +123,15 @@ fn main() -> anyhow::Result<()> {
         println!("\t{}", line);
     }
 
-    let App{state, tasks, config, ..} = app;
+    let App{state, tasks, time_series, config, ..} = app;
     let Configuration{hydro, model, mesh, control, physics} = config;
 
     match (state, hydro) {
         (AnyState::Isothermal(state), AnyHydro::Isothermal(hydro)) => {
-            run(state, tasks, hydro, model, mesh, control, physics)
+            run(state, tasks, time_series, hydro, model, mesh, control, physics)
         }
         (AnyState::Euler(state), AnyHydro::Euler(hydro)) => {
-            run(state, tasks, hydro, model, mesh, control, physics)
+            run(state, tasks, time_series, hydro, model, mesh, control, physics)
         }
         _ => unreachable!()
     }

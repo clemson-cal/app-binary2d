@@ -9,7 +9,7 @@ use crate::io;
 use crate::mesh::Mesh;
 use crate::disks::{InfiniteDiskModel, FiniteDiskModel};
 use crate::physics::{Euler, Isothermal, Physics};
-use crate::state::State;
+use crate::state::{ItemizedChange, State};
 use crate::tasks::Tasks;
 use crate::traits::{Conserved, Hydrodynamics, InitialModel};
 
@@ -113,6 +113,27 @@ pub struct Control {
 
 
 /**
+ * A sample of globally derived reductions to go in the time series
+ */
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TimeSeriesSample<C> {
+    pub time: f64,
+    pub integrated_source_terms: ItemizedChange<C>,
+    pub orbital_elements_change: ItemizedChange<kepler_two_body::OrbitalElements>,
+}
+
+type TimeSeries<C> = Vec<TimeSeriesSample<C>>;
+
+#[derive(Clone, Serialize, Deserialize, derive_more::From)]
+pub enum AnyTimeSeries {
+    Isothermal (TimeSeries<<Isothermal as Hydrodynamics>::Conserved>),
+    Euler      (TimeSeries<<Euler      as Hydrodynamics>::Conserved>),
+}
+
+
+
+
+/**
  * Runtime configuration
  */
 #[derive(Clone, Serialize, Deserialize)]
@@ -135,6 +156,7 @@ pub struct Configuration {
 pub struct App {
     pub state: AnyState,
     pub tasks: Tasks,
+    pub time_series: AnyTimeSeries,
     pub config: Configuration,
     pub version: String,
 }
@@ -228,17 +250,19 @@ impl App {
 
         config.patch_from(overrides)?;
 
-        let state = match &config.hydro {
+        let (state, time_series) = match &config.hydro {
             AnyHydro::Isothermal(hydro) => {
-                State::from_model(&config.model, hydro, &config.mesh)?.into()
+                let time_series: Vec<TimeSeriesSample<<Isothermal as Hydrodynamics>::Conserved>> = Vec::new();
+                (State::from_model(&config.model, hydro, &config.mesh)?.into(), time_series.into())
             },
             AnyHydro::Euler(hydro) => {
-                State::from_model(&config.model, hydro, &config.mesh)?.into()
+                let time_series: Vec<TimeSeriesSample<<Isothermal as Hydrodynamics>::Conserved>> = Vec::new();
+                (State::from_model(&config.model, hydro, &config.mesh)?.into(), time_series.into())
             },
         };
         let tasks = Tasks::new();
 
-        Ok(Self{state, tasks, config, version: VERSION_AND_BUILD.to_string()})
+        Ok(Self{state, tasks, time_series, config, version: VERSION_AND_BUILD.to_string()})
     }
 
     /**
@@ -256,7 +280,15 @@ impl App {
     /**
      * Construct a new App instance from references to the member variables.
      */
-    pub fn package<H, C>(state: &State<C>, tasks: &Tasks, hydro: &H, model: &AnyModel, mesh: &Mesh, physics: &Physics, control: &Control) -> Self
+    pub fn package<H, C>(
+        state: &State<C>,
+        tasks: &Tasks,
+        time_series: &AnyTimeSeries,
+        hydro: &H,
+        model: &AnyModel,
+        mesh: &Mesh,
+        physics: &Physics,
+        control: &Control) -> Self
     where
         H: Hydrodynamics<Conserved = C> + Into<AnyHydro>,
         C: Conserved,
@@ -265,6 +297,7 @@ impl App {
         Self {
             state: AnyState::from(state.clone()),
             tasks: tasks.clone(),
+            time_series: time_series.clone(),
             config: Configuration::package(hydro, model, mesh, physics, control),
             version: VERSION_AND_BUILD.to_string(),
         }
