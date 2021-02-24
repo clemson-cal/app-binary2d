@@ -1,7 +1,7 @@
 # The Circumbinary Disk Code (CDC)
 _Simulates accretion from circumbinary gas disks onto stellar and black hole binaries._
 
-__Overview__: This is a Rust port of the Mara3 binary setup, with considerable performance enhancements and more physics, including thermodynamics and massless tracer particles. Unlike the Mara3 version, this version does not yet support fixed mesh refinement (FMR), although it will soon. It is parallelized for multi-threaded execution. Hybrid distributed memory parallelism with MPI will be added in the near future.
+__Overview__: This is a Rust port of the Mara3 binary setup, with considerable performance enhancements and more physics, including thermodynamics and massless tracer particles. Unlike the Mara3 version, this version does not yet support fixed mesh refinement (FMR), although it will soon. It is parallelized for multi-threaded execution. Hybrid distributed memory parallelism with MPI will also be added soon.
 
 CDC is written and maintained by the [Computational Astrophysics Lab](https://jzrake.people.clemson.edu) at the [Clemson University Department of Physics and Astronomy](http://www.clemson.edu/science/departments/physics-astro). Core developers include:
 
@@ -11,7 +11,7 @@ CDC is written and maintained by the [Computational Astrophysics Lab](https://jz
 - Jack Hu (Clemson)
 
 
-# Publications
+## Publications
 
 - [Gas-driven inspiral of binaries in thin accretion disks (Tiede+ 2020)](https://ui.adsabs.harvard.edu/abs/2020ApJ...900...43T/abstract)
 - [Equilibrium eccentricity of accreting binaries (Zrake+ 2020)](https://ui.adsabs.harvard.edu/abs/2020arXiv201009707Z/abstract)
@@ -19,24 +19,55 @@ CDC is written and maintained by the [Computational Astrophysics Lab](https://jz
 <sub>Simulations for these publications were run with the [Mara3 implementation](https://github.com/jzrake/Mara3) of this setup. Simulations in forthcoming papers will use the Rust version. The hydrodynamic algorithms are identical.<sub>
 
 
-# Quick start
+## Quick start
 
-__Requirements__: Rust and HDF5
+__Requirements__: A Rust compiler
 
 __Build and install__:
 
-```Bash
-> git clone https://github.com/clemson-cal/app-binary2d.git
-> cd app-binary2d
-> cargo install --path .
+Make sure you have the Rust compiler installed. [rust-lang.org](https://www.rust-lang.org/learn/get-started) provides this one-liner to get started:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then check out and build the code:
+
+```bash
+git clone https://github.com/clemson-cal/app-binary2d.git
+cd app-binary2d
+cargo install --path .
 ```
 
 This will install an executable at `.cargo/bin/binary2d`, which should be in your system path. You should now be able to run the code from anywhere on your machine:
 
-```Bash
-> cd
-> binary2d --help
+```bash
+cd
+binary2d
 ```
+
+You should see a usage message like this:
+
+```bash
+
+	Clemson CAL Circumbinary Disk Code (CDC)
+	v0.2.0 f6e19be
+
+usage: binary2d <input.yaml|chkpt.cbor> [opts.yaml|group.key=value] [...]
+```
+
+Another option is to compile and run the code in the project directory. From the _app-binary2d_ root, you would do this:
+
+```bash
+cd app-binary2d
+cargo build --release
+cargo run
+```
+
+
+
+# Old
+
 
 This will print a list of _flags_ for things like the data output directory and the execution strategy. You also have a list of _model parameters_, which control things like the physical setup, the mesh parameters, and the output cadence. When run without anything on the command line, the code will print the model parameters default values and brief description:
 
