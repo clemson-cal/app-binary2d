@@ -252,6 +252,13 @@ impl Physics {
         self.cfl * self.effective_resolution(mesh) / self.maximum_orbital_velocity()
     }
 
+    pub fn rk_substeps(&self) -> usize {
+        match self.rk_order {
+            runge_kutta::RungeKuttaOrder::RK1 => 1,
+            runge_kutta::RungeKuttaOrder::RK2 => 2,
+            runge_kutta::RungeKuttaOrder::RK3 => 3,
+        }
+    }
     pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64 {
         let r2 = dx * dx + dy * dy;
         let s2 = self.sink_radius * self.sink_radius;
