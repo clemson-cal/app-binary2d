@@ -98,6 +98,10 @@ pub struct Control {
     /// Number of orbits between writing checkpoints
     pub checkpoint_interval: f64,
 
+    /// How frequently to add a TimeSeriesSample to the time series. If
+    /// omitted, no time series samples are taken.
+    pub time_series_interval: Option<f64>,
+
     /// Number of iterations between performing side effects. Larger values
     /// yield less terminal output and more accurate performance estimates.
     pub fold: usize,
@@ -122,7 +126,7 @@ pub struct TimeSeriesSample<C> {
     pub orbital_elements_change: ItemizedChange<kepler_two_body::OrbitalElements>,
 }
 
-type TimeSeries<C> = Vec<TimeSeriesSample<C>>;
+pub type TimeSeries<C> = Vec<TimeSeriesSample<C>>;
 
 #[derive(Clone, Serialize, Deserialize, derive_more::From)]
 pub enum AnyTimeSeries {
@@ -283,7 +287,7 @@ impl App {
     pub fn package<H, C>(
         state: &State<C>,
         tasks: &Tasks,
-        time_series: &AnyTimeSeries,
+        time_series: &TimeSeries<C>,
         hydro: &H,
         model: &AnyModel,
         mesh: &Mesh,
@@ -293,11 +297,12 @@ impl App {
         H: Hydrodynamics<Conserved = C> + Into<AnyHydro>,
         C: Conserved,
         AnyState: From<State<C>>,
+        AnyTimeSeries: From<TimeSeries<C>>,
     {
         Self {
             state: AnyState::from(state.clone()),
             tasks: tasks.clone(),
-            time_series: time_series.clone(),
+            time_series: time_series.clone().into(),
             config: Configuration::package(hydro, model, mesh, physics, control),
             version: VERSION_AND_BUILD.to_string(),
         }

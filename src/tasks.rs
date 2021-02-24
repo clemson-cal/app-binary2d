@@ -39,6 +39,9 @@ pub struct Tasks {
     /// Print the loop message
     pub iteration_message: RecurringTask,
 
+    /// Record a time series sample
+    pub record_time_series: RecurringTask,
+
     /// Summarize the simulation performance
     pub report_progress: RecurringTask,
 }
@@ -85,6 +88,7 @@ impl Tasks {
         Self {
             write_checkpoint: RecurringTask::new(),
             iteration_message: RecurringTask::new(),
+            record_time_series: RecurringTask::new(),
             report_progress: RecurringTask::new(),
         }
     }

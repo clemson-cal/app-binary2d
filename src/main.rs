@@ -7,6 +7,7 @@ use binary2d::app::{
     AnyTimeSeries,
     Configuration,
     Control,
+    TimeSeries,
 };
 use binary2d::io;
 use binary2d::mesh::Mesh;
@@ -26,7 +27,7 @@ use binary2d::traits::{
 fn side_effects<C, H>(
     state: &State<C>,
     tasks: &mut Tasks,
-    time_series: &mut AnyTimeSeries,
+    time_series: &mut TimeSeries<C>,
     hydro: &H,
     model: &AnyModel,
     mesh: &Mesh,
@@ -37,12 +38,19 @@ where
     H: Hydrodynamics<Conserved = C> + Into<AnyHydro>,
     C: Conserved,
     AnyState: From<State<C>>,
+    AnyTimeSeries: From<TimeSeries<C>>,
 {
     if tasks.iteration_message.next_time <= state.time {
         let time = tasks.iteration_message.advance(0.0);
         let mzps = 1e-6 * state.total_zones() as f64 / time * control.fold as f64;
         if tasks.iteration_message.count_this_run > 1 {
             println!("[{:05}] orbit={:.5} dt={:.2e} Mzps={:.2}", state.iteration, state.time / ORBITAL_PERIOD, dt, mzps);
+        }
+    }
+    if tasks.record_time_series.next_time <= state.time {
+        if let Some(interval) = control.time_series_interval {
+            tasks.record_time_series.advance(interval * ORBITAL_PERIOD);
+            time_series.push(state.time_series_sample());
         }
     }
     if tasks.write_checkpoint.next_time <= state.time {
@@ -62,7 +70,7 @@ where
 fn run<C, H>(
     mut state: State<C>,
     mut tasks: Tasks,
-    mut time_series: AnyTimeSeries,
+    mut time_series: TimeSeries<C>,
     hydro: H,
     model: AnyModel,
     mesh: Mesh,
@@ -72,6 +80,7 @@ where
     H: Hydrodynamics<Conserved = C> + Into<AnyHydro> + 'static,
     C: Conserved,
     AnyState: From<State<C>>,
+    AnyTimeSeries: From<TimeSeries<C>>,
 {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(control.num_threads)
@@ -126,11 +135,11 @@ fn main() -> anyhow::Result<()> {
     let App{state, tasks, time_series, config, ..} = app;
     let Configuration{hydro, model, mesh, control, physics} = config;
 
-    match (state, hydro) {
-        (AnyState::Isothermal(state), AnyHydro::Isothermal(hydro)) => {
+    match (state, time_series, hydro) {
+        (AnyState::Isothermal(state), AnyTimeSeries::Isothermal(time_series), AnyHydro::Isothermal(hydro)) => {
             run(state, tasks, time_series, hydro, model, mesh, control, physics)
         }
-        (AnyState::Euler(state), AnyHydro::Euler(hydro)) => {
+        (AnyState::Euler(state), AnyTimeSeries::Euler(time_series), AnyHydro::Euler(hydro)) => {
             run(state, tasks, time_series, hydro, model, mesh, control, physics)
         }
         _ => unreachable!()

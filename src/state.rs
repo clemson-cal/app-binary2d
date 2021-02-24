@@ -5,7 +5,7 @@ use serde::{Serialize, Deserialize};
 use ndarray::{ArcArray, Ix2};
 use kepler_two_body::OrbitalElements;
 use godunov_core::runge_kutta;
-use crate::app::AnyModel; 
+use crate::app::{AnyModel, TimeSeriesSample}; 
 use crate::mesh::{
     BlockIndex,
     Mesh,
@@ -130,6 +130,19 @@ impl<C: Conserved> State<C> {
             }
         }
         a
+    }
+
+    pub fn time_series_sample(&self) -> TimeSeriesSample<C> {
+        let totals: (ItemizedChange<C>, ItemizedChange<kepler_two_body::OrbitalElements>) = self.solution
+            .iter()
+            .map(|(_, s)| (s.integrated_source_terms, s.orbital_elements_change))
+            .fold((ItemizedChange::zeros(), ItemizedChange::zeros()), |a, b| (a.0 + b.0, a.1 + b.1));
+
+        TimeSeriesSample {
+            time: self.time,
+            integrated_source_terms: totals.0,
+            orbital_elements_change: totals.1,
+        }
     }
 }
 
