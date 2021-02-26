@@ -6,7 +6,7 @@ import cdc_loader
 import matplotlib.pyplot as plt
 
 
-fields = ['sigma', 'velocity_x', 'velocity_y', 'pressure', 'specific_internal_energy', 'mach_number']
+fields = ['sigma', 'velocity_x', 'velocity_y', 'pressure', 'specific_internal_energy', 'mach_number', 'mdot']
 
 
 def reconstitute(app, field):
@@ -18,22 +18,37 @@ def reconstitute(app, field):
     return result
 
 
-def plot_radial_profile(ax, filename, field):
-    app = cdc_loader.app(filename)
-    data = getattr(app.state, field)
+def cell_center_meshgrid(app, block_index):
+    x, y = app.mesh[block_index].vertices
+    xc = 0.5 * (x[1:] + x[:-1])
+    yc = 0.5 * (y[1:] + y[:-1])
+    return np.meshgrid(xc, yc)
 
+
+def get_flat_field(app, field):
     rs = []
     zs = []
+    if field == 'mdot':
+        sd = app.state.sigma
+        vx = app.state.velocity_x
+        vy = app.state.velocity_y
+        for index in app.mesh.indexes:
+            x, y = cell_center_meshgrid(app, index)
+            rs += np.sqrt(x**2 + y**2).tolist()
+            zs += (2 * np.pi * sd[index] * (vx[index] * x + vy[index] * y)).tolist()
+    else:
+        data = getattr(app.state, field)
+        for i, j in app.mesh.indexes:
+            x, y = cell_center_meshgrid(app, (i, j))
+            rs += np.sqrt(x**2 + y**2).tolist()
+            zs += data[(i, j)].tolist()
+    return np.array(rs), np.array(zs)
+
+
+def plot_radial_profile(ax, filename, field):
+    app = cdc_loader.app(filename)
     rd = app.config['mesh']['domain_radius']
-
-    for i, j in app.mesh.indexes:
-        x, y = app.mesh[(i, j)].vertices
-        xc = 0.5 * (x[1:] + x[:-1])
-        yc = 0.5 * (y[1:] + y[:-1])
-        x, y = np.meshgrid(xc, yc)
-        rs += np.sqrt(x**2 + y**2).tolist()
-        zs += data[(i, j)].tolist()
-
+    rs, zs = get_flat_field(app, field)
     bins = np.linspace(0.0, rd, 128)
     z_binned, _ = np.histogram(rs, bins=bins, weights=zs)
     n_binned, _ = np.histogram(rs, bins=bins)
@@ -60,6 +75,7 @@ if __name__ == "__main__":
     vmin, vmax = eval(args.range)
 
     if args.plot == 'relief':
+        assert(args.field != 'mdot')
         for filename in args.filenames:
             fig = plt.figure()
             ax1 = fig.add_subplot(1, 1, 1)
