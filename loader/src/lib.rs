@@ -114,8 +114,8 @@ impl State {
     #[getter]
     fn velocity_x(&self, py: Python) -> HashMap<(usize, usize), PyObject> {
         match self.state.as_ref() {
-            app::AnyState::Euler(state)      => self.map_conserved(state, |u| u.1, py),
-            app::AnyState::Isothermal(state) => self.map_conserved(state, |u| u.1, py),
+            app::AnyState::Euler(state)      => self.map_conserved(state, |u| u.1 / u.0, py),
+            app::AnyState::Isothermal(state) => self.map_conserved(state, |u| u.1 / u.0, py),
         }
     }
 
@@ -123,8 +123,8 @@ impl State {
     #[getter]
     fn velocity_y(&self, py: Python) -> HashMap<(usize, usize), PyObject> {
         match self.state.as_ref() {
-            app::AnyState::Euler(state)      => self.map_conserved(state, |u| u.2, py),
-            app::AnyState::Isothermal(state) => self.map_conserved(state, |u| u.2, py),
+            app::AnyState::Euler(state)      => self.map_conserved(state, |u| u.2 / u.0, py),
+            app::AnyState::Isothermal(state) => self.map_conserved(state, |u| u.2 / u.0, py),
         }
     }
 
