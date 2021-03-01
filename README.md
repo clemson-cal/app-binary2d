@@ -43,8 +43,8 @@ This will install an executable at `.cargo/bin/binary2d`, which should be in you
 
 ```bash
 
-	Clemson CAL Circumbinary Disk Code (CDC)
-	v0.2.0 f6e19be
+Clemson CAL Circumbinary Disk Code (CDC)
+v0.2.0 f6e19be
 
 usage: binary2d <input.yaml|chkpt.cbor> [opts.yaml|group.key=value] [...]
 ```
@@ -71,11 +71,11 @@ The code will output checkpoint files to a subdirectory _data_ in the present wo
 tools/plot data/chkpt.0010.cbor
 ```
 
-This will show a relief of the surface density. You can explore more options for plotting with `tools/plot -h`. To lauch a custom run with different parameters, just copy one of the preset parameter files to your working directory, modify it, and then run the code pointing to the location of your custom parameter file. As an alternative, you can run the code against a "base" parameter file, and supply extra parameters on the command line to override the ones in the YAML file. For example, to run the _iso-circular_ setup to 1000 orbits, you would do `binary2d setups/iso-circular.yaml control.num_orbits=1000`.
+This will show a relief of the surface density. You can explore more options for plotting with `tools/plot -h`. To lauch a custom run with different parameters, just copy one of the preset parameter files to your working directory, modify it, and then run the code pointing to the location of your custom parameter file. As an alternative, you can run the code against a "base" parameter file, and supply extra parameters on the command line to override the ones in the YAML file. For example, to run the _iso-circular_ setup to 1000 orbits, you would do `binary2d setups/iso-circular.yaml control.num_orbits=1000`. You can also supply the names of additional YAML files on the command line, and any properties listed in those files will replace those in the original parameter file. Input files and parameters given later in the command line sequence take priority.
 
 
 ## Quick workflow reference
 
-__Restart a run__: `binary2d chkpt.1234.cbor`
-__Query the configuration__: `tools/show-config chkpt.1234.cbor`
-__Extract time series data__: `tools/time-series chkpt.1234.cbor`
+- __Restart a run__: `binary2d chkpt.1234.cbor`
+- __Query the configuration__: `tools/show-config chkpt.1234.cbor`
+- __Extract time series data__: `tools/time-series chkpt.1234.cbor`

@@ -131,8 +131,8 @@ where
 fn main() -> anyhow::Result<()> {
 
     println!();
-    println!("\t{}", app::DESCRIPTION);
-    println!("\t{}", app::VERSION_AND_BUILD);
+    println!("{}", app::DESCRIPTION);
+    println!("{}", app::VERSION_AND_BUILD);
     println!();
 
     match std::env::args().nth(1) {
