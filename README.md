@@ -56,6 +56,14 @@ cargo build --release
 cargo run
 ```
 
+In order to inspect and plot the data outputs, you'll need to build the _cdc_loader_ Python extension module:
+
+```bash
+source buid_loader.sh
+```
+
+The script will build the loader extension, and create a softlink in the project root under the _lib_ subdirectory. It also adds that directory to your `PYTHONPATH` environment variable so that Python scripts which load the output files can find it. You'll need to restore your Python path each time you restart your terminal, either by re-running `source build_loader.sh`, or modifying your `PYTHONPATH` by hand. You should rebuild the loader each time you update your local repository.
+
 
 ## Running a setup
 
