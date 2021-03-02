@@ -70,6 +70,16 @@ impl App {
         State{state: Arc::new(self.app.state.clone()), hydro: self.app.config.hydro.clone()}
     }
 
+    /// The orbital state vector
+    #[getter]
+    fn orbital_state(&self, py: Python) -> PyResult<PyObject> {
+        let time = match &self.app.state {
+            app::AnyState::Euler     (state) => state.time,
+            app::AnyState::Isothermal(state) => state.time,
+        };
+        Ok(pythonize(py, &self.app.config.physics.orbital_state_from_time(time))?)
+    }
+
     /// The simulation mesh
     #[getter]
     fn mesh(&self) -> Mesh {
