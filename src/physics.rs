@@ -470,8 +470,13 @@ impl Hydrodynamics for Euler {
         }
         let p = u.to_primitive(self.gamma_law_index);
 
-        if p.gas_pressure() < 0.0 {
-            return Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+        //if p.gas_pressure() < 0.0 {
+        //    return Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+        //}
+
+        if !(p.gas_pressure() > 0.0) {
+            let pfixed = hydro_euler::euler_2d::Primitive(p.mass_density(), p.velocity_x(), p.velocity_y(), 1e-16);
+            Ok(pfixed)
         }
         Ok(p)
     }

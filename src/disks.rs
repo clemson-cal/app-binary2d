@@ -18,6 +18,7 @@ pub struct FiniteDiskModel {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InfiniteDiskModel {
     mach_number: Option<f64>,
+    surface_density: f64,
 }
 
 
@@ -44,7 +45,7 @@ impl InitialModel for InfiniteDiskModel {
     fn primitive_at<H: Hydrodynamics>(&self, hydro: &H, xy: (f64, f64)) -> AnyPrimitive {
         let (x, y) = xy;
         let r = (x * x + y * y).sqrt();
-        let sd = 1.0;
+        let sd = self.surface_density;
         let vp = r.powf(-0.5);
         let vx = vp * (-y / r);
         let vy = vp * ( x / r);
