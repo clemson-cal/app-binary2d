@@ -1,0 +1,23 @@
+#!/bin/bash
+
+target_dir=loader/target/release
+cd loader; cargo build --release; cd ..
+
+rslib=$(ls $target_dir | egrep '.so|.dylib')
+pylib=$(pwd)/lib/cdc_loader.so
+mkdir -p lib
+rm -f $pylib
+ln -s $(pwd)/$target_dir/$rslib $pylib
+
+pypath=$(pwd)/lib
+if [ -d "$pypath" ] && [[ ":$PYTHONPATH:" != *":$pypath:"* ]]; then
+    export PYTHONPATH="${PYTHONPATH:+"$PYTHONPATH:"}$pypath"
+fi
+
+echo "link $(pwd)/$target_dir/$rslib -> $pylib"
+echo "add cdc_loader to your Python path: PYTHONPATH=$PYTHONPATH"
+
+unset target_dir
+unset rslib
+unset pylib
+unset pypath

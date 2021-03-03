@@ -1,28 +1,35 @@
+use serde::{Serialize, Deserialize};
 use godunov_core::runge_kutta;
-use kepler_two_body::{
-    OrbitalElements,
-    OrbitalState,
+use crate::app::{
+    AnyPrimitive,
 };
 use crate::mesh::{
     Mesh,
+};
+use crate::state::{
+    ItemizedChange,
 };
 use crate::traits::{
     Arithmetic,
     Conserved,
     Hydrodynamics,
-    ItemizeData,
     Primitive,
     Zeros,
 };
 
 
+pub const ORBITAL_PERIOD: f64 = 2.0 * std::f64::consts::PI;
 
 
 // ============================================================================
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum HydroErrorType {
+
     #[error("negative surface density {0:.4e}")]
-    NegativeDensity(f64)
+    NegativeDensity(f64),
+
+    #[error("negative gas pressure {0:.4e}")]
+    NegativePressure(f64),
 }
 
 impl HydroErrorType {
@@ -41,8 +48,8 @@ impl HydroErrorType {
     position.1,
     binary.map_or(0.0, |s| s.0.position_x()),
     binary.map_or(0.0, |s| s.0.position_y()),
-    binary.map_or(0.1, |s| s.1.position_x()),
-    binary.map_or(0.1, |s| s.1.position_y())
+    binary.map_or(0.0, |s| s.1.position_x()),
+    binary.map_or(0.0, |s| s.1.position_y()),
 )]
 pub struct HydroError {
     source: HydroErrorType,
@@ -85,40 +92,64 @@ pub enum Direction {
 
 
 // ============================================================================
-#[derive(Clone, Copy, hdf5::H5Type)]
-#[repr(C)]
-pub struct ItemizedChange<C: ItemizeData> {
-    pub sink1:   C,
-    pub sink2:   C,
-    pub grav1:   C,
-    pub grav2:   C,
-    pub buffer:  C,
-    pub cooling: C,
-    pub fake_mass: C,
-}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Physics {
 
-
-
-
-// ============================================================================
-#[derive(Clone)]
-pub struct Solver {
     pub buffer_rate: f64,
+
     pub buffer_scale: f64,
-    pub cfl: f64,
-    pub domain_radius: f64,
-    pub mach_number: f64,
-    pub nu: f64,
+
+    pub binary_eccentricity: f64,
+
+    pub binary_mass_ratio: f64,
+
+    #[serde(default)]
     pub lambda: f64,
+
+    pub nu: f64,
+
+    pub cfl: f64,
+
     pub plm: f64,
-    pub rk_order: i64,
+
+    /// Used to impose a "preemptive" density floor: fake mass is injected at
+    /// the `fake_mass_rate` where the surface density is smaller than this
+    /// dimensionless number, times the surface density at this position in
+    /// the initial condition. When set to zero, the preemptive floor is never
+    /// invoked. For brevity, this parameter may be omitted from the parameter
+    /// file, and has a default value of zero.
+    #[serde(default)]
+    pub fake_mass_threshold: f64,
+
+    /// The rate of injection of fake mass when the density is below the
+    /// `fake_mass_threshold`. `Sigma_dot = fake_mass_rate * Omega *
+    /// Sigma_background`, where `Sigma_background` is the surface density at
+    /// this position in the initial condition. For brevity, this parameter
+    /// may be omitted from the parameter file, and has a default value of
+    /// zero.
+    #[serde(default)]
+    pub fake_mass_rate: f64,
+
+    /// Whether to use a single point mass insead of a binary setup, intended
+    /// mainly for testing.
+    #[serde(default)]
+    pub one_body: bool,
+
+    /// An optional maximum Mach number, which the cooling prescription should
+    /// avoid going above.
+    pub mach_ceiling: Option<f64>,
+
+    /// The Runge-Kutta order used for method-of-lines time integration.
+    pub rk_order: runge_kutta::RungeKuttaOrder,
+
+    /// The radius of a circular region around each component within which
+    /// mass is subtracted. This is the length scale in the sink profile
+    /// function, which is some type of super-Gaussian.
     pub sink_radius: f64,
+
+    /// The amplitude of sink profile function.
     pub sink_rate: f64,
-    pub softening_length: f64,
-    pub force_flux_comm: bool,
-    pub orbital_elements: OrbitalElements,
-    pub relative_density_floor: f64,
-    pub relative_fake_mass_rate: f64,
 }
 
 
@@ -139,17 +170,31 @@ pub struct SourceTerms {
 
 
 // ============================================================================
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Isothermal {
+    pub mach_number: f64
 }
 
 
 
 
 // ============================================================================
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Euler {
+
+    /// The adiabatic index, probably 5/3
     pub gamma_law_index: f64,
+
+    /// Strength of the T^4 cooling
+    pub cooling_coefficient: f64,
+
+    /// Optional pressure floor. If enabled, the cons -> prim conversion will
+    /// return a primitive state with the given pressure, if it was found to
+    /// be negative. If the floor value is omitted or nil, then negative
+    /// pressures are considered an error.
+    pub pressure_floor: Option<f64>,
 }
 
 
@@ -157,6 +202,7 @@ pub struct Euler {
 
 // ============================================================================
 impl<'a, P: Primitive> CellData<'_, P> {
+
     pub fn new(pc: &'a P, gx: &'a P, gy: &'a P) -> CellData<'a, P> {
         CellData{
             pc: pc,
@@ -187,8 +233,7 @@ impl<'a, P: Primitive> CellData<'_, P> {
 
     pub fn gradient_field(&self, axis: Direction) -> &P {
         use Direction::{X, Y};
-        match axis
-        {
+        match axis {
             X => self.gx,
             Y => self.gy,
         }
@@ -199,109 +244,27 @@ impl<'a, P: Primitive> CellData<'_, P> {
 
 
 // ============================================================================
-impl<C: ItemizeData> ItemizedChange<C>
-{
-    pub fn zeros() -> Self {
-        Self {
-            sink1:     C::zeros(),
-            sink2:     C::zeros(),
-            grav1:     C::zeros(),
-            grav2:     C::zeros(),
-            buffer:    C::zeros(),
-            cooling:   C::zeros(),
-            fake_mass: C::zeros(),
-        }
-    }
-
-    pub fn total(&self) -> C {
-        self.sink1 + self.sink2 + self.grav1 + self.grav2 + self.buffer + self.cooling + self.fake_mass
-    }
-
-    pub fn add_mut(&mut self, s0: &Self) {
-        self.sink1     = self.sink1     + s0.sink1;
-        self.sink2     = self.sink2     + s0.sink2;
-        self.grav1     = self.grav1     + s0.grav1;
-        self.grav2     = self.grav2     + s0.grav2;
-        self.buffer    = self.buffer    + s0.buffer;
-        self.cooling   = self.cooling   + s0.cooling;
-        self.fake_mass = self.fake_mass + s0.fake_mass;
-    }
-
-    pub fn mul_mut(&mut self, s: f64) {
-        self.sink1     = self.sink1     * s;
-        self.sink2     = self.sink2     * s;
-        self.grav1     = self.grav1     * s;
-        self.grav2     = self.grav2     * s;
-        self.buffer    = self.buffer    * s;
-        self.cooling   = self.cooling   * s;
-        self.fake_mass = self.fake_mass * s;
-    }
-
-    pub fn add(&self, s0: &Self) -> Self {
-        let mut result = self.clone();
-        result.add_mut(s0);
-        return result;
-    }
-
-    pub fn mul(&self, s: f64) -> Self {
-        let mut result = self.clone();
-        result.mul_mut(s);
-        return result;
-    }
-}
-
-
-
-
-// ============================================================================
-impl<C: ItemizeData> ItemizedChange<C> where C: Conserved
-{
-    fn pert1(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
-        let (dm, dpx, dpy) = delta;
-        elements.perturb(time, -dm, 0.0, -dpx, 0.0, -dpy, 0.0).unwrap() - elements
-    }
-
-    fn pert2(time: f64, delta: (f64, f64, f64), elements: OrbitalElements) -> OrbitalElements {
-        let (dm, dpx, dpy) = delta;
-        elements.perturb(time, 0.0, -dm, 0.0, -dpx, 0.0, -dpy).unwrap() - elements
-    }
-
-    pub fn perturbation(&self, time: f64, elements: OrbitalElements) -> ItemizedChange<OrbitalElements> {
-        ItemizedChange {
-            sink1:    Self::pert1(time, self.sink1.mass_and_momentum(), elements),
-            sink2:    Self::pert2(time, self.sink2.mass_and_momentum(), elements),
-            grav1:    Self::pert1(time, self.grav1.mass_and_momentum(), elements),
-            grav2:    Self::pert2(time, self.grav2.mass_and_momentum(), elements),
-            buffer:   OrbitalElements::zeros(),
-            cooling:  OrbitalElements::zeros(),
-            fake_mass: OrbitalElements::zeros(),
-        }
-    }
-}
-
-
-
-
-// ============================================================================
-impl Solver
-{
-    pub fn runge_kutta(&self) -> runge_kutta::RungeKuttaOrder {
-        use std::convert::TryFrom;
-        runge_kutta::RungeKuttaOrder::try_from(self.rk_order).expect("illegal RK order")
-    }
+impl Physics {
 
     pub fn need_flux_communication(&self) -> bool {
-        self.force_flux_comm
+        false
     }
 
     pub fn effective_resolution(&self, mesh: &Mesh) -> f64 {
-        f64::min(mesh.cell_spacing_x(), mesh.cell_spacing_y())
+        mesh.cell_spacing()
     }
 
     pub fn min_time_step(&self, mesh: &Mesh) -> f64 {
         self.cfl * self.effective_resolution(mesh) / self.maximum_orbital_velocity()
     }
 
+    pub fn rk_substeps(&self) -> usize {
+        match self.rk_order {
+            runge_kutta::RungeKuttaOrder::RK1 => 1,
+            runge_kutta::RungeKuttaOrder::RK2 => 2,
+            runge_kutta::RungeKuttaOrder::RK3 => 3,
+        }
+    }
     pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64 {
         let r2 = dx * dx + dy * dy;
         let s2 = self.sink_radius * self.sink_radius;
@@ -313,20 +276,32 @@ impl Solver
         }
     }
 
-    pub fn sound_speed_squared(&self, xy: &(f64, f64), state: &OrbitalState) -> f64 {
-        -state.gravitational_potential(xy.0, xy.1, self.softening_length) / self.mach_number.powi(2)
+    pub fn softening_length(&self) -> f64 {
+        self.sink_radius
     }
 
     pub fn maximum_orbital_velocity(&self) -> f64 {
-        1.0 / self.softening_length.sqrt()
+        1.0 / self.softening_length().sqrt()
     }
 
-    pub fn source_terms(&self, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms {
+    pub fn orbital_elements(&self) -> kepler_two_body::OrbitalElements {
+        if self.one_body {
+            kepler_two_body::OrbitalElements(1e-12, 1.0, 1.0, 0.0)            
+        } else {
+            kepler_two_body::OrbitalElements(1.0, 1.0, self.binary_mass_ratio, self.binary_eccentricity)
+        }
+    }
+
+    pub fn orbital_state_from_time(&self, time: f64) -> kepler_two_body::OrbitalState {
+        self.orbital_elements().orbital_state_from_time(time)
+    }
+
+    pub fn source_terms(&self, mesh: &Mesh, two_body_state: &kepler_two_body::OrbitalState, x: f64, y: f64, surface_density: f64) -> SourceTerms {
         let p1 = two_body_state.0;
         let p2 = two_body_state.1;
 
-        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length);
-        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length);
+        let [ax1, ay1] = p1.gravitational_acceleration(x, y, self.softening_length());
+        let [ax2, ay2] = p2.gravitational_acceleration(x, y, self.softening_length());
 
         let fx1 = surface_density * ax1;
         let fy1 = surface_density * ay1;
@@ -342,11 +317,11 @@ impl Solver
         let sink_rate2 = self.sink_kernel(x - x2, y - y2);
 
         let r = (x * x + y * y).sqrt();
-        let y = (r - self.domain_radius) / self.buffer_scale;
-        let omega_outer = (two_body_state.total_mass() / self.domain_radius.powi(3)).sqrt();
+        let y = (r - mesh.domain_radius) / self.buffer_scale;
+        let omega_outer = (two_body_state.total_mass() / mesh.domain_radius.powi(3)).sqrt();
         let buffer_rate = 0.5 * self.buffer_rate * (1.0 + f64::tanh(y)) * omega_outer;
 
-        SourceTerms{
+        SourceTerms {
             fx1: fx1,
             fy1: fy1,
             fx2: fx2,
@@ -357,22 +332,12 @@ impl Solver
         }
     }
 
-    pub fn relative_density_floor(&self) -> f64 {
-        self.relative_density_floor
+    pub fn fake_mass_threshold(&self) -> f64 {
+        self.fake_mass_threshold
     }
 
-    pub fn relative_fake_mass_rate(&self) -> f64 {
-        self.relative_fake_mass_rate
-    }
-}
-
-
-
-
-// ============================================================================
-impl Isothermal {
-    pub fn new() -> Self {
-        Self{}
+    pub fn fake_mass_rate(&self) -> f64 {
+        self.fake_mass_rate
     }
 }
 
@@ -380,13 +345,17 @@ impl Isothermal {
 
 
 // ============================================================================
-impl Hydrodynamics for Isothermal
-{
+impl Hydrodynamics for Isothermal {
+
     type Conserved = hydro_iso2d::Conserved;
     type Primitive = hydro_iso2d::Primitive;
 
     fn gamma_law_index(&self) -> f64 {
         1.0
+    }
+
+    fn global_mach_number(&self) -> Option<f64> {
+        Some(self.mach_number)
     }
 
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive {
@@ -408,57 +377,68 @@ impl Hydrodynamics for Isothermal
         p.to_conserved()
     }
 
+    fn from_any(&self, p: AnyPrimitive) -> Self::Primitive {
+        hydro_iso2d::Primitive(
+            p.surface_density,
+            p.velocity_x,
+            p.velocity_y,
+        )
+    }
+
+    fn max_signal_speed(&self, u: Self::Conserved) -> f64 {
+        let p = u.to_primitive();
+        let vx = p.velocity_x().abs();
+        let vy = p.velocity_y().abs();
+        f64::max(vx, vy)
+    }
+
     fn source_terms(
         &self,
-        solver: &Solver,
+        physics: &Physics,
+        mesh: &Mesh,
         conserved: Self::Conserved,
         background_conserved: Self::Conserved,
         x: f64,
         y: f64,
+        _t: f64,
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        let omega = 1.0; // Note: in the future, the binary orbital frequency
-                         // may be allowed to vary; we really should not be
-                         // assuming everywhere that it's 1.0.
-        let density_floor = background_conserved.density() * solver.relative_density_floor();
-        let fake_mass_rate = background_conserved.density() * omega * solver.relative_fake_mass_rate();
+        let (u, u0) = (conserved, background_conserved);
 
-        let fake_mdot = if conserved.density() < density_floor {
-            0.0
+        let fake_du = if u.density() < u0.density() * physics.fake_mass_threshold() {
+            Self::Conserved::zeros()
         } else {
-            fake_mass_rate
+            u0 * physics.fake_mass_rate() * dt
         };
+        let st = physics.source_terms(mesh, two_body_state, x, y, u.density());
 
-        let st = solver.source_terms(two_body_state, x, y, conserved.density());
-
-        ItemizedChange{
+        ItemizedChange {
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
             grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
-            sink1:   conserved * (-st.sink_rate1 * dt),
-            sink2:   conserved * (-st.sink_rate2 * dt),
-            buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
+            sink1:   u * (-st.sink_rate1 * dt),
+            sink2:   u * (-st.sink_rate2 * dt),
+            buffer: (u - u0) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
-            fake_mass: hydro_iso2d::Conserved(fake_mdot * dt, 0.0, 0.0),
+            fake_mass: fake_du,
         }
     }
 
     fn intercell_flux<'a>(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         l: &CellData<'a, hydro_iso2d::Primitive>,
         r: &CellData<'a, hydro_iso2d::Primitive>,
-        f: &(f64, f64),
         dx: f64,
         dy: f64,
-        two_body_state: &kepler_two_body::OrbitalState,
+        gravitational_potential: f64,
         axis: Direction) -> hydro_iso2d::Conserved
     {
-        let cs2 = solver.sound_speed_squared(f, &two_body_state);
+        let cs2 = -gravitational_potential / self.mach_number.powi(2);
         let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
-        let nu  = solver.nu;
-        let lam = solver.lambda;
+        let nu  = physics.nu;
+        let lam = physics.lambda;
         let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
         let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
         let iso2d_axis = match axis {
@@ -473,22 +453,17 @@ impl Hydrodynamics for Isothermal
 
 
 // ============================================================================
-impl Euler {
-    pub fn new() -> Self {
-        Self{gamma_law_index: 5.0 / 3.0}
-    }
-}
-
-
-
-
-// ============================================================================
 impl Hydrodynamics for Euler {
+
     type Conserved = hydro_euler::euler_2d::Conserved;
     type Primitive = hydro_euler::euler_2d::Primitive;
 
     fn gamma_law_index(&self) -> f64 {
         self.gamma_law_index
+    }
+
+    fn global_mach_number(&self) -> Option<f64> {
+        None
     }
 
     fn plm_gradient(&self, theta: f64, a: &Self::Primitive, b: &Self::Primitive, c: &Self::Primitive) -> Self::Primitive {
@@ -499,7 +474,18 @@ impl Hydrodynamics for Euler {
         if u.mass_density() < 0.0 {
             return Err(HydroErrorType::NegativeDensity(u.mass_density()))
         }
-        Ok(u.to_primitive(self.gamma_law_index))
+        let mut p = u.to_primitive(self.gamma_law_index);
+
+        if p.gas_pressure() <= 0.0 {
+            if let Some(pressure_floor) = self.pressure_floor {
+                p.3 = pressure_floor;
+                Ok(p)
+            } else {
+                Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+            }
+        } else {
+            Ok(p)
+        }
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {
@@ -510,48 +496,96 @@ impl Hydrodynamics for Euler {
         p.to_conserved(self.gamma_law_index)
     }
 
+    fn from_any(&self, p: AnyPrimitive) -> Self::Primitive {
+        hydro_euler::euler_2d::Primitive(
+            p.surface_density,
+            p.velocity_x,
+            p.velocity_y,
+            p.surface_pressure,
+        )
+    }
+
+    fn max_signal_speed(&self, u: Self::Conserved) -> f64 {
+        u.to_primitive(self.gamma_law_index).max_signal_speed(self.gamma_law_index)
+    }
+
     fn source_terms(
         &self,
-        solver: &Solver,
-        conserved: Self::Conserved,
+        physics: &Physics,
+        mesh: &Mesh,
+        u0: Self::Conserved,
         background_conserved: Self::Conserved,
         x: f64,
         y: f64,
+        t: f64,
         dt: f64,
         two_body_state: &kepler_two_body::OrbitalState) -> ItemizedChange<Self::Conserved>
     {
-        let st        = solver.source_terms(two_body_state, x, y, conserved.mass_density());
-        let primitive = conserved.to_primitive(self.gamma_law_index);
-        let vx        = primitive.velocity_1();
-        let vy        = primitive.velocity_2();
+        let st = physics.source_terms(mesh, two_body_state, x, y, u0.mass_density());
+        let p0 = u0.to_primitive(self.gamma_law_index);
+        let vx = p0.velocity_1();
+        let vy = p0.velocity_2();
+        let e0 = p0.specific_internal_energy(self.gamma_law_index);
 
-        ItemizedChange{
-            grav1:   hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
-            grav2:   hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
-            sink1:   conserved * (-st.sink_rate1 * dt),
-            sink2:   conserved * (-st.sink_rate2 * dt),
-            buffer: (conserved - background_conserved) * (-dt * st.buffer_rate),
-            cooling: Self::Conserved::zeros(),
+        // The prescription below for the removal of thermal energy is
+        // equivalent to Ryan & MacFadyen (2017). It gives accurate T^4
+        // cooling, even when the cooling time is longer than the time step
+        // dt, by integrating in time along the cooling curve. The cooling
+        // prescription has two modes: one that assumes the photosphere
+        // temperature is lower than the midplane temperature (given by the
+        // primitive hydro variables) by a factor of the optical depth to the
+        // 1/4 power, as described in Frank, King, and Raine Chapter 5, and
+        // another that assumes the disk is vertically isothermal. With the
+        // former prescription, the term `a` below is the coefficient in `L =
+        // 2 sigma_SB T_phot^4 = Sigma de/dt = a e_mid^4` (note the factor of
+        // two) since the disk has two surfaces.
+
+        let density_index = 1; // Set to 2 to have the photosphere
+                               // temperature smaller than the midplaned
+                               // temperature by a factor of the optical
+                               // depth.
+
+        let f = f64::exp(-ORBITAL_PERIOD / (t + dt)); // slow-start term
+        let a = self.cooling_coefficient / p0.mass_density().powi(density_index) * f;
+        let ec = e0 * (1.0 + 3.0 * a * e0.powi(3) * dt).powf(-1.0 / 3.0);
+
+        let ec = if let Some(mach_ceiling) = physics.mach_ceiling {
+            let ek = p0.specific_kinetic_energy();
+            let gm = self.gamma_law_index;
+            ec.max(2.0 * ek / gm / (gm - 1.0) / mach_ceiling.powi(2))
+        } else {
+            ec
+        };
+
+        let pc = hydro_euler::euler_2d::Primitive(p0.0, p0.1, p0.2, p0.0 * ec * (self.gamma_law_index - 1.0));
+        let uc = pc.to_conserved(self.gamma_law_index);
+
+        ItemizedChange {
+            grav1:     hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
+            grav2:     hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
+            sink1:     u0 * (-st.sink_rate1 * dt),
+            sink2:     u0 * (-st.sink_rate2 * dt),
+            buffer:   (u0 - background_conserved) * (-dt * st.buffer_rate),
+            cooling:   uc - u0,
             fake_mass: Self::Conserved::zeros(),
         }
     }
 
     fn intercell_flux<'a>(
         &self,
-        solver: &Solver,
+        physics: &Physics,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
-        _: &(f64, f64),
         dx: f64,
         dy: f64,
-        _: &kepler_two_body::OrbitalState,
+        _gravitational_potential: f64,
         axis: Direction) -> Self::Conserved
     {
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
 
-        let nu    = solver.nu;
-        let lam   = solver.lambda;
+        let nu    = physics.nu;
+        let lam   = physics.lambda;
         let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
         let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
         let vx = 0.5 * (l.pc.velocity_x() + r.pc.velocity_x());
@@ -572,15 +606,6 @@ impl Hydrodynamics for Euler {
 // ============================================================================
 impl Arithmetic for hydro_iso2d::Conserved {}
 impl Arithmetic for hydro_euler::euler_2d::Conserved {}
-impl Arithmetic for kepler_two_body::OrbitalElements {}
-
-
-
-
-// ============================================================================
-impl ItemizeData for hydro_iso2d::Conserved {}
-impl ItemizeData for hydro_euler::euler_2d::Conserved {}
-impl ItemizeData for kepler_two_body::OrbitalElements {}
 
 
 
@@ -631,7 +656,7 @@ impl Primitive for hydro_iso2d::Primitive {
 }
 
 impl Primitive for hydro_euler::euler_2d::Primitive {
-    fn velocity_x(self)   -> f64 { self.velocity(hydro_euler::geometry::Direction::X) }
-    fn velocity_y(self)   -> f64 { self.velocity(hydro_euler::geometry::Direction::Y) }
+    fn velocity_x(self)   -> f64 { self.velocity_1() }
+    fn velocity_y(self)   -> f64 { self.velocity_2() }
     fn mass_density(self) -> f64 { self.mass_density() }
 }
