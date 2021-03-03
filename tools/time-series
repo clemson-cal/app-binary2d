@@ -12,39 +12,31 @@ import numpy as np
 import cdc_loader
 
 
-def getpath(d, path):
-    for part in path:
-        d = d[part]
-    return d
+def extract_time_series(app):
+    """
+    Take a list of uniformly keyed dict's as returned by the
+    cdc_loader.time_series method, and return a (nested) dict
+    of numpy arrays with that same structure.
+    """
 
+    def getpath(d, path):
+        for part in path:
+            d = d[part]
+        return d
 
-def setpath(d, path, value):
-    p = path[0]
-    if len(path) == 1:
-        d[p] = value
-    else:
-        if p not in d:
-            d[p] = dict()
-        setpath(d[p], path[1:], value)
+    def setpath(d, path, value):
+        p = path[0]
+        if len(path) == 1:
+            d[p] = value
+        else:
+            if p not in d:
+                d[p] = dict()
+            setpath(d[p], path[1:], value)
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        usage='time-series.py path/to/chkpt.1234.cbor',
-        description=__doc__,
-        formatter_class=argparse.RawTextHelpFormatter)
-
-    parser.add_argument('filename')
-    parser.add_argument('--output', metavar='time_series.pk', default=None, type=str, help='output filename')
-    args = parser.parse_args()
-
-    print(f'load {args.filename}')
-    app = cdc_loader.app(args.filename)
     time_series = app.time_series    
 
     if not time_series:
-        print('warning: time series data was empty')
-        exit()
+        raise ValueError('time series data was empty')
 
     paths = []
     for key in time_series[0]:
@@ -58,10 +50,54 @@ if __name__ == "__main__":
     for path in paths:
         series = np.array([getpath(sample, path) for sample in time_series])
         setpath(result, path, series)
-    if args.output is None:
-        fname = args.filename.replace('chkpt', 'time_series').replace('.cbor', '.pk')
-    else:
-        fname = args.output
 
-    print(f'save {fname}')
-    pickle.dump(result, open(fname, 'wb'))
+    result['config'] = app.config
+    result['version'] = app.version
+
+    return result
+
+
+def load_time_series(filename):
+    if filename.endswith('.pk'):
+        return pickle.load(open(filename, 'rb'))
+    else:
+        return cdc_loader.app(filename).time_series
+
+
+def plot(time_series):
+    import matplotlib.pyplot as plt
+    orbits = time_series['time'] / 2 / np.pi
+    dM1 = -time_series['integrated_source_terms']['sink1'][:,0] / 2 / np.pi
+    dM2 = -time_series['integrated_source_terms']['sink1'][:,1] / 2 / np.pi
+    fig = plt.figure(figsize=[10, 10])
+    ax1 = fig.add_subplot(1, 1, 1)
+    ax1.plot(orbits, dM1 + dM2)
+    ax1.set_xlabel('Orbit')
+    ax1.set_ylabel(r'$dM(t)$')
+    plt.show()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        usage='time-series.py path/to/chkpt.1234.cbor',
+        description=__doc__,
+        formatter_class=argparse.RawTextHelpFormatter)
+
+    parser.add_argument('filename')
+    parser.add_argument('--output', metavar='time_series.pk', default=None, type=str, help='output filename')
+    parser.add_argument('--plot', action='store_true')
+    args = parser.parse_args()
+
+    print(f'load {args.filename}')
+
+    if args.plot:
+        plot(load_time_series(args.filename))
+    else:
+        time_series = extract_time_series(cdc_loader.app(args.filename))
+        if args.output is None:
+            fname = args.filename.replace('chkpt', 'time_series').replace('.cbor', '.pk')
+        else:
+            fname = args.output
+
+        print(f'save {fname}')
+        pickle.dump(time_series, open(fname, 'wb'))
