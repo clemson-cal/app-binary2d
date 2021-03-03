@@ -476,7 +476,7 @@ impl Hydrodynamics for Euler {
 
         if !(p.gas_pressure() > 0.0) {
             let pfixed = hydro_euler::euler_2d::Primitive(p.mass_density(), p.velocity_x(), p.velocity_y(), 1e-16);
-            Ok(pfixed)
+            return Ok(pfixed)
         }
         Ok(p)
     }
