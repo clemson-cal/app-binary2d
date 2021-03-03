@@ -1,5 +1,6 @@
 target
 data
+lib
 *.h5
 *.pbs
 *.txt
@@ -8,3 +9,5 @@ data
 *.png
 *.mp4
 tools/tseries_modded.py
+*.cbor
+*.so

@@ -1,0 +1,35 @@
+model:
+  infinite_disk:
+    mach_number: 10.0
+    surface_density: 1.0
+
+hydro:
+  euler:
+    gamma_law_index: 1.666
+    cooling_coefficient: 1e3
+    pressure_floor: 1e-16
+
+mesh:
+  block_size: 64
+  num_blocks: 12
+  domain_radius: 12.0
+
+physics:
+  binary_eccentricity: 0.0
+  binary_mass_ratio: 1.0
+  buffer_rate: 1000.0
+  buffer_scale: 1.0
+  cfl: 0.3
+  nu: 0.001
+  plm: 1.8
+  rk_order: RK2
+  sink_radius: 0.05
+  sink_rate: 1.0
+
+control:
+  num_orbits: 100
+  checkpoint_interval: 1.0
+  time_series_interval: 0.01
+  fold: 10
+  num_threads: ~
+  output_directory: data
