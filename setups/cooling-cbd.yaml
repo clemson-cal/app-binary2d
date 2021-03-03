@@ -6,6 +6,7 @@ hydro:
   euler:
     gamma_law_index: 1.666
     cooling_coefficient: 1e3
+    pressure_floor: 1e-16
 
 mesh:
   block_size: 64

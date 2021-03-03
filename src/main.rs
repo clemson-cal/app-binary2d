@@ -145,7 +145,7 @@ fn main() -> anyhow::Result<()> {
             let app = App::from_file(&input, overrides)?.validate()?;
 
             for line in serde_yaml::to_string(&app.config)?.split("\n").skip(1) {
-                println!("\t{}", line);
+                println!("{}", line);
             }
 
             let App{state, tasks, time_series, config, ..} = app;

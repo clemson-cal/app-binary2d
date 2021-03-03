@@ -189,6 +189,12 @@ pub struct Euler {
 
     /// Strength of the T^4 cooling
     pub cooling_coefficient: f64,
+
+    /// Optional pressure floor. If enabled, the cons -> prim conversion will
+    /// return a primitive state with the given pressure, if it was found to
+    /// be negative. If the floor value is omitted or nil, then negative
+    /// pressures are considered an error.
+    pub pressure_floor: Option<f64>,
 }
 
 
@@ -468,17 +474,18 @@ impl Hydrodynamics for Euler {
         if u.mass_density() < 0.0 {
             return Err(HydroErrorType::NegativeDensity(u.mass_density()))
         }
-        let p = u.to_primitive(self.gamma_law_index);
+        let mut p = u.to_primitive(self.gamma_law_index);
 
-        //if p.gas_pressure() < 0.0 {
-        //    return Err(HydroErrorType::NegativePressure(p.gas_pressure()))
-        //}
-
-        if !(p.gas_pressure() > 0.0) {
-            let pfixed = hydro_euler::euler_2d::Primitive(p.mass_density(), p.velocity_x(), p.velocity_y(), 1e-16);
-            return Ok(pfixed)
+        if p.gas_pressure() <= 0.0 {
+            if let Some(pressure_floor) = self.pressure_floor {
+                p.3 = pressure_floor;
+                Ok(p)
+            } else {
+                Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+            }
+        } else {
+            Ok(p)
         }
-        Ok(p)
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {
