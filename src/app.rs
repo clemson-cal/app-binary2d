@@ -325,4 +325,12 @@ impl App {
             version: VERSION_AND_BUILD.to_string(),
         }
     }
+
+    pub fn presets() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("cooling-cbd", include_str!("../setups/cooling-cbd.yaml")),
+            ("iso-circular", include_str!("../setups/iso-circular.yaml")),
+            ("test-grid-visc", include_str!("../setups/test-grid-visc.yaml")),
+        ]
+    }
 }
