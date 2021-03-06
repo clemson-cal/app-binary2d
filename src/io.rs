@@ -1,18 +1,9 @@
-use std::path::Path;
 use serde::{Serialize, Deserialize};
 
 
 
 
 // ============================================================================
-pub fn parent_directory(path_str: &str) -> String {
-    match Path::new(&path_str).parent().and_then(Path::to_str) {
-        None     => ".",
-        Some("") => ".",
-        Some(parent) => parent,
-    }.into()
-}
-
 pub fn write_cbor<T: Serialize>(value: &T, path_str: &str) -> anyhow::Result<()> {
     println!("write {}", path_str);
     let file = std::fs::File::create(&path_str)?;
