@@ -141,7 +141,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some(input) => {
             let overrides = std::env::args().skip(2).collect();
-            let app = App::from_file(&input, overrides)?.validate()?;
+            let app = App::from_preset_or_file(&input, overrides)?.validate()?;
 
             for line in serde_yaml::to_string(&app.config)?.split("\n").skip(1) {
                 println!("{}", line);
