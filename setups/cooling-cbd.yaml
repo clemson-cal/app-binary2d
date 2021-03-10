@@ -1,6 +1,7 @@
 model:
   infinite_disk:
     mach_number: 10.0
+    surface_density: 1.0
 
 hydro:
   euler:

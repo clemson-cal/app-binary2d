@@ -68,7 +68,10 @@ where
         tasks.report_progress.advance(ORBITAL_PERIOD);
     }
     if tasks.write_checkpoint.next_time <= state.time {
-        std::fs::create_dir_all(&control.output_directory)?;
+
+        std::fs::create_dir_all(&control.output_directory)
+            .map_err(|_| anyhow::anyhow!("unable to create output directory {}", control.output_directory))?;
+
         tasks.write_checkpoint.advance(control.checkpoint_interval * ORBITAL_PERIOD);
         let filename = format!("{}/chkpt.{:04}.cbor", control.output_directory, tasks.write_checkpoint.count - 1);
         let app = App::package(state, tasks, time_series, hydro, model, mesh, physics, control);
@@ -105,22 +108,13 @@ where
         .map(|index| Ok((index, scheme::BlockData::from_model(&model, &hydro, &mesh, index)?)))
         .collect::<Result<_, anyhow::Error>>()?;
 
-    // let dt_max = physics.min_time_step(&mesh);
-    // let dt_min = dt_max * 0.1;
-
     let mut dt = 0.0;
     side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
 
     while state.time < control.num_orbits * ORBITAL_PERIOD {
-
-        // let f = state.time / ORBITAL_PERIOD;
-        // let dt = dt_max * f.min(1.0) + dt_min * (1.0 - f).max(0.0);
-
         state = scheme::advance(state, hydro, &mesh, &physics, control.fold, &mut dt, &block_data, &runtime)?;
-
         side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
     }
-
     Ok(())
 }
 
@@ -137,12 +131,20 @@ fn main() -> anyhow::Result<()> {
 
     match std::env::args().nth(1) {
         None => {
-            println!("usage: binary2d <input.yaml|chkpt.cbor> [opts.yaml|group.key=value] [...]");
+            println!("usage: binary2d <input.yaml|chkpt.cbor|preset> [opts.yaml|group.key=value] [...]");
+            println!();
+            println!("These are the preset model setups:");
+            println!();
+            for (key, _) in App::presets() {
+                println!("  {}", key);
+            }
+            println!();
+            println!("To run any of these presets, run e.g. `binary2d iso-circular`.");
             Ok(())
         }
         Some(input) => {
             let overrides = std::env::args().skip(2).collect();
-            let app = App::from_file(&input, overrides)?.validate()?;
+            let app = App::from_preset_or_file(&input, overrides)?.validate()?;
 
             for line in serde_yaml::to_string(&app.config)?.split("\n").skip(1) {
                 println!("{}", line);
