@@ -68,7 +68,10 @@ where
         tasks.report_progress.advance(ORBITAL_PERIOD);
     }
     if tasks.write_checkpoint.next_time <= state.time {
-        std::fs::create_dir_all(&control.output_directory)?;
+
+        std::fs::create_dir_all(&control.output_directory)
+            .map_err(|_| anyhow::anyhow!("unable to create output directory {}", control.output_directory))?;
+
         tasks.write_checkpoint.advance(control.checkpoint_interval * ORBITAL_PERIOD);
         let filename = format!("{}/chkpt.{:04}.cbor", control.output_directory, tasks.write_checkpoint.count - 1);
         let app = App::package(state, tasks, time_series, hydro, model, mesh, physics, control);
