@@ -27,7 +27,7 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
 name = "binary2d"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -37,7 +37,7 @@ dependencies = [
  "git-version",
  "glob",
  "godunov-core",
- "hydro-euler",
+ "hydro-euler 0.1.0 (git+https://github.com/jwestern/hydro-euler)",
  "hydro-iso2d",
  "kepler-two-body",
  "ndarray",
@@ -62,7 +62,7 @@ name = "cdc_loader"
 version = "0.1.0"
 dependencies = [
  "binary2d",
- "hydro-euler",
+ "hydro-euler 0.1.0 (git+https://github.com/clemson-cal/hydro-euler)",
  "ndarray",
  "numpy",
  "pyo3",
@@ -281,6 +281,11 @@ dependencies = [
 name = "hydro-euler"
 version = "0.1.0"
 source = "git+https://github.com/clemson-cal/hydro-euler#f40f27303f0530e9e6ceafcb0836eb65bfb47c43"
+
+[[package]]
+name = "hydro-euler"
+version = "0.1.0"
+source = "git+https://github.com/jwestern/hydro-euler#fc929f9b00da8bb8546fa10c0ef59f909791428f"
 dependencies = [
  "serde",
 ]

@@ -195,8 +195,22 @@ pub struct Euler {
     /// be negative. If the floor value is omitted or nil, then negative
     /// pressures are considered an error.
     pub pressure_floor: Option<f64>,
+
+    /// The vertical structure assumed in the cooling.
+    /// density_index = 1 uses isothermal vertical structure,
+    /// density_index = 2 diminishes the photosphere temperature by a fastor
+    /// of the optical depth.
+    #[serde(default = "Euler::default_density_index")]
+    pub density_index: i32,
+
+    /// Whether to turn on cooling slowly from t=0.
+    #[serde(default)]
+    pub cooling_slow_start: bool
 }
 
+impl Euler{
+    fn default_density_index() -> i32 { 2 }
+}
 
 
 
@@ -540,12 +554,19 @@ impl Hydrodynamics for Euler {
         // 2 sigma_SB T_phot^4 = Sigma de/dt = a e_mid^4` (note the factor of
         // two) since the disk has two surfaces.
 
-        let density_index = 1; // Set to 2 to have the photosphere
+        let density_index = self.density_index; 
+                               // Set to 2 to have the photosphere
                                // temperature smaller than the midplaned
                                // temperature by a factor of the optical
-                               // depth.
+                               // depth, or 1 to have isothermal vertical
+                               // structure.
 
-        let f = f64::exp(-ORBITAL_PERIOD / (t + dt)); // slow-start term
+        let f = if self.cooling_slow_start == true {
+            f64::exp(-ORBITAL_PERIOD / (t + dt)) // slow-start term
+        } else {
+            1.0
+        };
+
         let a = self.cooling_coefficient / p0.mass_density().powi(density_index) * f;
         let ec = e0 * (1.0 + 3.0 * a * e0.powi(3) * dt).powf(-1.0 / 3.0);
 

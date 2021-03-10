@@ -226,7 +226,7 @@ dependencies = [
 [[package]]
 name = "hydro-euler"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/hydro-euler#f40f27303f0530e9e6ceafcb0836eb65bfb47c43"
+source = "git+https://github.com/jwestern/hydro-euler#fc929f9b00da8bb8546fa10c0ef59f909791428f"
 dependencies = [
  "serde",
 ]
