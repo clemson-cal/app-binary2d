@@ -72,10 +72,13 @@ where
         std::fs::create_dir_all(&control.output_directory)
             .map_err(|_| anyhow::anyhow!("unable to create output directory {}", control.output_directory))?;
 
-        tasks.write_checkpoint.advance(control.checkpoint_interval * ORBITAL_PERIOD);
-        let filename = format!("{}/chkpt.{:04}.cbor", control.output_directory, tasks.write_checkpoint.count - 1);
+        let filename = format!("{}/chkpt.{:04}.cbor", control.output_directory, tasks.write_checkpoint.count);
         let app = App::package(state, tasks, time_series, hydro, model, mesh, physics, control);
-        io::write_cbor(&app, &filename)?;
+
+        if tasks.write_checkpoint.count_this_run > 0 || tasks.write_checkpoint.count == 0 {
+            io::write_cbor(&app, &filename)?;
+        }
+        tasks.write_checkpoint.advance(control.checkpoint_interval * ORBITAL_PERIOD);
     }
     Ok(())
 }
