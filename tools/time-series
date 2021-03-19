@@ -61,17 +61,18 @@ def load_time_series(filename):
     if filename.endswith('.pk'):
         return pickle.load(open(filename, 'rb'))
     else:
-        return cdc_loader.app(filename).time_series
+        return extract_time_series(cdc_loader.app(filename))
 
 
 def plot(time_series):
     import matplotlib.pyplot as plt
     orbits = time_series['time'] / 2 / np.pi
     dM1 = -time_series['integrated_source_terms']['sink1'][:,0] / 2 / np.pi
-    dM2 = -time_series['integrated_source_terms']['sink1'][:,1] / 2 / np.pi
+    dM2 = -time_series['integrated_source_terms']['sink2'][:,0] / 2 / np.pi
     fig = plt.figure(figsize=[10, 10])
     ax1 = fig.add_subplot(1, 1, 1)
-    ax1.plot(orbits, dM1 + dM2)
+    ax1.plot(orbits, dM1)
+    ax1.plot(orbits, dM2)
     ax1.set_xlabel('Orbit')
     ax1.set_ylabel(r'$dM(t)$')
     plt.show()

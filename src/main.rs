@@ -59,7 +59,7 @@ where
         }
     }
     if tasks.report_progress.next_time <= state.time {
-        if tasks.report_progress.count_this_run > 0 {
+        if tasks.report_progress.count > 0 {
             println!("");
             println!("\torbits / hour ........ {:0.2}", 1.0 / tasks.report_progress.elapsed_hours());
             println!("\truntime so far ....... {:0.3} hours", tasks.simulation_startup.elapsed_hours());

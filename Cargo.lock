@@ -242,7 +242,7 @@ dependencies = [
 [[package]]
 name = "kepler-two-body"
 version = "0.1.0"
-source = "git+https://github.com/clemson-cal/kepler-two-body#c02db8b2111d25351e58acfd782d01348e59116f"
+source = "git+https://github.com/clemson-cal/kepler-two-body#2d8a0f5374052ab7f4f60c5bbbc37c4e5283b4a4"
 dependencies = [
  "serde",
 ]
