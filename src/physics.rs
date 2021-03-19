@@ -30,6 +30,9 @@ pub enum HydroErrorType {
 
     #[error("negative gas pressure {0:.4e}")]
     NegativePressure(f64),
+
+    #[error(transparent)]
+    OrbitalEvolutionError(#[from] kepler_two_body::UnboundOrbitalState)
 }
 
 impl HydroErrorType {
