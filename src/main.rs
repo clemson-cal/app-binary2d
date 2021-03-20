@@ -56,6 +56,8 @@ where
         if let Some(interval) = control.time_series_interval {
             tasks.record_time_series.advance(interval * ORBITAL_PERIOD);
             time_series.push(state.time_series_sample());
+
+            println!("record time series sample #{}", time_series.len());
         }
     }
     if tasks.report_progress.next_time <= state.time {
@@ -86,6 +88,13 @@ where
 
 
 
+struct LastCrash {
+    time: f64,
+}
+
+
+
+
 // ============================================================================
 fn run<C, H>(
     mut state: State<C>,
@@ -106,16 +115,74 @@ where
         .worker_threads(control.num_threads())
         .build()?;
 
+
     let block_data = mesh
         .block_indexes()
         .map(|index| Ok((index, scheme::BlockData::from_model(&model, &hydro, &mesh, index)?)))
         .collect::<Result<_, anyhow::Error>>()?;
 
+
+    let mut fallback_stack = std::collections::VecDeque::new();
+    let mut crash: Option<LastCrash> = None;
     let mut dt = 0.0;
     side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
 
+
+    let safety = |mut physics: Physics, crash: &Option<LastCrash>| {
+        if crash.is_some() {
+            physics.cfl *= 0.5;
+        }
+        physics
+    };
+
+
     while state.time < control.num_orbits * ORBITAL_PERIOD {
-        state = scheme::advance(state, hydro, &mesh, &physics, control.fold, &mut dt, &block_data, &runtime)?;
+
+        if control.fallback_stack_size > 1 {
+            if fallback_stack.len() > control.fallback_stack_size {
+                fallback_stack.pop_front();
+            }
+            fallback_stack.push_back((state.clone(), time_series.clone(), tasks.clone()));
+        }
+
+        state = match scheme::advance(
+            state,
+            hydro,
+            &mesh,
+            &safety(physics.clone(), &crash),
+            control.fold,
+            &mut dt,
+            &block_data,
+            &runtime) {
+
+            Ok(next_state) => {
+                if let Some(last_crash) = &crash {
+                    if last_crash.time < next_state.time {
+                        crash = None;
+                        println!("surpassed previous crash time, proceeding in normal mode");
+                    }
+                }
+                next_state
+            }
+            Err(e) => {
+
+                if fallback_stack.is_empty() || crash.is_some() {
+                    return Err(e.into())
+                }
+                let (former_state, former_time_series, former_tasks) = fallback_stack[0].clone();
+
+                crash = Some(LastCrash { time: fallback_stack.back().unwrap().0.time });
+                fallback_stack.clear();
+
+                println!("{} {}", e.source, e);
+                println!("rewind to orbit {:.5}, proceed in safety mode...", former_state.time / ORBITAL_PERIOD);
+
+                time_series = former_time_series;
+                tasks = former_tasks;
+                former_state
+            }
+        };
+
         side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
     }
     Ok(())
