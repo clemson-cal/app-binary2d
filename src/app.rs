@@ -112,6 +112,12 @@ pub struct Control {
 
     /// Output directory
     pub output_directory: String,
+
+    /// If this valus is set to something non-zero, then a stack of fallback
+    /// states will be retained so the code can proceed in safety mode. If
+    /// omitted or nil, no fallback states are saved.
+    #[serde(default)]
+    pub fallback_stack_size: usize,
 }
 
 impl Control {
