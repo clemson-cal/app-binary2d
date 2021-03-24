@@ -10,6 +10,7 @@ use crate::physics::{
     CellData,
     Direction,
     HydroError,
+    HydroErrorType,
     Physics,
 };
 use crate::mesh::{
@@ -149,7 +150,8 @@ async fn try_advance_rk<H: 'static + Hydrodynamics>(
                 let fy_e = ndarray_ops::extend_from_neighbor_arrays_2d(&fy_n, 1, 1, 1, 1);
                 (fx_e.to_shared(), fy_e.to_shared())
             };
-            Ok::<_, HydroError>((index, scheme.compute_block_updated_solution(solution, fx, fy, &block, &physics, &mesh, time, dt)))
+            let s1 = scheme.compute_block_updated_solution(solution, fx, fy, &block, &physics, &mesh, time, dt)?;
+            Ok::<_, HydroError>((index, s1))
         };
         s1_vec.push(runtime.spawn(s1).map(|f| f.unwrap()))
     }
@@ -249,7 +251,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         physics:  &Physics,
         mesh:     &Mesh,
         time:     f64,
-        dt:       f64) -> BlockState<H::Conserved>
+        dt:       f64) -> Result<BlockState<H::Conserved>, HydroError>
     {
         let dx = mesh.cell_spacing();
         let dy = mesh.cell_spacing();
@@ -275,13 +277,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         });
 
         let ds = ds * (dx * dy);
-        let de = ds.perturbation(time, physics.orbital_elements());
+        let de = ds.perturbation(time, physics.orbital_elements())
+            .map_err(|e| HydroErrorType::from(e).at_position((0.0, 0.0)).with_orbital_state(two_body_state))?;
 
-        BlockState {
+        Ok(BlockState {
             conserved: u1,
             integrated_source_terms: solution.integrated_source_terms + ds,
             orbital_elements_change: solution.orbital_elements_change + de,
-        }
+        })
     }
 }
 

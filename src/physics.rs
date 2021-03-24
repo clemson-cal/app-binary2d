@@ -30,6 +30,9 @@ pub enum HydroErrorType {
 
     #[error("negative gas pressure {0:.4e}")]
     NegativePressure(f64),
+
+    #[error(transparent)]
+    OrbitalEvolutionError(#[from] kepler_two_body::UnboundOrbitalState)
 }
 
 impl HydroErrorType {
@@ -52,7 +55,7 @@ impl HydroErrorType {
     binary.map_or(0.0, |s| s.1.position_y()),
 )]
 pub struct HydroError {
-    source: HydroErrorType,
+    pub source: HydroErrorType,
     binary: Option<kepler_two_body::OrbitalState>,
     position: (f64, f64),
 }

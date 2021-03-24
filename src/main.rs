@@ -56,10 +56,12 @@ where
         if let Some(interval) = control.time_series_interval {
             tasks.record_time_series.advance(interval * ORBITAL_PERIOD);
             time_series.push(state.time_series_sample());
+
+            println!("record time series sample #{}", time_series.len());
         }
     }
     if tasks.report_progress.next_time <= state.time {
-        if tasks.report_progress.count_this_run > 0 {
+        if tasks.report_progress.count > 0 {
             println!("");
             println!("\torbits / hour ........ {:0.2}", 1.0 / tasks.report_progress.elapsed_hours());
             println!("\truntime so far ....... {:0.3} hours", tasks.simulation_startup.elapsed_hours());
@@ -72,12 +74,22 @@ where
         std::fs::create_dir_all(&control.output_directory)
             .map_err(|_| anyhow::anyhow!("unable to create output directory {}", control.output_directory))?;
 
-        tasks.write_checkpoint.advance(control.checkpoint_interval * ORBITAL_PERIOD);
-        let filename = format!("{}/chkpt.{:04}.cbor", control.output_directory, tasks.write_checkpoint.count - 1);
+        let filename = format!("{}/chkpt.{:04}.cbor", control.output_directory, tasks.write_checkpoint.count);
         let app = App::package(state, tasks, time_series, hydro, model, mesh, physics, control);
-        io::write_cbor(&app, &filename)?;
+
+        if tasks.write_checkpoint.count_this_run > 0 || tasks.write_checkpoint.count == 0 {
+            io::write_cbor(&app, &filename)?;
+        }
+        tasks.write_checkpoint.advance(control.checkpoint_interval * ORBITAL_PERIOD);
     }
     Ok(())
+}
+
+
+
+
+struct LastCrash {
+    time: f64,
 }
 
 
@@ -103,16 +115,74 @@ where
         .worker_threads(control.num_threads())
         .build()?;
 
+
     let block_data = mesh
         .block_indexes()
         .map(|index| Ok((index, scheme::BlockData::from_model(&model, &hydro, &mesh, index)?)))
         .collect::<Result<_, anyhow::Error>>()?;
 
+
+    let mut fallback_stack = std::collections::VecDeque::new();
+    let mut crash: Option<LastCrash> = None;
     let mut dt = 0.0;
     side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
 
+
+    let safety = |mut physics: Physics, crash: &Option<LastCrash>| {
+        if crash.is_some() {
+            physics.cfl *= 0.5;
+        }
+        physics
+    };
+
+
     while state.time < control.num_orbits * ORBITAL_PERIOD {
-        state = scheme::advance(state, hydro, &mesh, &physics, control.fold, &mut dt, &block_data, &runtime)?;
+
+        if control.fallback_stack_size > 1 {
+            if fallback_stack.len() > control.fallback_stack_size {
+                fallback_stack.pop_front();
+            }
+            fallback_stack.push_back((state.clone(), time_series.clone(), tasks.clone()));
+        }
+
+        state = match scheme::advance(
+            state,
+            hydro,
+            &mesh,
+            &safety(physics.clone(), &crash),
+            control.fold,
+            &mut dt,
+            &block_data,
+            &runtime) {
+
+            Ok(next_state) => {
+                if let Some(last_crash) = &crash {
+                    if last_crash.time < next_state.time {
+                        crash = None;
+                        println!("surpassed previous crash time, proceeding in normal mode");
+                    }
+                }
+                next_state
+            }
+            Err(e) => {
+
+                if fallback_stack.is_empty() || crash.is_some() {
+                    return Err(e.into())
+                }
+                let (former_state, former_time_series, former_tasks) = fallback_stack[0].clone();
+
+                crash = Some(LastCrash { time: fallback_stack.back().unwrap().0.time });
+                fallback_stack.clear();
+
+                println!("{} {}", e.source, e);
+                println!("rewind to orbit {:.5}, proceed in safety mode...", former_state.time / ORBITAL_PERIOD);
+
+                time_series = former_time_series;
+                tasks = former_tasks;
+                former_state
+            }
+        };
+
         side_effects(&state, &mut tasks, &mut time_series, &hydro, &model, &mesh, &physics, &control, dt)?;
     }
     Ok(())
