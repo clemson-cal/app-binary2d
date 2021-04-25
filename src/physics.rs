@@ -199,6 +199,13 @@ pub struct Euler {
     /// pressures are considered an error.
     pub pressure_floor: Option<f64>,
 
+    /// Optional density floor. If enabled, the cons -> prim conversion will
+    /// return a primitive state with the given density, if it was found to
+    /// be less than density_floor. If the floor value is omitted or nil, 
+    /// then negative densities are considered an error, and densities
+    /// approching zero can cause the timestep to trend towards zero.
+    pub density_floor: Option<f64>,
+
     /// The vertical structure assumed in the cooling.
     /// density_index = 1 uses isothermal vertical structure,
     /// density_index = 2 diminishes the photosphere temperature by a fastor
@@ -492,6 +499,12 @@ impl Hydrodynamics for Euler {
             return Err(HydroErrorType::NegativeDensity(u.mass_density()))
         }
         let mut p = u.to_primitive(self.gamma_law_index);
+
+        if let Some(density_floor) = self.density_floor {
+            if p.mass_density() < density_floor {
+                p.0 = density_floor
+            }
+	}
 
         if p.gas_pressure() <= 0.0 {
             if let Some(pressure_floor) = self.pressure_floor {
