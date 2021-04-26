@@ -153,6 +153,12 @@ pub struct Physics {
 
     /// The amplitude of sink profile function.
     pub sink_rate: f64,
+
+    /// Safe mode versions of some parameters.
+    pub safe_cfl: Option<f64>,
+    pub safe_plm: Option<f64>,
+    pub safe_mach_ceiling: Option<f64>,
+    pub safe_rk_order: Option<runge_kutta::RungeKuttaOrder>,
 }
 
 
@@ -201,9 +207,9 @@ pub struct Euler {
 
     /// Optional density floor. If enabled, the cons -> prim conversion will
     /// return a primitive state with the given density, if it was found to
-    /// be less than density_floor. If the floor value is omitted or nil, 
-    /// then negative densities are considered an error, and densities
-    /// approching zero can cause the timestep to trend towards zero.
+    /// be positive but less than density_floor. Negative densities are still
+    /// considered an error. If the floor value is omitted or nil, then
+    /// densities approaching zero can cause the timestep to approach zero.
     pub density_floor: Option<f64>,
 
     /// The vertical structure assumed in the cooling.
