@@ -130,9 +130,6 @@ where
 
     let safety = |mut physics: Physics, crash: &Option<LastCrash>| {
         if crash.is_some() {
-            physics.cfl *= 0.1;
-            physics.plm = 1.0;
-
             if let Some(safe_cfl) = physics.safe_cfl {
                 physics.cfl = safe_cfl
             }
