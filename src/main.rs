@@ -132,6 +132,19 @@ where
         if crash.is_some() {
             physics.cfl *= 0.1;
             physics.plm = 1.0;
+
+            if let Some(safe_cfl) = physics.safe_cfl {
+                physics.cfl = safe_cfl
+            }
+            if let Some(safe_plm) = physics.safe_plm {
+                physics.plm = safe_plm
+            }
+            if let Some(safe_mach_ceiling) = physics.safe_mach_ceiling {
+                physics.mach_ceiling = Some(safe_mach_ceiling)
+            }
+            if let Some(safe_rk_order) = physics.safe_rk_order {
+                physics.rk_order = safe_rk_order
+            }
         }
         physics
     };
