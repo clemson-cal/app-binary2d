@@ -154,6 +154,9 @@ pub struct Physics {
     /// The amplitude of sink profile function.
     pub sink_rate: f64,
 
+    /// Time duration that safe mode should persist beyond crash time
+    pub safe_mode_duration: Option<f64>,
+
     /// Safe mode versions of some parameters.
     pub safe_cfl: Option<f64>,
     pub safe_plm: Option<f64>,
@@ -214,7 +217,7 @@ pub struct Euler {
 
     /// The vertical structure assumed in the cooling.
     /// density_index = 1 uses isothermal vertical structure,
-    /// density_index = 2 diminishes the photosphere temperature by a fastor
+    /// density_index = 2 diminishes the photosphere temperature by a factor
     /// of the optical depth.
     #[serde(default = "Euler::default_density_index")]
     pub density_index: i32,
