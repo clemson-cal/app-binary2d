@@ -168,9 +168,9 @@ where
 
             Ok(next_state) => {
                 if let Some(last_crash) = &crash {
-                    if last_crash.time < next_state.time {
+                    if last_crash.time + physics.safe_mode_duration * ORBITAL_PERIOD < next_state.time {
                         crash = None;
-                        println!("surpassed previous crash time, proceeding in normal mode");
+                        println!("surpassed previous crash time plus a margin of {} orbits, proceeding in normal mode", physics.safe_mode_duration);
                     }
                 }
                 next_state

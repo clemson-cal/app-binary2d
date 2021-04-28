@@ -154,8 +154,10 @@ pub struct Physics {
     /// The amplitude of sink profile function.
     pub sink_rate: f64,
 
-    /// Time duration that safe mode should persist beyond crash time
-    pub safe_mode_duration: Option<f64>,
+    /// Time duration that safe mode should persist beyond crash time.
+    /// Units are orbits. Default value is 0.
+    #[serde(default)]
+    pub safe_mode_duration: f64,
 
     /// Safe mode versions of some parameters.
     pub safe_cfl: Option<f64>,
