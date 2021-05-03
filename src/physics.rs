@@ -209,7 +209,7 @@ pub struct Euler {
 
     /// Optional pressure floor. If enabled, the cons -> prim conversion will
     /// return a primitive state with the given pressure, if it was found to
-    /// be negative. If the floor value is omitted or nil, then negative
+    /// be less than the floor. If the floor value is omitted or nil, then negative
     /// pressures are considered an error.
     pub pressure_floor: Option<f64>,
 
@@ -520,8 +520,8 @@ impl Hydrodynamics for Euler {
             }
 	}
 
-        if p.gas_pressure() <= 0.0 {
-            if let Some(pressure_floor) = self.pressure_floor {
+        if let Some(pressure_floor) = self.pressure_floor {
+            if p.gas_pressure() < pressure_floor {
                 p.3 = pressure_floor;
                 Ok(p)
             } else {
@@ -530,6 +530,17 @@ impl Hydrodynamics for Euler {
         } else {
             Ok(p)
         }
+
+        //if p.gas_pressure() <= 0.0 {
+        //    if let Some(pressure_floor) = self.pressure_floor {
+        //        p.3 = pressure_floor;
+        //        Ok(p)
+        //    } else {
+        //        Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+        //    }
+        //} else {
+        //    Ok(p)
+        //}
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {
