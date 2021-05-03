@@ -116,6 +116,9 @@ pub struct Physics {
 
     pub plm: f64,
 
+    /// Density value below which the slope limiter uses plm = 0.0
+    pub plm_density_trigger: Option<f64>,
+
     /// Used to impose a "preemptive" density floor: fake mass is injected at
     /// the `fake_mass_rate` where the surface density is smaller than this
     /// dimensionless number, times the surface density at this position in
