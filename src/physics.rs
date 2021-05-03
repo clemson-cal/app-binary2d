@@ -522,11 +522,12 @@ impl Hydrodynamics for Euler {
 
         if let Some(pressure_floor) = self.pressure_floor {
             if p.gas_pressure() < pressure_floor {
-                p.3 = pressure_floor;
-                Ok(p)
-            } else {
-                Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+                p.3 = pressure_floor
             }
+        }
+
+        if p.gas_pressure() <= 0.0 {
+            Err(HydroErrorType::NegativePressure(p.gas_pressure()))
         } else {
             Ok(p)
         }
