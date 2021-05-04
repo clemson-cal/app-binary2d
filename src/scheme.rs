@@ -217,8 +217,11 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         } else {
             0.0
         };
-        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(if b.clone().mass_density() < pdt {0.0} else {physics.plm}, a, b, c));
-        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(if b.clone().mass_density() < pdt {0.0} else {physics.plm}, a, b, c));
+        fn is_less<H: Hydrodynamics>(a: &<H as Hydrodynamics>::Primitive, pdt: f64) -> bool {
+            a.clone().mass_density() < pdt
+        }
+        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(if is_less::<H>(a, pdt) || is_less::<H>(b, pdt) || is_less::<H>(c, pdt) {0.0} else {physics.plm}, a, b, c));
+        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(if is_less::<H>(a, pdt) || is_less::<H>(b, pdt) || is_less::<H>(c, pdt) {0.0} else {physics.plm}, a, b, c));
         let dx = mesh.cell_spacing();
         let dy = mesh.cell_spacing();
         let xf = &block.face_centers_x;
