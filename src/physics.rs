@@ -116,6 +116,9 @@ pub struct Physics {
 
     pub plm: f64,
 
+    /// Density value below which the slope limiter uses plm = 0.0
+    pub plm_density_trigger: Option<f64>,
+
     /// Used to impose a "preemptive" density floor: fake mass is injected at
     /// the `fake_mass_rate` where the surface density is smaller than this
     /// dimensionless number, times the surface density at this position in
@@ -153,6 +156,11 @@ pub struct Physics {
 
     /// The amplitude of sink profile function.
     pub sink_rate: f64,
+
+    /// Time duration that safe mode should persist beyond crash time.
+    /// Units are orbits. Default value is 0.
+    #[serde(default)]
+    pub safe_mode_duration: f64,
 
     /// Safe mode versions of some parameters.
     pub safe_cfl: Option<f64>,
@@ -201,7 +209,7 @@ pub struct Euler {
 
     /// Optional pressure floor. If enabled, the cons -> prim conversion will
     /// return a primitive state with the given pressure, if it was found to
-    /// be negative. If the floor value is omitted or nil, then negative
+    /// be less than the floor. If the floor value is omitted or nil, then negative
     /// pressures are considered an error.
     pub pressure_floor: Option<f64>,
 
@@ -214,7 +222,7 @@ pub struct Euler {
 
     /// The vertical structure assumed in the cooling.
     /// density_index = 1 uses isothermal vertical structure,
-    /// density_index = 2 diminishes the photosphere temperature by a fastor
+    /// density_index = 2 diminishes the photosphere temperature by a factor
     /// of the optical depth.
     #[serde(default = "Euler::default_density_index")]
     pub density_index: i32,
@@ -512,16 +520,28 @@ impl Hydrodynamics for Euler {
             }
 	}
 
-        if p.gas_pressure() <= 0.0 {
-            if let Some(pressure_floor) = self.pressure_floor {
-                p.3 = pressure_floor;
-                Ok(p)
-            } else {
-                Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+        if let Some(pressure_floor) = self.pressure_floor {
+            if p.gas_pressure() < pressure_floor {
+                p.3 = pressure_floor
             }
+        }
+
+        if p.gas_pressure() <= 0.0 {
+            Err(HydroErrorType::NegativePressure(p.gas_pressure()))
         } else {
             Ok(p)
         }
+
+        //if p.gas_pressure() <= 0.0 {
+        //    if let Some(pressure_floor) = self.pressure_floor {
+        //        p.3 = pressure_floor;
+        //        Ok(p)
+        //    } else {
+        //        Err(HydroErrorType::NegativePressure(p.gas_pressure()))
+        //    }
+        //} else {
+        //    Ok(p)
+        //}
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {

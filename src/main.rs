@@ -157,7 +157,7 @@ where
         }
 
         state = match scheme::advance(
-            state,
+            state.clone(),
             hydro,
             &mesh,
             &safety(physics.clone(), &crash),
@@ -168,9 +168,9 @@ where
 
             Ok(next_state) => {
                 if let Some(last_crash) = &crash {
-                    if last_crash.time < next_state.time {
+                    if last_crash.time + physics.safe_mode_duration * ORBITAL_PERIOD < next_state.time {
                         crash = None;
-                        println!("surpassed previous crash time, proceeding in normal mode");
+                        println!("surpassed previous crash time plus a margin of {} orbits, proceeding in normal mode", physics.safe_mode_duration);
                     }
                 }
                 next_state
@@ -178,6 +178,16 @@ where
             Err(e) => {
 
                 if fallback_stack.is_empty() || crash.is_some() {
+
+                    std::fs::create_dir_all(&control.output_directory)
+                        .map_err(|_| anyhow::anyhow!("unable to create output directory {}", control.output_directory))?;
+            
+                    let filename = format!("{}/chkpt.fail.cbor", control.output_directory);
+                    let app = App::package(&state, &tasks, &time_series, &hydro, &model, &mesh, &physics, &control);
+            
+                    if tasks.write_checkpoint.count_this_run > 0 || tasks.write_checkpoint.count == 0 {
+                        io::write_cbor(&app, &filename)?;
+                    }
                     return Err(e.into())
                 }
                 let (former_state, former_time_series, former_tasks) = fallback_stack[0].clone();

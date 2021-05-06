@@ -207,12 +207,18 @@ impl<H: Hydrodynamics> UpdateScheme<H>
     {
         use ndarray::{s, azip};
         use ndarray_ops::{map_stencil3};
+        use crate::traits::Primitive;
 
         // ========================================================================
         let two_body_state = physics.orbital_state_from_time(time);
         let phi = |&(x, y)| two_body_state.gravitational_potential(x, y, physics.softening_length());
-        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
-        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(physics.plm, a, b, c));
+        let pdt = if let Some(plm_density_trigger) = physics.plm_density_trigger {
+            plm_density_trigger
+        } else {
+            0.0
+        };
+        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(if b.clone().mass_density() < pdt {0.0} else {physics.plm}, a, b, c));
+        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(if b.clone().mass_density() < pdt {0.0} else {physics.plm}, a, b, c));
         let dx = mesh.cell_spacing();
         let dy = mesh.cell_spacing();
         let xf = &block.face_centers_x;
