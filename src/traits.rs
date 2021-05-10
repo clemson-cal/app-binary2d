@@ -85,8 +85,8 @@ pub trait Hydrodynamics: Clone + Copy + Send {
         physics: &Physics,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
-        x: f64,
-        y: f64,
+        dx: f64,
+        dy: f64,
         gravitational_potiential: f64,
         axis: Direction) -> Self::Conserved;
 
