@@ -46,6 +46,7 @@ pub trait Primitive: Clone + Copy + Send + Sync {
     fn velocity_x(self) -> f64;
     fn velocity_y(self) -> f64;
     fn mass_density(self) -> f64;
+    fn sound_speed_squared(self, gamma_law_index: f64, phi: f64, mach: f64) -> f64;
 }
 
 
@@ -85,6 +86,8 @@ pub trait Hydrodynamics: Clone + Copy + Send {
         physics: &Physics,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
+        lnu: f64,
+        rnu: f64,
         dx: f64,
         dy: f64,
         gravitational_potiential: f64,

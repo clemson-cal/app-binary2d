@@ -93,6 +93,15 @@ pub enum Direction {
 
 
 
+// ============================================================================
+#[derive(Clone, Copy, Debug)]
+#[derive(Serialize,Deserialize)]
+pub enum ViscosityType {
+    ConstantNu,
+    Alpha,
+} 
+
+
 
 // ============================================================================
 #[derive(Clone, Serialize, Deserialize)]
@@ -107,10 +116,20 @@ pub struct Physics {
 
     pub binary_mass_ratio: f64,
 
+    /// Deprecated.
     #[serde(default)]
     pub lambda: f64,
 
+    /// Kinematic bulk viscosity will be kinematic shear viscosity times lambda_multiplier.
+    #[serde(default)]
+    pub lambda_multiplier: f64,
+
     pub nu: f64,
+
+    #[serde(default = "Physics::default_viscosity_type")]
+    pub viscosity_type: ViscosityType,
+
+    pub alpha: Option<f64>,
 
     pub cfl: f64,
 
@@ -169,6 +188,9 @@ pub struct Physics {
     pub safe_rk_order: Option<runge_kutta::RungeKuttaOrder>,
 }
 
+impl Physics{
+    fn default_viscosity_type() -> ViscosityType { ViscosityType::ConstantNu }
+}
 
 
 
@@ -467,6 +489,8 @@ impl Hydrodynamics for Isothermal {
         physics: &Physics,
         l: &CellData<'a, hydro_iso2d::Primitive>,
         r: &CellData<'a, hydro_iso2d::Primitive>,
+        lnu: f64,
+        rnu: f64,
         dx: f64,
         dy: f64,
         gravitational_potential: f64,
@@ -475,10 +499,9 @@ impl Hydrodynamics for Isothermal {
         let cs2 = -gravitational_potential / self.mach_number.powi(2);
         let pl  = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr  = *r.pc - *r.gradient_field(axis) * 0.5;
-        let nu  = physics.nu;
-        let lam = physics.lambda;
-        let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
-        let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
+        let lam = physics.lambda_multiplier;
+        let tau_x = 0.5 * (l.stress_field(lnu, lam*lnu, dx, dy, axis, Direction::X) + r.stress_field(rnu, lam*rnu, dx, dy, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(lnu, lam*lnu, dx, dy, axis, Direction::Y) + r.stress_field(rnu, lam*rnu, dx, dy, axis, Direction::Y));
         let iso2d_axis = match axis {
             Direction::X => hydro_iso2d::Direction::X,
             Direction::Y => hydro_iso2d::Direction::Y,
@@ -639,6 +662,8 @@ impl Hydrodynamics for Euler {
         physics: &Physics,
         l: &CellData<'a, Self::Primitive>,
         r: &CellData<'a, Self::Primitive>,
+        lnu: f64,
+        rnu: f64,
         dx: f64,
         dy: f64,
         _gravitational_potential: f64,
@@ -647,10 +672,9 @@ impl Hydrodynamics for Euler {
         let pl = *l.pc + *l.gradient_field(axis) * 0.5;
         let pr = *r.pc - *r.gradient_field(axis) * 0.5;
 
-        let nu    = physics.nu;
-        let lam   = physics.lambda;
-        let tau_x = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::X) + r.stress_field(nu, lam, dx, dy, axis, Direction::X));
-        let tau_y = 0.5 * (l.stress_field(nu, lam, dx, dy, axis, Direction::Y) + r.stress_field(nu, lam, dx, dy, axis, Direction::Y));
+        let lam   = physics.lambda_multiplier;
+        let tau_x = 0.5 * (l.stress_field(lnu, lam*lnu, dx, dy, axis, Direction::X) + r.stress_field(rnu, lam*rnu, dx, dy, axis, Direction::X));
+        let tau_y = 0.5 * (l.stress_field(lnu, lam*lnu, dx, dy, axis, Direction::Y) + r.stress_field(rnu, lam*rnu, dx, dy, axis, Direction::Y));
         let vx = 0.5 * (l.pc.velocity_x() + r.pc.velocity_x());
         let vy = 0.5 * (l.pc.velocity_y() + r.pc.velocity_y());
         let viscous_flux = hydro_euler::euler_2d::Conserved(0.0, -tau_x, -tau_y, -(tau_x * vx + tau_y * vy));
@@ -716,10 +740,16 @@ impl Primitive for hydro_iso2d::Primitive {
     fn velocity_x(self)   -> f64 { self.velocity_x() }
     fn velocity_y(self)   -> f64 { self.velocity_y() }
     fn mass_density(self) -> f64 { self.density() }
+    fn sound_speed_squared(self, _gamma_law_index: f64, phi: f64, mach: f64) -> f64 { 
+        -phi / mach.powi(2)
+    }
 }
 
 impl Primitive for hydro_euler::euler_2d::Primitive {
     fn velocity_x(self)   -> f64 { self.velocity_1() }
     fn velocity_y(self)   -> f64 { self.velocity_2() }
     fn mass_density(self) -> f64 { self.mass_density() }
+    fn sound_speed_squared(self, gamma_law_index: f64, _phi: f64, _mach: f64) -> f64 { 
+        gamma_law_index * self.gas_pressure() / self.mass_density() 
+    }
 }
