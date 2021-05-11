@@ -95,11 +95,13 @@ pub enum Direction {
 
 // ============================================================================
 #[derive(Clone, Copy, Debug)]
-#[derive(Serialize,Deserialize)]
-pub enum ViscosityType {
-    ConstantNu,
-    Alpha,
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViscosityModel {
+    ConstantNu(f64),
+    Alpha(f64),
 } 
+
 
 
 
@@ -116,20 +118,14 @@ pub struct Physics {
 
     pub binary_mass_ratio: f64,
 
-    /// Deprecated.
-    #[serde(default)]
-    pub lambda: f64,
-
     /// Kinematic bulk viscosity will be kinematic shear viscosity times lambda_multiplier.
     #[serde(default)]
     pub lambda_multiplier: f64,
 
-    pub nu: f64,
-
-    #[serde(default = "Physics::default_viscosity_type")]
-    pub viscosity_type: ViscosityType,
-
-    pub alpha: Option<f64>,
+    /// Viscosity type and value. This member is private, because you should
+    /// use the `viscosity_model` member function instead.
+    #[serde(default = "Physics::default_viscosity")]
+    viscosity: ViscosityModel,
 
     pub cfl: f64,
 
@@ -186,11 +182,30 @@ pub struct Physics {
     pub safe_plm: Option<f64>,
     pub safe_mach_ceiling: Option<f64>,
     pub safe_rk_order: Option<runge_kutta::RungeKuttaOrder>,
+
+
+    /// Deprecated.
+    pub lambda: Option<f64>,
+    /// Deprecated: prefer using e.g. viscosity: {constant_nu: 0.001} instead
+    pub nu: Option<f64>,
+    /// Deprecated: prefer using e.g. viscosity: {alpha: 0.1} instead
+    pub alpha: Option<f64>,
+
 }
 
 impl Physics{
-    fn default_viscosity_type() -> ViscosityType { ViscosityType::ConstantNu }
+    pub fn default_viscosity() -> ViscosityModel { ViscosityModel::ConstantNu(1e-3) }
+    pub fn viscosity_model(&self) -> ViscosityModel {
+        if let Some(nu) = self.nu {
+            ViscosityModel::ConstantNu(nu)
+        } else if let Some(alpha) = self.alpha {
+            ViscosityModel::ConstantNu(alpha)
+        } else {
+            self.viscosity
+        }
+    }
 }
+
 
 
 

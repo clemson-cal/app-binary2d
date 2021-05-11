@@ -12,7 +12,7 @@ use crate::physics::{
     HydroError,
     HydroErrorType,
     Physics,
-    ViscosityType,
+    ViscosityModel,
 };
 use crate::mesh::{
     Mesh,
@@ -227,9 +227,9 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         let dy = mesh.cell_spacing();
         let xf = &block.face_centers_x;
         let yf = &block.face_centers_y;
-        let nu = |&f: &(f64, f64), l_or_r: &CellData<H::Primitive>| match physics.viscosity_type {
-            ViscosityType::ConstantNu => physics.nu,
-            ViscosityType::Alpha => {
+        let nu = |&f: &(f64, f64), cell_data: &CellData<H::Primitive>| match physics.viscosity_model() {
+            ViscosityModel::ConstantNu(nu) => nu,
+            ViscosityModel::Alpha(alpha) => {
                 let (x,y)   = f;
                 let (x1,y1) = (two_body_state.0.position_x(), two_body_state.0.position_y());
                 let (x2,y2) = (two_body_state.1.position_x(), two_body_state.1.position_y());
@@ -238,11 +238,11 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 let m1      = two_body_state.0.mass();
                 let m2      = two_body_state.1.mass();
                 let gm      = self.hydro.gamma_law_index();
-                let mach    = if let Some(mach) = self.hydro.global_mach_number() {mach} else {0.0};
+                let mach    = if let Some(mach) = self.hydro.global_mach_number() { mach } else { 0.0 };
                 let gpot    = two_body_state.gravitational_potential(x, y, physics.softening_length());
-                let cs2     = l_or_r.pc.clone().sound_speed_squared(gm, gpot, mach);
+                let cs2     = cell_data.pc.sound_speed_squared(gm, gpot, mach);
                 let twofreq = (m1 / r1.powi(3) + m2 / r2.powi(3)).sqrt();
-                physics.alpha.unwrap() * cs2 / twofreq / gm.sqrt()
+                alpha * cs2 / twofreq / gm.sqrt() // Farris (2014) Eqn 1.
             }
         };
 
