@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use yaml_patch::Patch;
 use crate::io;
 use crate::mesh::Mesh;
-use crate::disks::{InfiniteDiskModel, FiniteDiskModel};
+use crate::disks::{InfiniteDiskModel, FiniteDiskModel, ResidualTestModel};
 use crate::physics::{Euler, Isothermal, Physics};
 use crate::state::{ItemizedChange, State};
 use crate::tasks::Tasks;
@@ -43,6 +43,7 @@ pub enum AnyHydro {
 pub enum AnyModel {
     InfiniteDisk(InfiniteDiskModel),
     FiniteDisk(FiniteDiskModel),
+    ResidualTest(ResidualTestModel),
 }
 
 
@@ -199,6 +200,7 @@ impl InitialModel for AnyModel {
         match self {
             Self::FiniteDisk  (model) => model.primitive_at(hydro, xy),
             Self::InfiniteDisk(model) => model.primitive_at(hydro, xy),
+            Self::ResidualTest(model) => model.primitive_at(hydro, xy),
         }
     }
 
@@ -206,6 +208,7 @@ impl InitialModel for AnyModel {
         match self {
             Self::FiniteDisk  (model) => model.validate(hydro),
             Self::InfiniteDisk(model) => model.validate(hydro),
+            Self::ResidualTest(model) => model.validate(hydro),
         }
     }
 }
