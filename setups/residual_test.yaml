@@ -1,0 +1,49 @@
+hydro:
+  euler:
+    gamma_law_index: 1.66666666666666
+    cooling_coefficient: 0.025
+    pressure_floor: ~
+    density_floor: ~
+    density_index: 2
+    cooling_slow_start: false
+model:
+  residual_test: {}
+
+mesh:
+  num_blocks: 4
+  block_size: 64
+  domain_radius: 6.0
+physics:
+  buffer_rate: 1000.0
+  buffer_scale: 0.3
+  binary_eccentricity: 0.0
+  binary_mass_ratio: 0.5
+  lambda_multiplier: 1.66666666666666
+  viscosity:
+    alpha: 0.001
+  cfl: 0.1
+  plm: 1.8
+  plm_density_trigger: ~
+  fake_mass_threshold: 0.0
+  fake_mass_rate: 0.0
+  one_body: false
+  mach_ceiling: ~
+  rk_order: RK2
+  sink_radius: 1.0
+  sink_rate: 1.0
+  safe_mode_duration: 0.0
+  safe_cfl: ~
+  safe_plm: ~
+  safe_mach_ceiling: ~
+  safe_rk_order: ~
+  lambda: ~
+  nu: ~
+  alpha: ~
+control:
+  num_orbits: 0.01
+  checkpoint_interval: 1e-16
+  time_series_interval: 1e-16
+  fold: 1
+  num_threads: 4
+  output_directory: data
+  fallback_stack_size: 10
