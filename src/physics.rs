@@ -199,7 +199,7 @@ impl Physics{
         if let Some(nu) = self.nu {
             ViscosityModel::ConstantNu(nu)
         } else if let Some(alpha) = self.alpha {
-            ViscosityModel::ConstantNu(alpha)
+            ViscosityModel::Alpha(alpha)
         } else {
             self.viscosity
         }
