@@ -31,6 +31,7 @@ physics:
   rk_order: RK2
   sink_radius: 1.0
   sink_rate: 1.0
+  softening_length: 1.5
   safe_mode_duration: 0.0
   safe_cfl: ~
   safe_plm: ~

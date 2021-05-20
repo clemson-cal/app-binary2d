@@ -172,6 +172,10 @@ pub struct Physics {
     /// The amplitude of sink profile function.
     pub sink_rate: f64,
 
+    /// Optional softening length used in the gravitational Plummer potential.
+    /// If omitted, default is softening_length = sink_radius.
+    pub softening_length: Option<f64>,
+
     /// Time duration that safe mode should persist beyond crash time.
     /// Units are orbits. Default value is 0.
     #[serde(default)]
@@ -352,7 +356,11 @@ impl Physics {
     }
 
     pub fn softening_length(&self) -> f64 {
-        self.sink_radius
+        if let Some(softening_length) = self.softening_length {
+            softening_length
+        } else {
+            self.sink_radius
+        }
     }
 
     pub fn maximum_orbital_velocity(&self) -> f64 {

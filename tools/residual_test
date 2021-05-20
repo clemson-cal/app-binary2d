@@ -22,7 +22,7 @@ subprocess.run(["mkdir", "-p", "./tempdir_residual_test/high_res"])
 subprocess.run(["binary2d ../setups/residual_test.yaml mesh.block_size=64 control.output_directory=./tempdir_residual_test/low_res control.num_orbits="+tfinal], shell=True)
 
 fn         = "./tempdir_residual_test/low_res/"
-Nchkpts    = range(0,int(nts+3),1) #672,1)
+Nchkpts    = range(0,int(nts+3),1)
 exec(open('indep_res_analysis.py').read())
 rhores_L2_low  =  rhores_L2*1
 momxres_L2_low = momxres_L2*1
@@ -33,7 +33,7 @@ t_low          =          t*1
 subprocess.run(["binary2d ../setups/residual_test.yaml mesh.block_size=128 control.output_directory=./tempdir_residual_test/high_res control.num_orbits="+tfinal], shell=True)
 
 fn         = "./tempdir_residual_test/high_res/"
-Nchkpts    = range(0,int(2*nts+2),1) #1340,1)
+Nchkpts    = range(0,int(2*nts+2),1)
 exec(open('./indep_res_analysis.py').read())
 rhores_L2_high  =  rhores_L2*1
 momxres_L2_high = momxres_L2*1
@@ -56,9 +56,9 @@ print(" ")
 print(" ")
 print(" ")
 print("Mass continuity equation is being solved at order "+str(rhoconv))
-print("x-Momentum equation is being solved at order "+str(rhoconv))
-print("y-Momentum equation is being solved at order "+str(rhoconv))
-print("Energy equation is being solved at order "+str(rhoconv))
+print("x-Momentum equation is being solved at order "+str(momxconv))
+print("y-Momentum equation is being solved at order "+str(momyconv))
+print("Energy equation is being solved at order "+str(enconv))
 print(" ")
 print(" ")
 print(" ")

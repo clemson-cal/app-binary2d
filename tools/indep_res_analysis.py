@@ -41,7 +41,7 @@ DR         = d.config['mesh']['domain_radius']
 N          = int(d.config['mesh']['num_blocks'] * d.config['mesh']['block_size'])
 dx         = 2*DR/N
 dy         = dx*1
-rs         = d.config['physics']['sink_radius']
+rsof       = d.config['physics']['softening_length']
 cfl        = d.config['physics']['cfl']
 gamma      = d.config['hydro']['euler']['gamma_law_index']
 coolcoef   = d.config['hydro']['euler']['cooling_coefficient']
@@ -182,8 +182,8 @@ def compute_all_fluxes_der( rho, vx, vy, pres, eps, nu_or_alpha, x, y, x1, y1, x
 def sources_gravity( rho, vx, vy, x, y, x1, y1, x2, y2 ):
 	r1   = np.sqrt((x-x1)**2 + (y-y1)**2)
 	r2   = np.sqrt((x-x2)**2 + (y-y2)**2)
-	fpre1= -rho * m1/(r1**2 + rs**2)**(3./2)
-	fpre2= -rho * m2/(r2**2 + rs**2)**(3./2)
+	fpre1= -rho * m1/(r1**2 + rsof**2)**(3./2)
+	fpre2= -rho * m2/(r2**2 + rsof**2)**(3./2)
 	f1x  = fpre1 * (x-x1)
 	f1y  = fpre1 * (y-y1)
 	f2x  = fpre2 * (x-x2)
