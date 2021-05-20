@@ -29,9 +29,9 @@ physics:
   one_body: false
   mach_ceiling: ~
   rk_order: RK2
-  sink_radius: 1.0
+  sink_radius: 1.5
   sink_rate: 1.0
-  softening_length: 1.5
+  softening_length: 1.0
   safe_mode_duration: 0.0
   safe_cfl: ~
   safe_plm: ~
