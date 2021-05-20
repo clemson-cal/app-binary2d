@@ -241,7 +241,7 @@ impl<H: Hydrodynamics> UpdateScheme<H>
                 let mach    = if let Some(mach) = self.hydro.global_mach_number() { mach } else { 0.0 };
                 let gpot    = two_body_state.gravitational_potential(x, y, physics.softening_length());
                 let cs2     = cell_data.pc.sound_speed_squared(gm, gpot, mach);
-                let twofreq = (m1 / r1.powi(3) + m2 / r2.powi(3)).sqrt();
+                let twofreq = (m1 / (r1 + 1e-12 * dx).powi(3) + m2 / (r2 + 1e-12 * dx).powi(3)).sqrt();
                 alpha * cs2 / twofreq / gm.sqrt() // Farris (2014) Eqn 1.
             }
         };
