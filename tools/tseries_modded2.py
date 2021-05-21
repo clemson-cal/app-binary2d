@@ -70,6 +70,7 @@ def get_orbital_evolution_data():
         e_sink = e_sink_1 + e_sink_2
         e_grav = e_grav_1 + e_grav_2
         e_tot = e_sink + e_grav
+
         mean_edot = td(e_tot)
         mean_mdot = td(m)
 
@@ -83,11 +84,14 @@ if __name__ == "__main__":
     loaded_data = load_raw_data()
     eccentricities, dedms = get_orbital_evolution_data()
 
+    print(eccentricities)
+    print(dedms)
+
     fig = plt.figure()
     ax1 = fig.add_subplot(1, 1, 1)
 
     ax1.scatter(eccentricities, dedms)
-    plt.suptitle('Binary orbital evolution, MN = 20')
+    plt.suptitle('Binary orbital evolution, MN = 10')
     plt.xlabel('e')
     plt.ylabel(r'$\frac{\Delta e}{\Delta M}$')
     plt.show()
