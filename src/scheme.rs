@@ -12,6 +12,7 @@ use crate::physics::{
     HydroError,
     HydroErrorType,
     Physics,
+    ViscosityModel,
 };
 use crate::mesh::{
     Mesh,
@@ -217,12 +218,33 @@ impl<H: Hydrodynamics> UpdateScheme<H>
         } else {
             0.0
         };
-        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(if b.clone().mass_density() < pdt {0.0} else {physics.plm}, a, b, c));
-        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(if b.clone().mass_density() < pdt {0.0} else {physics.plm}, a, b, c));
+        fn is_less<H: Hydrodynamics>(a: &<H as Hydrodynamics>::Primitive, pdt: f64) -> bool {
+            a.clone().mass_density() < pdt
+        }
+        let gx = map_stencil3(&pe, Axis(0), |a, b, c| self.hydro.plm_gradient(if is_less::<H>(a, pdt) || is_less::<H>(b, pdt) || is_less::<H>(c, pdt) {0.0} else {physics.plm}, a, b, c));
+        let gy = map_stencil3(&pe, Axis(1), |a, b, c| self.hydro.plm_gradient(if is_less::<H>(a, pdt) || is_less::<H>(b, pdt) || is_less::<H>(c, pdt) {0.0} else {physics.plm}, a, b, c));
         let dx = mesh.cell_spacing();
         let dy = mesh.cell_spacing();
         let xf = &block.face_centers_x;
         let yf = &block.face_centers_y;
+        let nu = |&f: &(f64, f64), cell_data: &CellData<H::Primitive>| match physics.viscosity_model() {
+            ViscosityModel::ConstantNu(nu) => nu,
+            ViscosityModel::Alpha(alpha) => {
+                let (x,y)   = f;
+                let (x1,y1) = (two_body_state.0.position_x(), two_body_state.0.position_y());
+                let (x2,y2) = (two_body_state.1.position_x(), two_body_state.1.position_y());
+                let r1      = ((x - x1).powi(2) + (y - y1).powi(2)).sqrt();
+                let r2      = ((x - x2).powi(2) + (y - y2).powi(2)).sqrt();
+                let m1      = two_body_state.0.mass();
+                let m2      = two_body_state.1.mass();
+                let gm      = self.hydro.gamma_law_index();
+                let mach    = if let Some(mach) = self.hydro.global_mach_number() { mach } else { 0.0 };
+                let gpot    = two_body_state.gravitational_potential(x, y, physics.softening_length());
+                let cs2     = cell_data.pc.sound_speed_squared(gm, gpot, mach);
+                let twofreq = (m1 / r1.powi(3) + m2 / r2.powi(3)).sqrt();
+                alpha * cs2 / twofreq / gm.sqrt() // Farris (2014) Eqn 1.
+            }
+        };
 
         // ============================================================================
         let cell_data = azip![
@@ -236,14 +258,14 @@ impl<H: Hydrodynamics> UpdateScheme<H>
             cell_data.slice(s![..-1,1..-1]),
             cell_data.slice(s![ 1..,1..-1]),
             xf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&physics, l, r, dx, dy, phi(f), Direction::X));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&physics, l, r, nu(f, l), nu(f, r), dx, dy, phi(f), Direction::X));
 
         // ============================================================================
         let fy = azip![
             cell_data.slice(s![1..-1,..-1]),
             cell_data.slice(s![1..-1, 1..]),
             yf]
-        .apply_collect(|l, r, f| self.hydro.intercell_flux(&physics, l, r, dx, dy, phi(f), Direction::Y));
+        .apply_collect(|l, r, f| self.hydro.intercell_flux(&physics, l, r, nu(f, l), nu(f, r), dx, dy, phi(f), Direction::Y));
 
         (fx, fy)
     }
