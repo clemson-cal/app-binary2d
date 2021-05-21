@@ -11,3 +11,4 @@ lib
 tools/tseries_modded.py
 *.cbor
 *.so
+tools/tseries_modded2.py
