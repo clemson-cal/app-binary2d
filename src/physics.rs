@@ -106,6 +106,18 @@ pub enum ViscosityModel {
 
 
 // ============================================================================
+#[derive(Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SinkModel {
+    Impartial,
+    TorqueFree,
+}
+
+
+
+
+// ============================================================================
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Physics {
@@ -126,6 +138,11 @@ pub struct Physics {
     /// use the `viscosity_model` member function instead.
     #[serde(default = "Physics::default_viscosity")]
     viscosity: ViscosityModel,
+
+    /// Sink type. This member is private, because you should
+    /// use the 'sink_model' member function instead.
+    #[serde(default = "Physics::default_sink")]
+    sink_model: SinkModel,
 
     pub cfl: f64,
 
@@ -207,6 +224,11 @@ impl Physics{
         } else {
             self.viscosity
         }
+    }
+
+    pub fn default_sink() -> SinkModel { SinkModel::Impartial }
+    pub fn sink_model(&self) -> SinkModel {
+        self.sink_model
     }
 }
 
@@ -669,11 +691,33 @@ impl Hydrodynamics for Euler {
         let pc = hydro_euler::euler_2d::Primitive(p0.0, p0.1, p0.2, p0.0 * ec * (self.gamma_law_index - 1.0));
         let uc = pc.to_conserved(self.gamma_law_index);
 
+        let (sink1, sink2) = match physics.sink_model() {
+            SinkModel::Impartial  => (u0 * (-st.sink_rate1), u0 * (-st.sink_rate2)),
+            SinkModel::TorqueFree => {
+                let (x1,y1)     = (two_body_state.0.position_x(), two_body_state.0.position_y());
+                let (x2,y2)     = (two_body_state.1.position_x(), two_body_state.1.position_y());
+                let (vx1,vy1)   = (two_body_state.0.velocity_x(), two_body_state.0.velocity_y());
+                let (vx2,vy2)   = (two_body_state.1.velocity_x(), two_body_state.1.velocity_y());
+                let r1          = ((x - x1).powi(2) + (y - y1).powi(2)).sqrt();
+                let r2          = ((x - x2).powi(2) + (y - y2).powi(2)).sqrt();
+                let dvdotr1     = (vx - vx1) * x1 / r1 + (vy - vy1) * y1 / r1;
+                let dvdotr2     = (vx - vx2) * x2 / r2 + (vy - vy2) * y2 / r2;
+                let (vx1c,vy1c) = (dvdotr1 * x1 / r1 + vx1, dvdotr1 * y1 / r1 + vy1); // See Eq. 12 in Dittman & Ryan (2021) 2102.05684
+                let (vx2c,vy2c) = (dvdotr2 * x2 / r2 + vx2, dvdotr2 * y2 / r2 + vy2);
+                let v1csq       = vx1c.powi(2) + vy1c.powi(2);
+                let v2csq       = vx2c.powi(2) + vy2c.powi(2);
+                let sd          = p0.mass_density();
+                let sink1vars   = hydro_euler::euler_2d::Conserved(sd, sd * vx1c, sd * vy1c, sd * e0 + 0.5 * sd * v1csq);
+                let sink2vars   = hydro_euler::euler_2d::Conserved(sd, sd * vx2c, sd * vy2c, sd * e0 + 0.5 * sd * v2csq);
+                (sink1vars * (-st.sink_rate1), sink2vars * (-st.sink_rate2))
+            }
+        };
+
         ItemizedChange {
             grav1:     hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
             grav2:     hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
-            sink1:     u0 * (-st.sink_rate1 * dt),
-            sink2:     u0 * (-st.sink_rate2 * dt),
+            sink1:     sink1 * dt,
+            sink2:     sink2 * dt,
             buffer:   (u0 - background_conserved) * (-dt * st.buffer_rate),
             cooling:   uc - u0,
             fake_mass: Self::Conserved::zeros(),
