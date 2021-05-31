@@ -41,4 +41,4 @@ control:
   fold: 100
   num_threads: 8
   output_directory: data/temp
-  fallback_stack_size: ~
+  fallback_stack_size: 0
