@@ -5,7 +5,7 @@ model:
   finite_disk:
     disk_mass: 0.001
     disk_radius: 3.0
-    disk_width: 1.5
+    disk_width: 3.0
     mach_number: ~
     softening_length: 0.05
 mesh:
@@ -35,8 +35,8 @@ physics:
   safe_mach_ceiling: ~
   safe_rk_order: ~
 control:
-  num_orbits: 700.0
-  checkpoint_interval: 10.0
+  num_orbits: 0.0
+  checkpoint_interval: 1.0
   time_series_interval: 1.0
   fold: 100
   num_threads: 8
