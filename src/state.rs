@@ -75,7 +75,7 @@ impl<C: Conserved> BlockState<C> {
     where
         H: Hydrodynamics<Conserved = C>
     {
-        model.validate(hydro)?;
+        model.validate(hydro, mesh)?;
         let cons = |r| hydro.to_conserved(hydro.from_any(model.primitive_at(hydro, r)));
 
         Ok(Self {

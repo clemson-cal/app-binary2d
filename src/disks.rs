@@ -3,6 +3,7 @@ use crate::app::AnyPrimitive;
 use crate::traits::{Hydrodynamics, InitialModel};
 use std::f64::consts::PI;
 use libm::{erf, exp, sqrt};
+use crate::mesh::Mesh;
 
 static G: f64 = 1.0; // gravitational constant
 static M: f64 = 1.0; // system mass
@@ -10,9 +11,9 @@ static M: f64 = 1.0; // system mass
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FiniteDiskModel {
-    mass: Option<f64>,
-    width: Option<f64>,
-    radius: Option<f64>,
+    disk_mass: Option<f64>,
+    disk_width: Option<f64>,
+    disk_radius: Option<f64>,
     mach_number: Option<f64>,
     softening_length: Option<f64>
 }
@@ -21,15 +22,15 @@ pub struct FiniteDiskModel {
 impl FiniteDiskModel {
 
     pub fn unwrap_mass(&self) -> f64 {
-        self.mass.unwrap_or(0.001)
+        self.disk_mass.unwrap_or(0.001)
     }
 
     pub fn unwrap_width(&self) -> f64 {
-        self.width.unwrap_or(1.5)
+        self.disk_width.unwrap_or(1.5)
     }
 
     pub fn unwrap_radius(&self) -> f64 {
-        self.radius.unwrap_or(3.0)
+        self.disk_radius.unwrap_or(3.0)
     }
 
     pub fn unwrap_mach_number<H: Hydrodynamics>(&self, hydro: &H) -> f64 {
@@ -126,15 +127,23 @@ impl InitialModel for FiniteDiskModel {
         }
     }
 
-    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> anyhow::Result<()> {
-        match (self.mach_number, hydro.global_mach_number()) {
-            (Some(_), Some(_)) => anyhow::bail!{
-                "A Mach number must be specified either in hydro or model (not both)"
-            },
-            (None, None) => anyhow::bail!{
-                "A Mach number must be specified either in hydro or model"
-            },
-            _ => Ok(())
+    fn validate<H: Hydrodynamics>(&self, hydro: &H, mesh: &Mesh) -> anyhow::Result<()> {
+        if self.failure_radius(hydro) >= mesh.domain_radius * sqrt(2.0) {
+            match (self.mach_number, hydro.global_mach_number()) {
+                (Some(_), Some(_)) => anyhow::bail!{
+                    "A Mach number must be specified either in hydro or model (not both)"
+                },
+                (None, None) => anyhow::bail!{
+                    "A Mach number must be specified either in hydro or model"
+                },
+                _ => Ok(())
+            }
+        }
+        else {
+            anyhow::bail!{concat!{
+                "equilibrium disk model fails inside the domain, ",
+                "use a larger mach_number, larger disk_width, or a smaller domain_radius."}
+            }
         }
     }
 }
@@ -166,7 +175,7 @@ impl InitialModel for InfiniteDiskModel {
         }
     }
 
-    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> anyhow::Result<()> {
+    fn validate<H: Hydrodynamics>(&self, hydro: &H, _mesh: &Mesh) -> anyhow::Result<()> {
         match (self.mach_number, hydro.global_mach_number()) {
             (Some(_), Some(_)) => anyhow::bail!{
                 "A Mach number must be specified either in hydro or model (not both)"

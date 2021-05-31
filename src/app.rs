@@ -202,10 +202,10 @@ impl InitialModel for AnyModel {
         }
     }
 
-    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> std::result::Result<(), anyhow::Error> {
+    fn validate<H: Hydrodynamics>(&self, hydro: &H, mesh: &Mesh) -> std::result::Result<(), anyhow::Error> {
         match self {
-            Self::FiniteDisk  (model) => model.validate(hydro),
-            Self::InfiniteDisk(model) => model.validate(hydro),
+            Self::FiniteDisk  (model) => model.validate(hydro, mesh),
+            Self::InfiniteDisk(model) => model.validate(hydro, mesh),
         }
     }
 }
