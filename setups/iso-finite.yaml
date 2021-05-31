@@ -1,0 +1,41 @@
+hydro:
+  isothermal:
+    mach_number: ~
+model:
+  finite_disk:
+    mach_number: 10.0
+    surface_density: 1.0
+mesh:
+  num_blocks: 16
+  block_size: 94
+  domain_radius: 12.0
+physics:
+  buffer_rate: 1000.0
+  buffer_scale: 0.3
+  binary_eccentricity: 0.04
+  binary_mass_ratio: 1.0
+  lambda: 0.0
+  nu: 0.001
+  cfl: 0.4
+  plm: 1.8
+  plm_density_trigger: ~
+  fake_mass_threshold: 0.0
+  fake_mass_rate: 0.0
+  one_body: false
+  mach_ceiling: ~
+  rk_order: RK2
+  sink_radius: 0.05
+  sink_rate: 40.0
+  safe_mode_duration: 0.0
+  safe_cfl: ~
+  safe_plm: ~
+  safe_mach_ceiling: ~
+  safe_rk_order: ~
+control:
+  num_orbits: 700.0
+  checkpoint_interval: 10.0
+  time_series_interval: 1.0
+  fold: 100
+  num_threads: 40
+  output_directory: data/temp
+  fallback_stack_size: 5

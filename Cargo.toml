@@ -9,6 +9,7 @@ repository  = "https://github.com/clemson-cal/app-binary2d"
 
 
 [dependencies]
+libm            = "0.2.1"
 glob            = "0.3"
 anyhow          = "1.0"
 thiserror       = "1.0"
