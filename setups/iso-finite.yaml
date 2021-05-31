@@ -1,23 +1,26 @@
 hydro:
   isothermal:
-    mach_number: ~
+    mach_number: 10.0
 model:
   finite_disk:
-    mach_number: 10.0
-    surface_density: 1.0
+    disk_mass: 0.001
+    disk_radius: 3.0
+    disk_width: 1.5
+    mach_number: ~
+    softening_length: 0.05
 mesh:
-  num_blocks: 16
-  block_size: 94
+  num_blocks: 8
+  block_size: 256
   domain_radius: 12.0
 physics:
   buffer_rate: 1000.0
-  buffer_scale: 0.3
-  binary_eccentricity: 0.04
+  buffer_scale: 1
+  binary_eccentricity: 0.0
   binary_mass_ratio: 1.0
   lambda: 0.0
   nu: 0.001
   cfl: 0.4
-  plm: 1.8
+  plm: 1.5
   plm_density_trigger: ~
   fake_mass_threshold: 0.0
   fake_mass_rate: 0.0
@@ -36,6 +39,6 @@ control:
   checkpoint_interval: 10.0
   time_series_interval: 1.0
   fold: 100
-  num_threads: 40
+  num_threads: 8
   output_directory: data/temp
   fallback_stack_size: 5
