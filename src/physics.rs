@@ -193,6 +193,9 @@ pub struct Physics {
     /// If omitted, default is softening_length = sink_radius.
     pub softening_length: Option<f64>,
 
+    /// Optional imposed minimum value of the time step dt.
+    pub dt_min: Option<f64>,
+
     /// Time duration that safe mode should persist beyond crash time.
     /// Units are orbits. Default value is 0.
     #[serde(default)]
@@ -253,7 +256,12 @@ pub struct SourceTerms {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Isothermal {
-    pub mach_number: f64
+    pub mach_number: f64,
+
+    /// Optional density floor. If enabled, the cons -> prim conversion will
+    /// return a primitive state with density = density_floor and v = 0, if
+    /// the density was found to be below density_floor.
+    pub density_floor: Option<f64>,
 }
 
 
@@ -467,7 +475,16 @@ impl Hydrodynamics for Isothermal {
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
     }
 
-    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
+    fn try_to_primitive(&self, mut u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
+
+        if let Some(density_floor) = self.density_floor {
+            if u.density() < density_floor {
+                u.1 = 0.0;
+                u.2 = 0.0;
+                u.0 = density_floor
+            }
+        }
+
         if u.density() < 0.0 {
             return Err(HydroErrorType::NegativeDensity(u.density()))
         }
@@ -584,7 +601,10 @@ impl Hydrodynamics for Euler {
 
         if let Some(density_floor) = self.density_floor {
             if p.mass_density() < density_floor {
-                p.0 = density_floor
+                p.0 = density_floor;
+                p.1 = 0.0;
+                p.2 = 0.0;
+                p.3 = density_floor.powf(self.gamma_law_index);
             }
 	}
 
@@ -600,16 +620,6 @@ impl Hydrodynamics for Euler {
             Ok(p)
         }
 
-        //if p.gas_pressure() <= 0.0 {
-        //    if let Some(pressure_floor) = self.pressure_floor {
-        //        p.3 = pressure_floor;
-        //        Ok(p)
-        //    } else {
-        //        Err(HydroErrorType::NegativePressure(p.gas_pressure()))
-        //    }
-        //} else {
-        //    Ok(p)
-        //}
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {

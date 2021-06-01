@@ -333,7 +333,11 @@ where
     H: Hydrodynamics + Into<AnyHydro> + 'static
 {
     let rk = physics.rk_order;
-    let dt = physics.cfl * mesh.cell_spacing() / state.max_signal_speed(&hydro);
+    let dt = if let Some(dt_min) = physics.dt_min {
+            (physics.cfl * mesh.cell_spacing() / state.max_signal_speed(&hydro)).max(dt_min)
+        } else {
+            physics.cfl * mesh.cell_spacing() / state.max_signal_speed(&hydro)
+        };
 
     *timestep = dt;
 
