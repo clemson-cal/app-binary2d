@@ -534,11 +534,35 @@ impl Hydrodynamics for Isothermal {
         };
         let st = physics.source_terms(mesh, two_body_state, x, y, u.density());
 
+        let (sink1, sink2) = match physics.sink_model() {
+            SinkModel::Impartial  => (u0 * (-st.sink_rate1), u0 * (-st.sink_rate2)),
+            SinkModel::TorqueFree => {
+                let p           = u.to_primitive();
+                let (vx, vy)    = (p.1, p.2);
+                let (x1,y1)     = (two_body_state.0.position_x(), two_body_state.0.position_y());
+                let (x2,y2)     = (two_body_state.1.position_x(), two_body_state.1.position_y());
+                let (vx1,vy1)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.0.velocity_x(), two_body_state.0.velocity_y()) };
+                let (vx2,vy2)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.1.velocity_x(), two_body_state.1.velocity_y()) };
+                let r1          = ((x - x1).powi(2) + (y - y1).powi(2)).sqrt();
+                let r2          = ((x - x2).powi(2) + (y - y2).powi(2)).sqrt();
+                let (r1x,r1y)   = ((x - x1) / r1, (y - y1) / r1);
+                let (r2x,r2y)   = ((x - x2) / r2, (y - y2) / r2);
+                let dvdotr1     = (vx - vx1) * r1x + (vy - vy1) * r1y;
+                let dvdotr2     = (vx - vx2) * r2x + (vy - vy2) * r2y;
+                let (vx1c,vy1c) = (dvdotr1 * r1x + vx1, dvdotr1 * r1y + vy1); // See Eq. 12 in Dittman & Ryan (2021) 2102.05684
+                let (vx2c,vy2c) = (dvdotr2 * r2x + vx2, dvdotr2 * r2y + vy2);
+                let sd          = p.mass_density();
+                let sink1vars   = hydro_iso2d::Conserved(sd, sd * vx1c, sd * vy1c);
+                let sink2vars   = hydro_iso2d::Conserved(sd, sd * vx2c, sd * vy2c);
+                (sink1vars * (-st.sink_rate1), sink2vars * (-st.sink_rate2))
+            }
+        };
+
         ItemizedChange {
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
             grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
-            sink1:   u * (-st.sink_rate1 * dt),
-            sink2:   u * (-st.sink_rate2 * dt),
+            sink1:   sink1 * dt,
+            sink2:   sink2 * dt,
             buffer: (u - u0) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
             fake_mass: fake_du,
