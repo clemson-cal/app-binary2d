@@ -285,10 +285,9 @@ pub struct Euler {
     pub pressure_floor: Option<f64>,
 
     /// Optional density floor. If enabled, the cons -> prim conversion will
-    /// return a primitive state with the given density, if it was found to
-    /// be positive but less than density_floor. Negative densities are still
-    /// considered an error. If the floor value is omitted or nil, then
-    /// densities approaching zero can cause the timestep to approach zero.
+    /// return a primitive state with density = density_floor, v = 0, and
+    /// pressure = density_floor.powi(gamma_law_index) if the density was found 
+    /// to be below density_floor.
     pub density_floor: Option<f64>,
 
     /// The vertical structure assumed in the cooling.
@@ -594,9 +593,7 @@ impl Hydrodynamics for Euler {
     }
 
     fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
-        if u.mass_density() < 0.0 {
-            return Err(HydroErrorType::NegativeDensity(u.mass_density()))
-        }
+
         let mut p = u.to_primitive(self.gamma_law_index);
 
         if let Some(density_floor) = self.density_floor {
@@ -607,6 +604,10 @@ impl Hydrodynamics for Euler {
                 p.3 = density_floor.powf(self.gamma_law_index);
             }
 	}
+
+        if p.mass_density() < 0.0 {
+            return Err(HydroErrorType::NegativeDensity(p.mass_density()))
+        }
 
         if let Some(pressure_floor) = self.pressure_floor {
             if p.gas_pressure() < pressure_floor {
@@ -706,14 +707,16 @@ impl Hydrodynamics for Euler {
             SinkModel::TorqueFree => {
                 let (x1,y1)     = (two_body_state.0.position_x(), two_body_state.0.position_y());
                 let (x2,y2)     = (two_body_state.1.position_x(), two_body_state.1.position_y());
-                let (vx1,vy1)   = (two_body_state.0.velocity_x(), two_body_state.0.velocity_y());
-                let (vx2,vy2)   = (two_body_state.1.velocity_x(), two_body_state.1.velocity_y());
+                let (vx1,vy1)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.0.velocity_x(), two_body_state.0.velocity_y()) };
+                let (vx2,vy2)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.1.velocity_x(), two_body_state.1.velocity_y()) };
                 let r1          = ((x - x1).powi(2) + (y - y1).powi(2)).sqrt();
                 let r2          = ((x - x2).powi(2) + (y - y2).powi(2)).sqrt();
-                let dvdotr1     = (vx - vx1) * x1 / r1 + (vy - vy1) * y1 / r1;
-                let dvdotr2     = (vx - vx2) * x2 / r2 + (vy - vy2) * y2 / r2;
-                let (vx1c,vy1c) = (dvdotr1 * x1 / r1 + vx1, dvdotr1 * y1 / r1 + vy1); // See Eq. 12 in Dittman & Ryan (2021) 2102.05684
-                let (vx2c,vy2c) = (dvdotr2 * x2 / r2 + vx2, dvdotr2 * y2 / r2 + vy2);
+                let (r1x,r1y)   = ((x - x1) / r1, (y - y1) / r1);
+                let (r2x,r2y)   = ((x - x2) / r2, (y - y2) / r2);
+                let dvdotr1     = (vx - vx1) * r1x + (vy - vy1) * r1y;
+                let dvdotr2     = (vx - vx2) * r2x + (vy - vy2) * r2y;
+                let (vx1c,vy1c) = (dvdotr1 * r1x + vx1, dvdotr1 * r1y + vy1); // See Eq. 12 in Dittman & Ryan (2021) 2102.05684
+                let (vx2c,vy2c) = (dvdotr2 * r2x + vx2, dvdotr2 * r2y + vy2);
                 let v1csq       = vx1c.powi(2) + vy1c.powi(2);
                 let v2csq       = vx2c.powi(2) + vy2c.powi(2);
                 let sd          = p0.mass_density();
