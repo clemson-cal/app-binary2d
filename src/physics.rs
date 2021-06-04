@@ -373,12 +373,24 @@ impl Physics {
             runge_kutta::RungeKuttaOrder::RK3 => 3,
         }
     }
+
+    //pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64 {
+    //    let r2 = dx * dx + dy * dy;
+    //    let s2 = self.sink_radius * self.sink_radius;
+
+    //    if r2 < s2 * 9.0 {
+    //        self.sink_rate * f64::exp(-(r2 / s2).powi(3))
+    //    } else {
+    //        0.0
+    //    }
+    //}
+
     pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64 {
         let r2 = dx * dx + dy * dy;
         let s2 = self.sink_radius * self.sink_radius;
 
-        if r2 < s2 * 9.0 {
-            self.sink_rate * f64::exp(-(r2 / s2).powi(3))
+        if r2 < s2 {
+            self.sink_rate * (1.0 - r2/s2).powi(2)
         } else {
             0.0
         }
@@ -535,7 +547,7 @@ impl Hydrodynamics for Isothermal {
         let st = physics.source_terms(mesh, two_body_state, x, y, u.density());
 
         let (sink1, sink2) = match physics.sink_model() {
-            SinkModel::Impartial  => (u0 * (-st.sink_rate1), u0 * (-st.sink_rate2)),
+            SinkModel::Impartial  => (u * (-st.sink_rate1), u * (-st.sink_rate2)),
             SinkModel::TorqueFree => {
                 let p           = u.to_primitive();
                 let (vx, vy)    = (p.1, p.2);
