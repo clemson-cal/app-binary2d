@@ -112,5 +112,5 @@ pub trait InitialModel: Clone {
     /**
      * Validate the model
      */
-    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> anyhow::Result<()>;
+    fn validate<H: Hydrodynamics>(&self, hydro: &H, mesh: &Mesh) -> anyhow::Result<()>;
 }

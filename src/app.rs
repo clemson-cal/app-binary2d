@@ -199,19 +199,19 @@ impl InitialModel for AnyModel {
 
     fn primitive_at<H: Hydrodynamics>(&self, hydro: &H, xy: (f64, f64)) -> AnyPrimitive {
         match self {
-            Self::FiniteDisk  (model)      => model.primitive_at(hydro, xy),
+            Self::FiniteDisk(model)      => model.primitive_at(hydro, xy),
             Self::InfiniteDisk(model)      => model.primitive_at(hydro, xy),
             Self::InfiniteAlphaDisk(model) => model.primitive_at(hydro, xy),
             Self::ResidualTest(model)      => model.primitive_at(hydro, xy),
         }
     }
 
-    fn validate<H: Hydrodynamics>(&self, hydro: &H) -> std::result::Result<(), anyhow::Error> {
+    fn validate<H: Hydrodynamics>(&self, hydro: &H, mesh: &Mesh) -> std::result::Result<(), anyhow::Error> {
         match self {
-            Self::FiniteDisk  (model)      => model.validate(hydro),
-            Self::InfiniteDisk(model)      => model.validate(hydro),
-            Self::InfiniteAlphaDisk(model) => model.validate(hydro),
-            Self::ResidualTest(model)      => model.validate(hydro),
+            Self::FiniteDisk(model)        => model.validate(hydro, mesh),
+            Self::InfiniteDisk(model)      => model.validate(hydro, mesh),
+            Self::InfiniteAlphaDisk(model) => model.validate(hydro, mesh),
+            Self::ResidualTest(model)      => model.validate(hydro, mesh),
         }
     }
 }

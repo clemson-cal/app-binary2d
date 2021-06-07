@@ -40,6 +40,7 @@ dependencies = [
  "hydro-euler",
  "hydro-iso2d",
  "kepler-two-body",
+ "libm",
  "ndarray",
  "ndarray-ops",
  "num",
@@ -357,6 +358,12 @@ name = "libc"
 version = "0.2.90"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba4aede83fc3617411dc6993bc8c70919750c1c257c6ca6a502aed6e0e2394ae"
+
+[[package]]
+name = "libm"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
 
 [[package]]
 name = "linked-hash-map"
