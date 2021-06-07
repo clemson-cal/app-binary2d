@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use yaml_patch::Patch;
 use crate::io;
 use crate::mesh::Mesh;
-use crate::disks::{InfiniteDiskModel, FiniteDiskModel};
+use crate::disks::{InfiniteDiskModel, InfiniteAlphaDiskModel, FiniteDiskModel, ResidualTestModel};
 use crate::physics::{Euler, Isothermal, Physics};
 use crate::state::{ItemizedChange, State};
 use crate::tasks::Tasks;
@@ -42,7 +42,9 @@ pub enum AnyHydro {
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub enum AnyModel {
     InfiniteDisk(InfiniteDiskModel),
+    InfiniteAlphaDisk(InfiniteAlphaDiskModel),
     FiniteDisk(FiniteDiskModel),
+    ResidualTest(ResidualTestModel),
 }
 
 
@@ -197,15 +199,19 @@ impl InitialModel for AnyModel {
 
     fn primitive_at<H: Hydrodynamics>(&self, hydro: &H, xy: (f64, f64)) -> AnyPrimitive {
         match self {
-            Self::FiniteDisk  (model) => model.primitive_at(hydro, xy),
-            Self::InfiniteDisk(model) => model.primitive_at(hydro, xy),
+            Self::FiniteDisk  (model)      => model.primitive_at(hydro, xy),
+            Self::InfiniteDisk(model)      => model.primitive_at(hydro, xy),
+            Self::InfiniteAlphaDisk(model) => model.primitive_at(hydro, xy),
+            Self::ResidualTest(model)      => model.primitive_at(hydro, xy),
         }
     }
 
     fn validate<H: Hydrodynamics>(&self, hydro: &H) -> std::result::Result<(), anyhow::Error> {
         match self {
-            Self::FiniteDisk  (model) => model.validate(hydro),
-            Self::InfiniteDisk(model) => model.validate(hydro),
+            Self::FiniteDisk  (model)      => model.validate(hydro),
+            Self::InfiniteDisk(model)      => model.validate(hydro),
+            Self::InfiniteAlphaDisk(model) => model.validate(hydro),
+            Self::ResidualTest(model)      => model.validate(hydro),
         }
     }
 }

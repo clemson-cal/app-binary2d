@@ -106,6 +106,18 @@ pub enum ViscosityModel {
 
 
 // ============================================================================
+#[derive(Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SinkModel {
+    Impartial,
+    TorqueFree,
+}
+
+
+
+
+// ============================================================================
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Physics {
@@ -126,6 +138,11 @@ pub struct Physics {
     /// use the `viscosity_model` member function instead.
     #[serde(default = "Physics::default_viscosity")]
     viscosity: ViscosityModel,
+
+    /// Sink type. This member is private, because you should
+    /// use the 'sink_model' member function instead.
+    #[serde(default = "Physics::default_sink")]
+    sink_model: SinkModel,
 
     pub cfl: f64,
 
@@ -172,6 +189,13 @@ pub struct Physics {
     /// The amplitude of sink profile function.
     pub sink_rate: f64,
 
+    /// Optional softening length used in the gravitational Plummer potential.
+    /// If omitted, default is softening_length = sink_radius.
+    pub softening_length: Option<f64>,
+
+    /// Optional imposed minimum value of the time step dt.
+    pub dt_min: Option<f64>,
+
     /// Time duration that safe mode should persist beyond crash time.
     /// Units are orbits. Default value is 0.
     #[serde(default)]
@@ -199,10 +223,15 @@ impl Physics{
         if let Some(nu) = self.nu {
             ViscosityModel::ConstantNu(nu)
         } else if let Some(alpha) = self.alpha {
-            ViscosityModel::ConstantNu(alpha)
+            ViscosityModel::Alpha(alpha)
         } else {
             self.viscosity
         }
+    }
+
+    pub fn default_sink() -> SinkModel { SinkModel::Impartial }
+    pub fn sink_model(&self) -> SinkModel {
+        self.sink_model
     }
 }
 
@@ -227,7 +256,12 @@ pub struct SourceTerms {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Isothermal {
-    pub mach_number: f64
+    pub mach_number: f64,
+
+    /// Optional density floor. If enabled, the cons -> prim conversion will
+    /// return a primitive state with density = density_floor and v = 0, if
+    /// the density was found to be below density_floor.
+    pub density_floor: Option<f64>,
 }
 
 
@@ -251,10 +285,9 @@ pub struct Euler {
     pub pressure_floor: Option<f64>,
 
     /// Optional density floor. If enabled, the cons -> prim conversion will
-    /// return a primitive state with the given density, if it was found to
-    /// be positive but less than density_floor. Negative densities are still
-    /// considered an error. If the floor value is omitted or nil, then
-    /// densities approaching zero can cause the timestep to approach zero.
+    /// return a primitive state with density = density_floor, v = 0, and
+    /// pressure = density_floor.powi(gamma_law_index) if the density was found 
+    /// to be below density_floor.
     pub density_floor: Option<f64>,
 
     /// The vertical structure assumed in the cooling.
@@ -340,19 +373,35 @@ impl Physics {
             runge_kutta::RungeKuttaOrder::RK3 => 3,
         }
     }
+
+    //pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64 {
+    //    let r2 = dx * dx + dy * dy;
+    //    let s2 = self.sink_radius * self.sink_radius;
+
+    //    if r2 < s2 * 9.0 {
+    //        self.sink_rate * f64::exp(-(r2 / s2).powi(3))
+    //    } else {
+    //        0.0
+    //    }
+    //}
+
     pub fn sink_kernel(&self, dx: f64, dy: f64) -> f64 {
         let r2 = dx * dx + dy * dy;
         let s2 = self.sink_radius * self.sink_radius;
 
-        if r2 < s2 * 9.0 {
-            self.sink_rate * f64::exp(-(r2 / s2).powi(3))
+        if r2 < s2 {
+            self.sink_rate * (1.0 - r2/s2).powi(2)
         } else {
             0.0
         }
     }
 
     pub fn softening_length(&self) -> f64 {
-        self.sink_radius
+        if let Some(softening_length) = self.softening_length {
+            softening_length
+        } else {
+            self.sink_radius
+        }
     }
 
     pub fn maximum_orbital_velocity(&self) -> f64 {
@@ -437,7 +486,16 @@ impl Hydrodynamics for Isothermal {
         godunov_core::piecewise_linear::plm_gradient3(theta, a, b, c)
     }
 
-    fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
+    fn try_to_primitive(&self, mut u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
+
+        if let Some(density_floor) = self.density_floor {
+            if u.density() < density_floor {
+                u.1 = 0.0;
+                u.2 = 0.0;
+                u.0 = density_floor
+            }
+        }
+
         if u.density() < 0.0 {
             return Err(HydroErrorType::NegativeDensity(u.density()))
         }
@@ -488,11 +546,35 @@ impl Hydrodynamics for Isothermal {
         };
         let st = physics.source_terms(mesh, two_body_state, x, y, u.density());
 
+        let (sink1, sink2) = match physics.sink_model() {
+            SinkModel::Impartial  => (u * (-st.sink_rate1), u * (-st.sink_rate2)),
+            SinkModel::TorqueFree => {
+                let p           = u.to_primitive();
+                let (vx, vy)    = (p.1, p.2);
+                let (x1,y1)     = (two_body_state.0.position_x(), two_body_state.0.position_y());
+                let (x2,y2)     = (two_body_state.1.position_x(), two_body_state.1.position_y());
+                let (vx1,vy1)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.0.velocity_x(), two_body_state.0.velocity_y()) };
+                let (vx2,vy2)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.1.velocity_x(), two_body_state.1.velocity_y()) };
+                let r1          = ((x - x1).powi(2) + (y - y1).powi(2)).sqrt();
+                let r2          = ((x - x2).powi(2) + (y - y2).powi(2)).sqrt();
+                let (r1x,r1y)   = ((x - x1) / r1, (y - y1) / r1);
+                let (r2x,r2y)   = ((x - x2) / r2, (y - y2) / r2);
+                let dvdotr1     = (vx - vx1) * r1x + (vy - vy1) * r1y;
+                let dvdotr2     = (vx - vx2) * r2x + (vy - vy2) * r2y;
+                let (vx1c,vy1c) = (dvdotr1 * r1x + vx1, dvdotr1 * r1y + vy1); // See Eq. 12 in Dittman & Ryan (2021) 2102.05684
+                let (vx2c,vy2c) = (dvdotr2 * r2x + vx2, dvdotr2 * r2y + vy2);
+                let sd          = p.mass_density();
+                let sink1vars   = hydro_iso2d::Conserved(sd, sd * vx1c, sd * vy1c);
+                let sink2vars   = hydro_iso2d::Conserved(sd, sd * vx2c, sd * vy2c);
+                (sink1vars * (-st.sink_rate1), sink2vars * (-st.sink_rate2))
+            }
+        };
+
         ItemizedChange {
             grav1:   hydro_iso2d::Conserved(0.0, st.fx1, st.fy1) * dt,
             grav2:   hydro_iso2d::Conserved(0.0, st.fx2, st.fy2) * dt,
-            sink1:   u * (-st.sink_rate1 * dt),
-            sink2:   u * (-st.sink_rate2 * dt),
+            sink1:   sink1 * dt,
+            sink2:   sink2 * dt,
             buffer: (u - u0) * (-dt * st.buffer_rate),
             cooling: Self::Conserved::zeros(),
             fake_mass: fake_du,
@@ -547,16 +629,21 @@ impl Hydrodynamics for Euler {
     }
 
     fn try_to_primitive(&self, u: Self::Conserved) -> Result<Self::Primitive, HydroErrorType> {
-        if u.mass_density() < 0.0 {
-            return Err(HydroErrorType::NegativeDensity(u.mass_density()))
-        }
+
         let mut p = u.to_primitive(self.gamma_law_index);
 
         if let Some(density_floor) = self.density_floor {
             if p.mass_density() < density_floor {
-                p.0 = density_floor
+                p.0 = density_floor;
+                p.1 = 0.0;
+                p.2 = 0.0;
+                p.3 = density_floor.powf(self.gamma_law_index);
             }
 	}
+
+        if p.mass_density() < 0.0 {
+            return Err(HydroErrorType::NegativeDensity(p.mass_density()))
+        }
 
         if let Some(pressure_floor) = self.pressure_floor {
             if p.gas_pressure() < pressure_floor {
@@ -570,16 +657,6 @@ impl Hydrodynamics for Euler {
             Ok(p)
         }
 
-        //if p.gas_pressure() <= 0.0 {
-        //    if let Some(pressure_floor) = self.pressure_floor {
-        //        p.3 = pressure_floor;
-        //        Ok(p)
-        //    } else {
-        //        Err(HydroErrorType::NegativePressure(p.gas_pressure()))
-        //    }
-        //} else {
-        //    Ok(p)
-        //}
     }
 
     fn to_primitive(&self, conserved: Self::Conserved) -> Self::Primitive {
@@ -661,11 +738,35 @@ impl Hydrodynamics for Euler {
         let pc = hydro_euler::euler_2d::Primitive(p0.0, p0.1, p0.2, p0.0 * ec * (self.gamma_law_index - 1.0));
         let uc = pc.to_conserved(self.gamma_law_index);
 
+        let (sink1, sink2) = match physics.sink_model() {
+            SinkModel::Impartial  => (u0 * (-st.sink_rate1), u0 * (-st.sink_rate2)),
+            SinkModel::TorqueFree => {
+                let (x1,y1)     = (two_body_state.0.position_x(), two_body_state.0.position_y());
+                let (x2,y2)     = (two_body_state.1.position_x(), two_body_state.1.position_y());
+                let (vx1,vy1)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.0.velocity_x(), two_body_state.0.velocity_y()) };
+                let (vx2,vy2)   = if physics.one_body == true { (0.0,0.0) } else { (two_body_state.1.velocity_x(), two_body_state.1.velocity_y()) };
+                let r1          = ((x - x1).powi(2) + (y - y1).powi(2)).sqrt();
+                let r2          = ((x - x2).powi(2) + (y - y2).powi(2)).sqrt();
+                let (r1x,r1y)   = ((x - x1) / r1, (y - y1) / r1);
+                let (r2x,r2y)   = ((x - x2) / r2, (y - y2) / r2);
+                let dvdotr1     = (vx - vx1) * r1x + (vy - vy1) * r1y;
+                let dvdotr2     = (vx - vx2) * r2x + (vy - vy2) * r2y;
+                let (vx1c,vy1c) = (dvdotr1 * r1x + vx1, dvdotr1 * r1y + vy1); // See Eq. 12 in Dittman & Ryan (2021) 2102.05684
+                let (vx2c,vy2c) = (dvdotr2 * r2x + vx2, dvdotr2 * r2y + vy2);
+                let v1csq       = vx1c.powi(2) + vy1c.powi(2);
+                let v2csq       = vx2c.powi(2) + vy2c.powi(2);
+                let sd          = p0.mass_density();
+                let sink1vars   = hydro_euler::euler_2d::Conserved(sd, sd * vx1c, sd * vy1c, sd * e0 + 0.5 * sd * v1csq);
+                let sink2vars   = hydro_euler::euler_2d::Conserved(sd, sd * vx2c, sd * vy2c, sd * e0 + 0.5 * sd * v2csq);
+                (sink1vars * (-st.sink_rate1), sink2vars * (-st.sink_rate2))
+            }
+        };
+
         ItemizedChange {
             grav1:     hydro_euler::euler_2d::Conserved(0.0, st.fx1, st.fy1, st.fx1 * vx + st.fy1 * vy) * dt,
             grav2:     hydro_euler::euler_2d::Conserved(0.0, st.fx2, st.fy2, st.fx2 * vx + st.fy2 * vy) * dt,
-            sink1:     u0 * (-st.sink_rate1 * dt),
-            sink2:     u0 * (-st.sink_rate2 * dt),
+            sink1:     sink1 * dt,
+            sink2:     sink2 * dt,
             buffer:   (u0 - background_conserved) * (-dt * st.buffer_rate),
             cooling:   uc - u0,
             fake_mass: Self::Conserved::zeros(),
