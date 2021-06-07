@@ -1,0 +1,16 @@
+[package]
+name = "binary2d-upsampler"
+version = "0.1.0"
+authors = ["Jack Hu <zhongth@g.clemson.edu>", "J. Zrake <jzrake@clemson.edu>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.40"
+binary2d = { path = ".." }
+clap = "2.33.3"
+glob = "0.3.0"
+hydro-iso2d = { git = "https://github.com/clemson-cal/hydro-iso2d" }
+hydro-euler = { git = "https://github.com/clemson-cal/hydro-euler" }
+ndarray = "0.14"
